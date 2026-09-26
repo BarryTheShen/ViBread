@@ -26,6 +26,8 @@ function scenarioUsesPart(scenario: Scenario, part: string): boolean {
 function outputAsserted(circuit: Circuit, scenario: Scenario, part: string): boolean {
   for (const step of scenario.steps) {
     if ("expect-part" in step && step["expect-part"].part === part) return true;
+    if ("expect-parts" in step && step["expect-parts"].checks.some((check) => check.part === part)) return true;
+    if ("kind" in step && step.kind === "expect-parts" && step.checks.some((check) => check.part === part)) return true;
     if ("expect-tone" in step && step["expect-tone"].part === part) return true;
     if ("expect-pwm" in step) {
       const role = circuit.roles.find((entry) => entry.pin === step["expect-pwm"].pin);

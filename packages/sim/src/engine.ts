@@ -469,6 +469,18 @@ export class SimMachine {
     }
     return clamp(onCycles / elapsed, 0, 1);
   }
+  lastPartChange(part: string): { atMs: number; on: boolean } | undefined {
+    const segments = this.partSegments.get(part) ?? [];
+    let previous: boolean | undefined;
+    let last: { atMs: number; on: boolean } | undefined;
+    for (const segment of segments) {
+      if (segment.start > this.cpu.cycles) break;
+      if (previous !== undefined && previous !== segment.on) last = { atMs: (segment.start * 1000) / this.profile.clockHz, on: segment.on };
+      previous = segment.on;
+    }
+    return last;
+  }
+
 
   toneFrequency(part: string, startCycle: number): number {
     const elapsed = this.cpu.cycles - startCycle;
@@ -875,10 +887,10 @@ export function executeScenario(input: { circuit: Circuit; hex: string; scenario
   let index = 0;
   for (const step of input.scenario.steps) {
     if (index >= MAX_SCENARIO_STEPS) throw new Error("scenario step budget exceeded");
-    const atMs = machine.timeMs;
+    const startMs = Math.round(machine.timeMs);
     const outcome = executeStep(machine, step);
-    stepResults.push({ index, step, ok: outcome.ok, message: outcome.message, atMs });
-    index += 1;
+    const endMs = Math.round(machine.timeMs);
+    stepResults.push({ index, step, ok: outcome.ok, message: outcome.message, startMs, endMs, atMs: startMs });
   }
   const trace = machine.finishTrace(input.scenario.id);
   return {
@@ -895,6 +907,27 @@ export function executeScenario(input: { circuit: Circuit; hex: string; scenario
     trace,
     pinModes: machine.pinModes(),
   };
+}
+
+interface PartExpectation {
+  part: string;
+  state?: "on" | "off";
+  minBrightness?: number;
+  maxBrightness?: number;
+}
+
+function expectPartsFor(step: ScenarioStep): { checks: readonly PartExpectation[]; windowMs: number } | undefined {
+  if ("expect-parts" in step) return step["expect-parts"];
+  if ("kind" in step && step.kind === "expect-parts") return step;
+  return undefined;
+}
+
+function timelineFailure(machine: SimMachine, startCycle: number, message: string, part?: string): string {
+  const startMs = Math.round((startCycle * 1000) / machine.profile.clockHz);
+  const endMs = Math.round(machine.timeMs);
+  const change = part ? machine.lastPartChange(part) : undefined;
+  const changeText = change ? ` (${part} turned ${change.on ? "on" : "off"} at t=${Math.round(change.atMs)} ms)` : "";
+  return `t=${startMs}–${endMs} ms ${message}${changeText}`;
 }
 
 function executeStep(machine: SimMachine, step: ScenarioStep): { ok: boolean; message: string } {
@@ -938,7 +971,8 @@ function executeStep(machine: SimMachine, step: ScenarioStep): { ok: boolean; me
     const { pin, level } = step["expect-pin"];
     const actual = machine.pinLevel(pin);
     const expected = level === "high" ? 1 : 0;
-    return actual === expected ? { ok: true, message: `${pin} is ${level}` } : { ok: false, message: `${pin} is ${actual === null ? "not an output" : actual ? "high" : "low"}; expected ${level}` };
+    if (actual === expected) return { ok: true, message: `${pin} is ${level}` };
+    return { ok: false, message: timelineFailure(machine, machine.currentCycle, `${pin} is ${actual === null ? "not an output" : actual ? "high" : "low"}; expected ${level}`) };
   }
   if ("expect-part" in step) {
     const { part, state, windowMs } = step["expect-part"];
@@ -947,32 +981,54 @@ function executeStep(machine: SimMachine, step: ScenarioStep): { ok: boolean; me
     const onFraction = machine.partOnFraction(part, start);
     const ok = state === "on" ? onFraction >= 0.9 : onFraction <= 0.1;
     const percentage = (onFraction * 100).toFixed(0);
-    const message = ok
-      ? `${part} was ${state} as expected (lit ${percentage}% of the window)`
-      : `${part} should be ${state} (lit ${state === "on" ? "≥ 90%" : "≤ 10%"} of the window) but was lit ${percentage}%`;
-    return { ok, message };
+    if (ok) return { ok: true, message: `${part} was ${state} as expected (lit ${percentage}% of the window)` };
+    return { ok: false, message: timelineFailure(machine, start, `${part} should be ${state} (lit ${state === "on" ? "≥ 90%" : "≤ 10%"} of the window) but was lit ${percentage}%`, part) };
+  }
+  const expectParts = expectPartsFor(step);
+  if (expectParts) {
+    const start = machine.currentCycle;
+    machine.run(expectParts.windowMs);
+    const failures: string[] = [];
+    for (const check of expectParts.checks) {
+      const onFraction = machine.partOnFraction(check.part, start);
+      const brightness = machine.partState(check.part);
+      const percentage = (onFraction * 100).toFixed(0);
+      if (check.state !== undefined) {
+        const stateOk = check.state === "on" ? onFraction >= 0.9 : onFraction <= 0.1;
+        if (!stateOk) failures.push(`${check.part} should be ${check.state} (lit ${check.state === "on" ? "≥ 90%" : "≤ 10%"} of the window) but was lit ${percentage}%`);
+      }
+      if (check.minBrightness !== undefined && brightness < check.minBrightness) failures.push(`${check.part} brightness ${(brightness * 100).toFixed(0)}% is below ${(check.minBrightness * 100).toFixed(0)}%`);
+      if (check.maxBrightness !== undefined && brightness > check.maxBrightness) failures.push(`${check.part} brightness ${(brightness * 100).toFixed(0)}% exceeds ${(check.maxBrightness * 100).toFixed(0)}%`);
+    }
+    if (failures.length === 0) return { ok: true, message: `checked ${expectParts.checks.length} parts over ${expectParts.windowMs} ms` };
+    const firstPart = expectParts.checks.find((check) => failures.some((failure) => failure.startsWith(`${check.part} `)))?.part;
+    return { ok: false, message: timelineFailure(machine, start, failures.join("; "), firstPart) };
   }
   if ("expect-pwm" in step) {
     const { pin, min, max, windowMs } = step["expect-pwm"];
     const start = machine.currentCycle;
     machine.run(windowMs);
     const fraction = machine.pinHighFraction(pin, start);
-    return fraction >= min && fraction <= max ? { ok: true, message: `${pin} duty ${(fraction * 100).toFixed(1)}%` } : { ok: false, message: `${pin} duty ${(fraction * 100).toFixed(1)}% outside ${(min * 100).toFixed(1)}–${(max * 100).toFixed(1)}%` };
+    if (fraction >= min && fraction <= max) return { ok: true, message: `${pin} duty ${(fraction * 100).toFixed(1)}%` };
+    return { ok: false, message: timelineFailure(machine, start, `${pin} duty ${(fraction * 100).toFixed(1)}% outside ${(min * 100).toFixed(1)}–${(max * 100).toFixed(1)}%`) };
   }
   if ("expect-tone" in step) {
     const { part, minHz, maxHz, windowMs } = step["expect-tone"];
     const start = machine.currentCycle;
     machine.run(windowMs);
     const hz = machine.toneFrequency(part, start);
-    return hz >= minHz && hz <= maxHz ? { ok: true, message: `${part} tone ${hz.toFixed(1)} Hz` } : { ok: false, message: `${part} tone ${hz.toFixed(1)} Hz outside ${minHz}–${maxHz} Hz` };
+    if (hz >= minHz && hz <= maxHz) return { ok: true, message: `${part} tone ${hz.toFixed(1)} Hz` };
+    return { ok: false, message: timelineFailure(machine, start, `${part} tone ${hz.toFixed(1)} Hz outside ${minHz}–${maxHz} Hz`, part) };
   }
   if ("expect-serial" in step) {
     const { contains, withinMs } = step["expect-serial"];
+    const start = machine.currentCycle;
     const deadline = machine.currentCycle + Math.round(withinMs * CLOCK_HZ / 1000);
     while (!machine.serialContains(contains) && machine.currentCycle < deadline) machine.run(Math.min(1, (deadline - machine.currentCycle) * 1000 / CLOCK_HZ));
-    return machine.serialContains(contains) ? { ok: true, message: `serial contains ${JSON.stringify(contains)}` } : { ok: false, message: `serial did not contain ${JSON.stringify(contains)}` };
+    if (machine.serialContains(contains)) return { ok: true, message: `serial contains ${JSON.stringify(contains)}` };
+    return { ok: false, message: timelineFailure(machine, start, `serial did not contain ${JSON.stringify(contains)}`) };
   }
-  return { ok: false, message: "unsupported scenario step" };
+  return { ok: false, message: timelineFailure(machine, machine.currentCycle, "unsupported scenario step") };
 }
 
 export function observePinModesCore(input: { circuit: Circuit; hex: string; ms?: number }): PinModeObservation[] {

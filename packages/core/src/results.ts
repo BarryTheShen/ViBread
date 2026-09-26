@@ -43,6 +43,10 @@ export interface StepResult {
   step: ScenarioStep;
   ok: boolean;
   message: string;
+  /** Absolute virtual timeline range covered by this step. */
+  startMs: number;
+  endMs: number;
+  /** Backward-compatible alias for the step start. */
   atMs: number;
 }
 
