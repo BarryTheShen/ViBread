@@ -3,6 +3,9 @@ import { createServer, type Server } from "node:http";
 import pino from "pino";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
+import { toNodeHandler } from "better-auth/node";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { ClientFactory, ClientFactoryOptions, JsonRpcTransportFactory } from "@a2a-js/sdk/client";
 import { AgentCard, Role } from "@a2a-js/sdk";
 import { createAppContext, type AppContextHandle } from "../context.js";
@@ -66,6 +69,7 @@ async function startOAuthTest(): Promise<{ baseUrl: string; context: AppContextH
   mountMcp(app, ctx, auth);
   mountA2a(app, ctx, auth);
   const handle = { server, context };
+  running.push(handle);
   return { baseUrl, context };
 }
 
@@ -160,5 +164,38 @@ describe("Better Auth OAuth → MCP", () => {
     expect(tools.tools.map((tool) => tool.name)).toContain("vibread_list_missions");
     expect(tools.tools.map((tool) => tool.name)).not.toContain("vibread_create_mission");
     await client.close();
+    const cardResponse = await fetch(`${baseUrl}/.well-known/agent-card.json`);
+    expect(cardResponse.status).toBe(200);
+    const cardJson = (await cardResponse.json()) as { securitySchemes: { oauth: { scheme: { $case: string } } } };
+    expect(cardJson.securitySchemes.oauth.scheme.$case).toBe("oauth2SecurityScheme");
+    const unauthorizedA2a = await fetch(`${baseUrl}/a2a`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
+    expect(unauthorizedA2a.status).toBe(401);
+    const card = AgentCard.fromJSON(cardJson);
+    const a2aFactory = new ClientFactory(ClientFactoryOptions.createFrom(ClientFactoryOptions.default, {
+      transports: [new JsonRpcTransportFactory({
+        fetchImpl: async (input, init) => {
+          const headers = new Headers(init?.headers);
+          headers.set("authorization", `Bearer ${tokenBody.access_token}`);
+          return fetch(input, { ...init, headers });
+        },
+      })],
+    }));
+    const a2a = await a2aFactory.createFromAgentCard(card);
+    const a2aResult = await a2a.sendMessage({
+      tenant: "",
+      metadata: {},
+      message: {
+        messageId: "oauth-a2a",
+        role: Role.ROLE_USER,
+        parts: [{ content: { $case: "text", value: "hello" }, metadata: {}, filename: "", mediaType: "text/plain" }],
+        taskId: "",
+        contextId: "",
+        extensions: [],
+        metadata: {},
+        referenceTaskIds: [],
+      },
+      configuration: undefined,
+    });
+    expect(a2aResult).toBeDefined();
   }, 10_000);
 });
