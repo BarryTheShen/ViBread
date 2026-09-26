@@ -92,13 +92,14 @@ jobs:
   release:
     name: Prerelease desktop-v0.1.0
     needs: package
-    if: github.ref == 'refs/heads/desktop'
+    # Only a fully green run on main (push or workflow_dispatch) republishes; superseded runs are cancelled above.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v5
         with:
           path: artifacts
-      - name: Create or update prerelease
+      - name: Republish prerelease at this commit
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -107,10 +108,9 @@ jobs:
           find artifacts -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \) -exec cp {} upload/ \;
           (cd upload && sha256sum * > SHA256SUMS.txt)
           ls -la upload
-          if gh release view desktop-v0.1.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload desktop-v0.1.0 upload/* --clobber --repo "$GITHUB_REPOSITORY"
-          else
-            gh release create desktop-v0.1.0 upload/* --prerelease --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
-              --title "ViBread desktop v0.1.0 (preview)" \
-              --notes "Unsigned preview builds of the ViBread desktop app. See the README 'Desktop app' section for first-run steps."
-          fi
+          # Delete the release and its tag so the tag moves to this commit.
+          gh release delete desktop-v0.1.0 --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
+          printf 'Built from %s on %s\n\nUnsigned preview builds of the ViBread desktop app (Linux x64 AppImage/deb, Windows x64 installer, macOS arm64/x64 dmg/zip). See the README "Desktop app" section for first-run steps.\n' \
+            "${GITHUB_SHA::7}" "$(date -u '+%Y-%m-%d %H:%M UTC')" > notes.md
+          gh release create desktop-v0.1.0 upload/* --prerelease --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
+            --title "ViBread desktop v0.1.0 (preview)" --notes-file notes.md
