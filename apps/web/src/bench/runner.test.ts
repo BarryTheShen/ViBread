@@ -4,7 +4,7 @@ import { encodeHostCommand } from "@vibread/core";
 import { BenchRunner, type BenchTransport } from "./runner.js";
 
 const circuit = {} as Circuit;
-const plan = { tests: [] } as unknown as SelfTestPlan;
+const plan = { design: "hash", board: "uno-r3-atmega328p-5v", tests: [] } as unknown as SelfTestPlan;
 
 class FakeTransport implements BenchTransport {
   readonly writes: string[] = [];
@@ -29,6 +29,15 @@ class FakeTransport implements BenchTransport {
   receive(line: string): void {
     const data = new TextEncoder().encode(`${line}\n`);
     for (const listener of this.listeners) listener(data);
+  }
+}
+
+class RailTransport extends FakeTransport {
+  override async write(data: Uint8Array): Promise<void> {
+    await super.write(data);
+    const command = JSON.parse(new TextDecoder().decode(data)) as { c: string; test?: string };
+    if (command.c === "hello") this.receive(JSON.stringify({ t: "hello", fw: "vibread-bench", proto: 1, design: "hash", board: "uno-r3-atmega328p-5v" }));
+    if (command.c === "run" && command.test === "rails.vcc") this.receive(JSON.stringify({ t: "vcc", mv: 5000 }));
   }
 }
 
@@ -60,5 +69,16 @@ describe("BenchRunner", () => {
     transport.receive(JSON.stringify({ t: "done" }));
     expect(runner.state.phase).toBe("complete");
     expect(runner.runRequest()).toMatchObject({ revision: 3, kind: "selftest", answers: { "ask-1": "pressed" } });
+  });
+
+  it("waits for the matching hello before sending the rail command", async () => {
+    const transport = new RailTransport();
+    const runner = new BenchRunner({ circuit, plan, revision: 1, transport });
+    await runner.startRail();
+    expect(transport.writes).toEqual([
+      encodeHostCommand({ c: "hello" }),
+      encodeHostCommand({ c: "run", test: "rails.vcc" }),
+    ]);
+    expect(runner.state.seenVcc?.mv).toBe(5000);
   });
 });

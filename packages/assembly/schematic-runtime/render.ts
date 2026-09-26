@@ -7,7 +7,6 @@ import {
   Net,
   NetLabel,
   Potentiometer,
-  SchematicText,
   type Port,
   PushButton,
   Resistor,
@@ -179,10 +178,10 @@ function boardArrangement(circuit: Circuit, pins: string[]) {
     else leftSide.push(pin);
   }
   return {
-    leftSide,
-    rightSide,
-    topSide: pins.includes("5V") ? ["5V"] : [],
-    bottomSide: pins.includes("GND") ? ["GND"] : [],
+    leftSide: { pins: leftSide, direction: "top-to-bottom" },
+    rightSide: { pins: rightSide, direction: "top-to-bottom" },
+    topSide: pins.includes("5V") ? { pins: ["5V"], direction: "left-to-right" } : [],
+    bottomSide: pins.includes("GND") ? { pins: ["GND"], direction: "left-to-right" } : [],
   };
 }
 
@@ -206,9 +205,11 @@ function makeBoard(circuit: Circuit): Chip {
   const pins = boardPins(circuit);
   const pinLabels: Record<number, string> = {};
   const pinAttributes: Record<string, Record<string, unknown>> = {};
+  const pinStyle: Record<string, { marginTop: string; marginBottom: string }> = {};
   pins.forEach((pin, index) => {
     pinLabels[index + 1] = pin;
     pinAttributes[pin] = boardPinAttributes(circuit, pin);
+    pinStyle[pin] = { marginTop: "0.8mm", marginBottom: "0.8mm" };
   });
   return new Chip({
     name: "ARDUINO",
@@ -218,7 +219,7 @@ function makeBoard(circuit: Circuit): Chip {
     schPinArrangement: boardArrangement(circuit, pins),
     schX: 0,
     schY: 0,
-    schPinSpacing: "2.8mm",
+    schPinStyle: pinStyle,
     schWidth: "9mm",
     schHeight: "7mm",
   });
@@ -344,7 +345,8 @@ function addNetConnections(
         const part = ref?.part === "board" ? undefined : partsById.get(ref?.part ?? "");
         if (part?.module === "led" && net.kind === "ground") {
           const position = positions.get(part.id);
-          if (position) tscircuitBoard.add(new SchematicText({ text: "GND", schX: position.x, schY: position.y - 2, fontSize: 0.35, color: "#f8fafc" }));
+          if (position) tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom", schX: position.x, schY: position.y - 2 }));
+          else tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom" }));
           continue;
         }
         const anchorSide = net.kind === "ground"

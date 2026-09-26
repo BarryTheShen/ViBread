@@ -23,7 +23,7 @@ import {
 } from "@mui/material";
 import type { BenchRunResult, BoardProfileId, Circuit, DeviceLine, Layout, MissionDetail, RevisionDetail, SelfTestPlan } from "@vibread/core";
 import { BOARD_PROFILES, revisionHash } from "@vibread/core";
-import { evaluateRun, planSelfTest, promptFor } from "@vibread/bench";
+import { FAULTS, evaluateRun, planSelfTest, promptFor } from "@vibread/bench";
 import { BenchRunner, type BenchRunnerState } from "./runner.js";
 import { circuitWithFault } from "./faults.js";
 import { decorateBreadboardSvg, fallbackBreadboardSvg, candidateHighlight, type SvgHighlight } from "./svg.js";
@@ -90,10 +90,14 @@ async function loadBench(missionId: string): Promise<LoadedBench> {
   let boardSvg = fallbackBreadboardSvg(revision.circuit.parts.map((part) => part.id));
   const artifactUrl = revision.artifactUrls["breadboard.svg"] ?? revision.artifactUrls["breadboard"];
   if (artifactUrl) {
-    const response = await fetch(artifactUrl);
-    if (response.ok) {
-      const candidate = await response.text();
-      if (candidate.includes("data-vibread=\"breadboard\"") || candidate.includes("data-vibread='breadboard'")) boardSvg = candidate;
+    try {
+      const response = await fetch(artifactUrl);
+      if (response.ok) {
+        const candidate = await response.text();
+        if (/<svg[\s>]/i.test(candidate)) boardSvg = candidate;
+      }
+    } catch {
+      // Keep the deterministic local board only when the optional artifact is unavailable.
     }
   }
   return { mission, revision, plan, layout: revision.results.layout, boardSvg };
@@ -196,7 +200,10 @@ export default function BenchPage(): ReactElement {
       circuit,
       revision,
       transport: nextTransport,
-      onState: (next) => setRunnerState({ ...next }),
+      onState: (next) => {
+        setRunnerState({ ...next });
+        if (next.error) setError(isLostPowerError(next.error) ? BOARD_LOST_POWER : next.error);
+      },
     });
     runnerRef.current = nextRunner;
     setRunner(nextRunner);
@@ -384,14 +391,18 @@ export default function BenchPage(): ReactElement {
 
   const resetForFault = useCallback((): void => {
     if (mode !== "virtual" || !loaded || !benchHex || !virtualRef.current) return;
-    const simulatedCircuit = circuitWithFault(loaded.revision.circuit, fault, loaded.layout);
-    const nextRunner = attachRunner(virtualRef.current, loaded.plan, simulatedCircuit, loaded.revision.n);
-    virtualRef.current.start({ circuit: simulatedCircuit, hex: benchHex, fault });
-    setRunner(nextRunner);
-    setRunnerState(nextRunner.state);
-    setRun(undefined);
-    setError(undefined);
-    setActiveStep(1);
+    try {
+      const simulatedCircuit = circuitWithFault(loaded.revision.circuit, fault, loaded.layout);
+      const nextRunner = attachRunner(virtualRef.current, loaded.plan, simulatedCircuit, loaded.revision.n);
+      virtualRef.current.start({ circuit: simulatedCircuit, hex: benchHex, fault });
+      setRunner(nextRunner);
+      setRunnerState(nextRunner.state);
+      setRun(undefined);
+      setError(undefined);
+      setActiveStep(1);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
   }, [attachRunner, benchHex, fault, loaded, mode]);
 
   if (!loaded) {
@@ -447,9 +458,7 @@ export default function BenchPage(): ReactElement {
                   <InputLabel id="virtual-fault-label">Inject a wiring fault</InputLabel>
                   <Select labelId="virtual-fault-label" value={fault} label="Inject a wiring fault" onChange={(event) => setFault(event.target.value as VirtualFault)}>
                     <MenuItem value="none">{faultLabel("none")}</MenuItem>
-                    <MenuItem value="button-gnd">{faultLabel("button-gnd")}</MenuItem>
-                    <MenuItem value="led-jumpers">{faultLabel("led-jumpers")}</MenuItem>
-                    <MenuItem value="divider-resistor">{faultLabel("divider-resistor")}</MenuItem>
+                    {FAULTS.map((definition) => <MenuItem key={definition.id} value={definition.id}>{definition.title}</MenuItem>)}
                   </Select>
                 </FormControl>
                 {virtualRef.current && <Button variant="outlined" onClick={resetForFault} sx={actionButtonSx}>Apply fault and restart</Button>}
@@ -483,7 +492,7 @@ export default function BenchPage(): ReactElement {
           </CardContent>
         </Card>
 
-        {error && <Alert severity="error" onClose={() => setError(undefined)}>{error}</Alert>}
+        {error && <Alert severity="error" onClose={() => setError(undefined)} action={error === BOARD_LOST_POWER ? <Button color="inherit" size="small" onClick={() => { setError(undefined); void startRail(); }}>Retry rail checkpoint</Button> : undefined}>{error}</Alert>}
 
         {activeStep >= 1 && (
           <Card>

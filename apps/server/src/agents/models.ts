@@ -6,6 +6,9 @@ import type { ServerConfig } from "../config.js";
 /**
  * Model access for the three agent roles. `design` = the design agent (config.model); `fast` = test author, RETRO, photo
  * check (config.fastModel). Both throw ClaudeNotConnectedError when no API key is configured — never a fake answer.
+ *
+ * This file is the only place that constructs an AI provider (agents, RETRO, test author, and photo check all receive an
+ * AgentModels). A later per-user credential (PLAN §5.11 item 16) plugs in here as another AgentModels factory.
  */
 export interface AgentModels {
   design(): LanguageModel;

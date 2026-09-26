@@ -248,6 +248,7 @@ export function createMissionService(
         steps: steps.map((s) => ({
           ...s,
           ...(revision && revision.results.artifacts[`step-${s.n}.png`] ? { imageUrl: artifactUrl(missionId, revision.n, `step-${s.n}.png`) } : {}),
+          ...(revision && revision.results.artifacts[`step-${s.n}-focus.png`] ? { focusImageUrl: artifactUrl(missionId, revision.n, `step-${s.n}-focus.png`) } : {}),
         })),
         current,
         plug: steps[current - 1]?.plug ?? "unplugged",

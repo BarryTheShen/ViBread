@@ -4,6 +4,7 @@ import { GOLDEN } from "@vibread/fixtures";
 import type { Layout } from "@vibread/core";
 
 import { assemblyReport, buildSteps, layoutBoard, layoutHash, lvs } from "./index.js";
+import { renderBreadboardSvg } from "./svg.js";
 
 function issueKinds(circuit: (typeof GOLDEN)[number]["circuit"], layout: Layout): string[] {
   return [...new Set(lvs(circuit, layout).issues.map((issue) => issue.kind))].sort();
@@ -56,5 +57,25 @@ describe("deterministic breadboard layout", () => {
     const half = { ...moon, breadboard: { profile: "bb-400" as const } };
     const halfLayout = layoutBoard(half);
     expect(lvs(half, halfLayout).ok).toBe(true);
+  });
+  it("focuses a step around every new hole", () => {
+    const moon = GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit;
+    const layout = layoutBoard(moon);
+    const steps = buildSteps(moon, layout);
+    const step = steps.steps[6];
+    const svg = renderBreadboardSvg({ circuit: moon, layout, steps, upToStep: step.n, focus: true });
+    const box = svg.match(/viewBox="([^"]+)"/)?.[1].split(/\s+/).map(Number);
+    expect(box).toHaveLength(4);
+    const [x, y, width, height] = box!;
+    for (const hole of step.holes) {
+      const point = svg.match(new RegExp(`id="hole-${hole}"[^>]*cx="([\\d.]+)"[^>]*cy="([\\d.]+)"`));
+      expect(point, hole).not.toBeNull();
+      const px = Number(point?.[1]);
+      const py = Number(point?.[2]);
+      expect(px).toBeGreaterThanOrEqual(x);
+      expect(px).toBeLessThanOrEqual(x + width);
+      expect(py).toBeGreaterThanOrEqual(y);
+      expect(py).toBeLessThanOrEqual(y + height);
+    }
   });
 });

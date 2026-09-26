@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { GOLDEN } from "@vibread/fixtures";
-import { asBuiltCircuit, layoutBoard } from "@vibread/assembly";
+import { layoutBoard } from "@vibread/assembly";
 import { compileBenchFirmware } from "@vibread/firmware";
 import { SimSession } from "@vibread/sim/browser";
-import { revisionHash, type Circuit, type DecodedLine, type DeviceLine, type Layout, type SelfTestPlan } from "@vibread/core";
-import { calibrationMacros, LineDecoder, evaluateRun, planSelfTest } from "./index.js";
+import { revisionHash, type Circuit, type DecodedLine, type DeviceLine, type SelfTestPlan } from "@vibread/core";
+import { applyFault, calibrationMacros, LineDecoder, evaluateRun, planSelfTest } from "./index.js";
 
 const moon = GOLDEN.find((entry) => entry.key === "moon-phase-lamp");
 if (moon === undefined) throw new Error("moon-phase-lamp fixture is required");
@@ -15,33 +15,8 @@ interface VirtualRun {
   answers: Record<string, string>;
 }
 
-function mutateButton(base: Layout): Layout {
-  const layout = structuredClone(base);
-  const button = layout.placements.find((placement) => placement.part === "BTN1");
-  const jumper = layout.jumpers.find((candidate) => candidate.id === "W3");
-  if (button === undefined || jumper === undefined) throw new Error("moon layout must place BTN1 and its D2 jumper");
-  // Put the signal leg and its D2 jumper in the GND contact group a31.
-  button.pins["1"] = "a31";
-  jumper.to = { hole: "a31" };
-  return layout;
-}
 
-function mutateLedJumpers(base: Layout): Layout {
-  const layout = structuredClone(base);
-  const first = layout.jumpers.find((jumper) => jumper.id === "W5");
-  const second = layout.jumpers.find((jumper) => jumper.id === "W6");
-  if (first === undefined || second === undefined) throw new Error("moon layout must have D4/D5 jumpers");
-  const endpoint = first.to;
-  first.to = second.to;
-  second.to = endpoint;
-  return layout;
-}
 
-function mutateMissingDividerResistor(base: Layout): Layout {
-  const layout = structuredClone(base);
-  layout.placements = layout.placements.filter((placement) => placement.part !== "R5");
-  return layout;
-}
 
 function answerForAsk(session: SimSession, plan: SelfTestPlan, ask: Extract<DeviceLine, { t: "ask" }>, answered: Set<string>, answers: Record<string, string>): void {
   if (answered.has(ask.id)) return;
@@ -108,18 +83,18 @@ describe("virtual bench protocol", () => {
     expect(good.verdict, JSON.stringify(good.results)).toBe("pass");
     expect(calibrationMacros(good.calibration)).toMatchObject({ VB_CAL_LDR1_DARK: expect.any(Number), VB_CAL_LDR1_HYST: expect.any(Number) });
 
-    const faults = [
-      { name: "button", layout: mutateButton(goodLayout), cause: "button-leg-in-gnd-row" },
-      { name: "leds", layout: mutateLedJumpers(goodLayout), cause: "led-jumpers-swapped" },
-      { name: "divider", layout: mutateMissingDividerResistor(goodLayout), cause: "divider-resistor-missing" },
+    const faultSpecs = [
+      { name: "button", fault: "button-leg-in-gnd-row" as const },
+      { name: "leds", fault: "led-jumpers-swapped" as const },
+      { name: "divider", fault: "divider-resistor-missing" as const },
     ];
+    const faults = faultSpecs.map((spec) => ({ ...spec, ...applyFault({ circuit: moon.circuit, layout: goodLayout, fault: spec.fault }) }));
     for (const fault of faults) {
-      const asBuilt = asBuiltCircuit(moon.circuit, fault.layout);
-      const run = runVirtual(asBuilt, plan, compiled.hex);
+      const run = runVirtual(fault.circuit, plan, compiled.hex);
       expect(run.invalid, `${fault.name}: ${JSON.stringify(run.invalid)}`).toHaveLength(0);
       const result = await evaluateRun({ circuit: moon.circuit, layout: fault.layout, plan, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: `virtual-${fault.name}` });
       expect(result.verdict, fault.name).toBe("fail");
-      expect(result.diagnosis.candidates.slice(0, 2).map((candidate) => candidate.cause), `${fault.name}: ${JSON.stringify({ diagnosis: result.diagnosis, results: result.results })}`).toContain(fault.cause);
+      expect(result.diagnosis.candidates.slice(0, 2).map((candidate) => candidate.cause), `${fault.name}: ${JSON.stringify({ diagnosis: result.diagnosis, results: result.results })}`).toContain(fault.fault);
       expect(result.diagnosis.candidates[0]?.highlight.holes.length, fault.name).toBeGreaterThan(0);
     }
   }, 120_000);

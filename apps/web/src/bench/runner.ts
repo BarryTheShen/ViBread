@@ -1,6 +1,5 @@
-import type { Circuit, DeviceLine, DecodedLine, HostCommand, SelfTestPlan } from "@vibread/core";
+import type { BenchRunResult, Circuit, DeviceLine, DecodedLine, HostCommand, SelfTestPlan } from "@vibread/core";
 import { decodeDeviceLine, encodeHostCommand } from "@vibread/core";
-import type { BenchRunResult } from "@vibread/core";
 import { LineDecoder } from "@vibread/bench";
 
 export interface BenchTransport {
@@ -22,6 +21,14 @@ export interface BenchRunnerState {
   seenVcc: Extract<DeviceLine, { t: "vcc" }> | undefined;
   done: boolean;
   error?: string;
+}
+
+type TimerHandle = number | NodeJS.Timeout;
+
+interface PendingLine<T extends DeviceLine> {
+  resolve: (line: T) => void;
+  reject: (reason: Error) => void;
+  timer: TimerHandle;
 }
 
 export type BenchRunnerEvent =
@@ -104,6 +111,9 @@ export class BenchRunner {
     for (const line of this.decoder.push(text)) this.dispatch({ type: "line", line });
   };
   private stateValue = initialRunnerState();
+  private readonly helloWaiters: PendingLine<Extract<DeviceLine, { t: "hello" }>>[] = [];
+  private readonly vccWaiters: PendingLine<Extract<DeviceLine, { t: "vcc" }>>[] = [];
+  private readonly askTimers = new Map<string, TimerHandle>();
 
   constructor(options: BenchRunnerOptions) {
     this.plan = options.plan;
@@ -124,9 +134,62 @@ export class BenchRunner {
 
   private dispatch(event: BenchRunnerEvent): void {
     this.stateValue = runnerReducer(this.stateValue, event);
+    if (event.type === "line" && event.line.t !== "invalid") {
+      if (event.line.t === "hello") this.resolveWaiters(this.helloWaiters, event.line);
+      if (event.line.t === "vcc") this.resolveWaiters(this.vccWaiters, event.line);
+      if (event.line.t === "ask") {
+        const ask = event.line;
+        const timer = setTimeout(() => {
+          if (this.state.answers[ask.id] === undefined) this.fail(`Self-test timed out waiting for ${ask.id}.`);
+        }, ask.timeoutMs + 5_000);
+        this.askTimers.set(ask.id, timer);
+      }
+      if (event.line.t === "done") this.clearAskTimers();
+    }
+    if (event.type === "transport-error") this.rejectWaiters(new Error(event.message));
     this.onState?.(this.stateValue);
   }
 
+  private resolveWaiters<T extends DeviceLine>(waiters: PendingLine<T>[], line: T): void {
+    const pending = waiters.splice(0, waiters.length);
+    for (const waiter of pending) {
+      clearTimeout(waiter.timer);
+      waiter.resolve(line);
+    }
+  }
+
+  private rejectWaiters(reason: Error): void {
+    const waiters = [...this.helloWaiters, ...this.vccWaiters];
+    this.helloWaiters.splice(0, this.helloWaiters.length);
+    this.vccWaiters.splice(0, this.vccWaiters.length);
+    for (const waiter of waiters) {
+      clearTimeout(waiter.timer);
+      waiter.reject(reason);
+    }
+  }
+
+  private clearAskTimers(): void {
+    for (const timer of this.askTimers.values()) clearTimeout(timer);
+    this.askTimers.clear();
+  }
+
+  private waitForLine<T extends DeviceLine>(
+    waiters: PendingLine<T>[],
+    match: (line: DeviceLine) => line is T,
+    name: string,
+    timeoutMs: number,
+  ): Promise<T> {
+    const existing = this.state.lines.find(match);
+    if (existing !== undefined) return Promise.resolve(existing);
+    return new Promise<T>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        const index = waiters.findIndex((waiter) => waiter.timer === timer);
+        if (index >= 0) waiters.splice(index, 1);
+        reject(new Error(`Timed out waiting for ${name}.`));
+      }, timeoutMs);
+      waiters.push({ resolve, reject, timer });
+    });
+  }
   private async send(command: HostCommand): Promise<void> {
     this.dispatch({ type: "command", command });
     await this.transport.write(new TextEncoder().encode(encodeHostCommand(command)));
@@ -134,8 +197,20 @@ export class BenchRunner {
 
   /** Start the rail/banner checkpoint. Call only from the Connect → Rail click. */
   async startRail(): Promise<void> {
-    await this.send({ c: "hello" });
+    const matchesRevision = (line: DeviceLine): line is Extract<DeviceLine, { t: "hello" }> => line.t === "hello" && line.design === this.plan.design && line.board === this.plan.board;
+    let hello = this.state.lines.find(matchesRevision);
+    if (hello === undefined) {
+      await this.send({ c: "hello" });
+      hello = await this.waitForLine(this.helloWaiters, matchesRevision, "matching hello banner", 5_000);
+    }
+    if (hello.design !== this.plan.design || hello.board !== this.plan.board) throw new Error("Board banner does not match this revision.");
     await this.send({ c: "run", test: "rails.vcc" });
+    await this.waitForLine(
+      this.vccWaiters,
+      (line): line is Extract<DeviceLine, { t: "vcc" }> => line.t === "vcc",
+      "VCC reading",
+      5_000,
+    );
   }
 
   /** Start all planned read-before-drive tests. */
@@ -147,6 +222,11 @@ export class BenchRunner {
   async answer(id: string, value: string): Promise<void> {
     const ask = this.state.asks.find((candidate) => candidate.id === id);
     if (!ask) throw new Error(`The device did not ask for ${id}.`);
+    const timer = this.askTimers.get(id);
+    if (timer !== undefined) {
+      clearTimeout(timer);
+      this.askTimers.delete(id);
+    }
     await this.send({ c: "answer", id, v: value });
   }
 
@@ -162,10 +242,14 @@ export class BenchRunner {
   }
 
   fail(message: string): void {
+    this.clearAskTimers();
+    this.rejectWaiters(new Error(message));
     this.dispatch({ type: "transport-error", message });
   }
 
   dispose(): void {
+    this.clearAskTimers();
+    this.rejectWaiters(new Error("Bench connection closed."));
     this.transport.off("data", this.handleData);
   }
 }

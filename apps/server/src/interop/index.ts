@@ -1,9 +1,11 @@
 import { randomUUID } from "node:crypto";
-import express, { type Express, type Request } from "express";
+import express, { type Express, type Request, type RequestHandler, type Response } from "express";
 import { z } from "zod";
 import { A2A_PROTOCOL_VERSION, Role, TaskState, type AgentCard, type Artifact, type Message, type Task } from "@a2a-js/sdk";
 import { AgentEvent, DefaultRequestHandler, InMemoryTaskStore, type AgentExecutor, type ExecutionEventBus, RequestContext } from "@a2a-js/sdk/server";
 import { agentCardHandler, jsonRpcHandler, type UserBuilder } from "@a2a-js/sdk/server/express";
+import { requireMcpAuth } from "@better-auth/mcp";
+import type { Auth, BetterAuthOptions } from "better-auth";
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -295,14 +297,125 @@ function createMcpServer(ctx: AppContext, request: Request): McpServer {
   registerMissionTools(server, ctx, request, scopes);
   return server;
 }
+function webRequestFor(request: Request): globalThis.Request {
+  const headers = new Headers();
+  for (const [name, value] of Object.entries(request.headers)) {
+    if (typeof value === "string") headers.set(name, value);
+    else if (Array.isArray(value)) headers.set(name, value.join(", "));
+  }
+  const url = `${request.protocol}://${request.get("host")}${request.originalUrl}`;
+  const init: RequestInit = { method: request.method, headers };
+  if (request.method !== "GET" && request.method !== "HEAD" && request.body !== undefined) init.body = JSON.stringify(request.body);
+  return new globalThis.Request(url, init);
+}
+
+async function sendWebResponse(response: Response, result: globalThis.Response): Promise<void> {
+  result.headers.forEach((value, name) => response.setHeader(name, value));
+  response.status(result.status);
+  const body = await result.arrayBuffer();
+  response.end(Buffer.from(body));
+}
+
+function oauthMiddleware(auth: Auth<BetterAuthOptions>, ctx: AppContext, bearer: RequestHandler): RequestHandler {
+  return async (request, response, next) => {
+    const authorization = request.header("authorization") ?? "";
+    if (authorization.toLowerCase().startsWith("bearer vb_")) {
+      bearer(request, response, next);
+      return;
+    }
+    let oauthClaims: Record<string, unknown> | undefined;
+    const verify = requireMcpAuth(
+      auth,
+      async (_request, claims) => {
+        oauthClaims = claims as Record<string, unknown>;
+        return new globalThis.Response(null, { status: 204 });
+      },
+      { resource: `${ctx.config.publicUrl.replace(/\/$/, "")}${MCP_PATH}`, challengeScopes: ["circuits:read", "circuits:write", "bench:request"] },
+    );
+    const result = await verify(webRequestFor(request));
+    if (result.status !== 204) {
+      await sendWebResponse(response, result);
+      return;
+    }
+    if (!oauthClaims) {
+      response.status(401).json({ error: "OAuth claims missing" });
+      return;
+    }
+    const token = authorization.replace(/^Bearer\s+/i, "");
+    const rawScope = oauthClaims.scope;
+    const scopes = typeof rawScope === "string" ? rawScope.split(/\s+/).filter(Boolean) : Array.isArray(rawScope) ? rawScope.filter((scope): scope is string => typeof scope === "string") : [];
+    const sub = typeof oauthClaims.sub === "string" ? oauthClaims.sub : undefined;
+    const clientId = typeof oauthClaims.client_id === "string" ? oauthClaims.client_id : "oauth-client";
+    const expiresAt = typeof oauthClaims.exp === "number" ? oauthClaims.exp : undefined;
+    request.auth = { token, clientId, scopes, expiresAt, extra: { userId: sub } };
+    next();
+  };
+}
+async function operatorSessionToken(auth: Auth<BetterAuthOptions>, ctx: AppContext): Promise<string> {
+  await ctx.operator();
+  const context = await auth.$context;
+  const password = `${ctx.config.authSecret}:vibread-operator`;
+  const hash = await context.password.hash(password);
+  const account = await context.internalAdapter.findCredentialAccount("operator");
+  if (account) await context.internalAdapter.updateAccount(account.id, { password: hash });
+  else await context.internalAdapter.linkAccount({ userId: "operator", providerId: "credential", accountId: "operator", password: hash });
+  const result = await auth.api.signInEmail({ body: { email: "operator@vibread.local", password } });
+  if (!result.token) throw new Error("Better Auth did not return an operator session token");
+  return result.token;
+}
+
+function setSessionCookie(response: Response, token: string, secure: boolean): void {
+  response.setHeader("Set-Cookie", `better-auth.session_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`);
+}
+
+function mountOAuthPages(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
+  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
+}
+
+function oauthPage(title: string, content: string): string {
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
+  :root{color-scheme:dark}body{margin:0;background:#07111f;color:#d7e8ff;font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}
+  main{width:min(560px,calc(100% - 32px));background:#0d1d31;border:1px solid #2d5275;border-radius:14px;padding:28px;box-shadow:0 18px 70px #0008}
+  h1{letter-spacing:.08em;text-transform:uppercase;color:#7dd3fc;font-size:20px}p{color:#a9bfd8}.scope{padding:10px 12px;margin:8px 0;background:#102a43;border-left:3px solid #fbbf24;border-radius:6px}
+  button,a.button{display:inline-block;border:0;border-radius:8px;padding:10px 16px;margin:12px 8px 0 0;background:#22d3ee;color:#06111c;font-weight:700;text-decoration:none;cursor:pointer}
+  button.deny{background:#334155;color:#d7e8ff}
+  </style></head><body><main>${content}</main></body></html>`;
+}
+
+function mountOAuthPages(app: Express, config: AppContext["config"]): void {
+  app.get("/login", (request, response) => {
+    const oauthQuery = typeof request.query.oauth_query === "string" ? request.query.oauth_query : "";
+    const query = encodeURIComponent(oauthQuery);
+    const google = config.google
+      ? `<a class="button" href="/api/auth/sign-in/social?provider=google&callbackURL=%2Flogin%3Foauth_query%3D${query}">Sign in with Google</a>`
+      : `<p>Single-operator Mission Control is ready. Continue to the consent screen.</p><a class="button" href="/consent?oauth_query=${query}">Continue as Operator</a>`;
+    response.type("html").send(oauthPage("ViBread Mission Control Login", `<h1>Mission Control Login</h1>${google}`));
+  });
+  app.get("/consent", (request, response) => {
+    const oauthQuery = typeof request.query.oauth_query === "string" ? request.query.oauth_query : "";
+    const parsed = new URLSearchParams(oauthQuery);
+    const client = parsed.get("client_id") ?? "Claude Code";
+    const scopes = (parsed.get("scope") ?? "").split(/\s+/).filter(Boolean);
+    const labels: Record<string, string> = {
+      "circuits:read": "Read missions and checked circuit status",
+      "circuits:write": "Propose design and software changes",
+      "bench:request": "Ask for bench actions (never approve or run them)",
+    };
+    const scopeHtml = scopes.length > 0 ? scopes.map((scope) => `<div class="scope">${escapeHtml(labels[scope] ?? scope)}</div>`).join("") : `<div class="scope">No additional scopes requested</div>`;
+    const hidden = escapeHtml(oauthQuery);
+    const form = (selected: boolean, label: string, className = "") => `<form method="post" action="/api/auth/oauth2/continue" style="display:inline"><input type="hidden" name="oauth_query" value="${hidden}"><input type="hidden" name="selected" value="${selected}"><button class="${className}">${label}</button></form>`;
+    response.type("html").send(oauthPage("ViBread OAuth Consent", `<h1>Authorize ${escapeHtml(client)}</h1><p>Claude Code is requesting access to ViBread.</p>${scopeHtml}<p>Physical actions remain human-controlled at the bench.</p>${form(true, "Allow")}${form(false, "Deny", "deny")}`));
+  });
+}
 
 /** Mount the scoped Streamable HTTP MCP server at `/mcp`. */
-export function mountMcp(app: Express, ctx: AppContext): void {
+export function mountMcp(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
   const verifier = tokenVerifier(ctx);
   const sessions = new Map<string, McpSession>();
   const bearer = requireBearerAuth({ verifier });
-
-  app.use(MCP_PATH, express.json(), bearer, async (request, response) => {
+  const hybridAuth = auth ? oauthMiddleware(auth, ctx, bearer) : bearer;
+  mountOAuthPages(app, ctx.config);
+  app.use(MCP_PATH, express.json(), hybridAuth, async (request, response) => {
     const sessionIdHeader = request.header("Mcp-Session-Id");
     const existing = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
     if (sessionIdHeader && !existing) {

@@ -40,10 +40,29 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   app.use("/api/connections/tokens", tokenLimiter);
   const authHandler = toNodeHandler(auth);
   // Better Auth must see the raw request stream before express.json consumes it.
+  app.get("/.well-known/oauth-protected-resource/mcp", (_req, res) => {
+    res.json({
+      resource: `${config.publicUrl}/mcp`,
+      authorization_servers: [config.publicUrl],
+      bearer_methods_supported: ["header"],
+      scopes_supported: ["circuits:read", "circuits:write", "bench:request"],
+    });
+  });
+  app.get("/.well-known/oauth-authorization-server", (_req, res) => res.redirect(307, "/api/auth/.well-known/oauth-authorization-server"));
+  app.get("/jwks", (_req, res) => res.redirect(307, "/api/auth/jwks"));
+  const authAtRoot = (req: http.IncomingMessage, res: http.ServerResponse, next: (error?: unknown) => void): void => {
+    const originalUrl = req.url ?? "/";
+    req.url = `/api/auth${originalUrl}`;
+    void authHandler(req, res).catch(next).finally(() => {
+      req.url = originalUrl;
+    });
+  };
+  app.use("/.well-known/oauth-protected-resource", authAtRoot);
+  app.use("/.well-known/oauth-authorization-server", authAtRoot);
+  app.use("/jwks", authAtRoot);
   app.all("/api/auth/*splat", (req, res, next) => {
     void authHandler(req, res).catch(next);
   });
-
   app.use(express.json({ limit: "2mb" }));
   app.use(async (req, res, next) => {
     try {
@@ -60,7 +79,7 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
 
   mountApi(app, ctx);
   ctx.runtime.mountChat(app);
-  mountMcp(app, ctx);
+  mountMcp(app, ctx, auth);
   mountA2a(app, ctx);
 
   const candidateWebDirs = [resolve(process.cwd(), "apps/web/dist"), resolve(process.cwd(), "../../apps/web/dist")];
