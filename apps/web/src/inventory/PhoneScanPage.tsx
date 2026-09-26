@@ -94,9 +94,9 @@ export function PhoneScanPage() {
         ) : null}
         {scan.isLoading ? <LinearProgress aria-label="Loading scan status" /> : null}
         {scan.error ? <Alert severity="error">{scan.error instanceof Error ? scan.error.message : "Could not load this scan yet."}</Alert> : null}
+        {current && current.photos > 0 && current.status !== "waiting" ? <Alert severity="info">{current.photos} photo{current.photos === 1 ? "" : "s"} uploaded</Alert> : null}
         {uploadError ? <Alert severity="error">{uploadError}</Alert> : null}
-        {!analysisFailure && current?.status === "waiting" ? <Alert severity="info">{current.photos > 0 ? `${current.photos} photo${current.photos === 1 ? "" : "s"} ready — when you're ready, read the list.` : "Take at least one photo to continue."}</Alert> : null}
-        {!analysisFailure && current?.status === "analyzing" ? <Alert severity="info">Reading your parts… keep this page open.</Alert> : null}
+        {!analysisFailure && current?.status === "waiting" ? <Alert severity="info">{current.photos > 0 ? `${current.photos} photo${current.photos === 1 ? "" : "s"} uploaded — when you're ready, read the list.` : "Take at least one photo to continue."}</Alert> : null}
         {analysisFailure || current?.status === "failed" ? (
           <Alert severity="error" action={<Button onClick={analyzeNow} disabled={analyze.isPending}>Retry</Button>}>
             {analysisFailure ? scanErrorMessage(analyze.error) : current ? scanViewErrorMessage(current) : "The scan could not be read."}

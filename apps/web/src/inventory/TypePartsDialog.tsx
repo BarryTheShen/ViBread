@@ -129,7 +129,7 @@ export function TypePartsDialog({ open, catalog, onClose, onSaved }: TypePartsDi
       <DialogContent dividers>
         <Stack spacing={2}>
           <Typography color="text.secondary">Try “6 red LEDs, 10 × 220 ohm resistors, 1 push button”. Nothing is saved until you review the rows.</Typography>
-          <TextField multiline minRows={4} value={text} onChange={(event) => setText(event.target.value)} label="Parts I have" placeholder="3 red LEDs\n10 × 220 Ω resistors" fullWidth />
+          <TextField multiline minRows={4} value={text} onChange={(event) => setText(event.target.value)} label="Parts I have" placeholder={"3 red LEDs\n10 × 220 Ω resistors"} fullWidth />
           <Button variant="outlined" onClick={runParse} disabled={!text.trim() || parse.isPending} startIcon={parse.isPending ? <CircularProgress size={16} /> : undefined}>{parse.isPending ? "Reading…" : "Read this list"}</Button>
           {parse.error ? <Alert severity="error">{parse.error instanceof Error ? parse.error.message : "Could not read this list."}</Alert> : null}
           {lines.length > 0 ? (

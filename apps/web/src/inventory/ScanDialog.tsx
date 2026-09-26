@@ -203,7 +203,7 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
               <Button variant="outlined" startIcon={<CloudUploadOutlinedIcon />} onClick={() => inputRef.current?.click()} disabled={uploading}>Upload photos</Button>
               <input ref={inputRef} hidden type="file" accept="image/*" multiple onChange={(event) => void uploadFiles(Array.from(event.target.files ?? []))} />
-              {cameraAvailable ? <Button variant="outlined" startIcon={<CameraAltOutlinedIcon />} onClick={() => setCameraOpen((value) => !value)}>{cameraOpen ? "Hide camera" : "Use this computer's camera"}</Button> : null}
+              {cameraAvailable ? <Button variant="outlined" startIcon={<CameraAltOutlinedIcon />} disabled={Boolean(cameraError)} title={cameraError ?? undefined} onClick={() => setCameraOpen((value) => !value)}>{cameraOpen && cameraReady && !cameraError ? "Hide camera" : "Use this computer's camera"}</Button> : null}
             </Stack>
             {!cameraAvailable ? <Alert severity="info">{cameraErrorMessage({ name: "NotFoundError" }, cameraSecure)}</Alert> : null}
             {cameraOpen && cameraReady ? (

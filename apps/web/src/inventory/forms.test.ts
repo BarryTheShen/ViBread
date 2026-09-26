@@ -11,9 +11,11 @@ const fields: PartField[] = [
 ];
 
 describe("inventory field form helpers", () => {
-  it("renders units for choice options and explains appearance-only fields", () => {
+  it("renders units and human labels for choice options and explains appearance-only fields", () => {
     const size: PartField = { key: "size", label: "Lens diameter", kind: "choice", options: ["3", "5", "10"], unit: "mm", identity: false, electrical: false };
+    const board: PartField = { key: "board", label: "Board", kind: "choice", options: ["uno-r3", "nano"], identity: true, electrical: true };
     expect(choiceOptionLabel(size, "5")).toBe("5 mm");
+    expect(choiceOptionLabel(board, "uno-r3")).toBe("Uno R3");
     expect(fieldHelperText(size)).toBe("Lens diameter — 5 mm is the most common; doesn't change the circuit");
   });
 
