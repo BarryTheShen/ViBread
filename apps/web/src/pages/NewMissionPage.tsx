@@ -12,7 +12,6 @@ import { Composer } from "../chat/Composer.js";
 import { CHAT_MAX_WIDTH } from "../chat/MissionChat.js";
 import { ErrorOrSignIn } from "../components/SignIn.js";
 import { PartsChip } from "../inventory/PartsChip.js";
-import { useDefaultMode } from "../lib/prefs.js";
 import { LORA_FONT } from "../theme.js";
 
 const DRAFT_BRIEF = "vibread.draft.brief";
@@ -37,8 +36,6 @@ export default function NewMissionPage() {
   const navigate = useNavigate();
   const create = useCreateMission();
   const inventory = useInventory();
-  const [defaultMode] = useDefaultMode();
-  const [mode, setMode] = useState(defaultMode);
   // The draft survives a sign-in round trip (Sign in → provider → back here): kept in this tab's sessionStorage.
   const [brief, setBrief] = useState(() => sessionStorage.getItem(DRAFT_BRIEF) ?? "");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -51,7 +48,7 @@ export default function NewMissionPage() {
     // No `inventory`: the server copies the owner's ready inventory into the mission. The brief becomes the first chat
     // message on the mission page (MissionChat's BriefKickoff sends it once the empty history has loaded).
     create.mutate(
-      { brief: text, mode },
+      { brief: text },
       {
         onSuccess: (m) => {
           sessionStorage.removeItem(DRAFT_BRIEF);
@@ -72,8 +69,6 @@ export default function NewMissionPage() {
           <Composer
             placeholder="A lamp that fills like the moon when I press a button…"
             label="Describe what you want to build"
-            mode={mode}
-            onModeChange={setMode}
             running={false}
             disabled={create.isPending}
             onSend={start}

@@ -129,7 +129,6 @@ describe("bench requests from agents reach the bench", () => {
       model: scriptedModel([{ toolCalls: [{ name: "request_bench_action", input: { action: "run-selftest", note: "Check the LEDs" } }] }, { text: "Click Start at the bench." }]),
       prompt: "Run the self-test.",
       tools: toolset.tools,
-      toolApproval: toolset.toolApproval,
       stopWhen: isStepCount(3),
     });
     const outputs: unknown[] = [];

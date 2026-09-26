@@ -7,7 +7,6 @@ import type {
   BenchRunRequest,
   CompileResult,
   Mission,
-  PermissionMode,
   ReleaseRequest,
   Revision,
   RevisionResults,
@@ -118,7 +117,9 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.post("/inventory/scans", async (req, res) => {
     const user = actorUser(res, ctx);
-    res.status(201).json(await ctx.scans.create(user.id));
+    const scan = await ctx.scans.create(user.id);
+    ctx.debug.event(scan.id, "scan", "scan created", { ownerId: user.id });
+    res.status(201).json(scan);
   });
   router.post("/inventory/scans/:id/photos", upload.single("photo"), async (req, res) => {
     const user = actorUser(res, ctx);
@@ -132,7 +133,9 @@ export function mountApi(app: Express, ctx: AppContext): void {
       throw httpError(400, "bad_image", "photo is not a valid image");
     }
     const hash = await ctx.store.putArtifact(jpeg, "image/jpeg");
-    res.json(await ctx.scans.addPhoto(user.id, String(req.params.id), hash));
+    const saved = await ctx.scans.addPhoto(user.id, String(req.params.id), hash);
+    ctx.debug.event(String(req.params.id), "scan", "scan photo uploaded", { bytes: jpeg.byteLength });
+    res.json(saved);
   });
   router.post("/inventory/scans/:id/analyze", async (req, res) => {
     const user = actorUser(res, ctx);
@@ -157,7 +160,9 @@ export function mountApi(app: Express, ctx: AppContext): void {
       const existing = normalized.typeId ? inventory.find((entry) => entry.typeId === normalized.typeId) : undefined;
       return { ...normalized, index, cropUrl: `/api/inventory/scans/${scanId}/crops/${index}`, ...(existing ? { existing: { entryId: existing.id, quantity: existing.quantity } } : {}) };
     });
-    res.json(await ctx.scans.analyze(user.id, scanId, { observations: identified.observations, analyzed, items }, types, inventory));
+    const view = await ctx.scans.analyze(user.id, scanId, { observations: identified.observations, analyzed, items }, types, inventory);
+    ctx.debug.event(scanId, "scan", "scan analyzed", { observations: identified.observations.length, items: items.length });
+    res.json(view);
   });
   router.get("/inventory/scans/:id", async (req, res) => {
     const user = actorUser(res, ctx);
@@ -187,7 +192,9 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const user = actorUser(res, ctx);
     const body = req.body as ScanAcceptRequest;
     if (!body || !Array.isArray(body.items)) throw httpError(400, "INVALID_SCAN_ACCEPT", "items are required");
-    res.json(await ctx.scans.accept(user.id, String(req.params.id), body.items, ctx.inventory));
+    const entries = await ctx.scans.accept(user.id, String(req.params.id), body.items, ctx.inventory);
+    ctx.debug.event(String(req.params.id), "scan", "scan accepted", { items: body.items.length });
+    res.json(entries);
   });
   router.get("/missions", async (_req, res) => {
     const user = actorUser(res, ctx);
@@ -195,7 +202,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.post("/missions", async (req, res) => {
     const user = actorUser(res, ctx);
-    const body = req.body as { brief?: unknown; inventory?: unknown; inventoryEntryIds?: unknown; mode?: unknown; title?: unknown };
+    const body = req.body as { brief?: unknown; inventory?: unknown; inventoryEntryIds?: unknown; title?: unknown };
     if (typeof body.brief !== "string" || body.brief.trim().length === 0 || (body.inventory !== undefined && !Array.isArray(body.inventory)) || (body.inventoryEntryIds !== undefined && (!Array.isArray(body.inventoryEntryIds) || body.inventoryEntryIds.some((id) => typeof id !== "string")))) {
       throw httpError(400, "INVALID_REQUEST", "brief and optional inventoryEntryIds or inventory are required");
     }
@@ -203,7 +210,6 @@ export function mountApi(app: Express, ctx: AppContext): void {
       brief: body.brief,
       ...(Array.isArray(body.inventory) ? { inventory: body.inventory as Mission["inventory"] } : {}),
       ...(Array.isArray(body.inventoryEntryIds) ? { inventoryEntryIds: body.inventoryEntryIds as string[] } : {}),
-      mode: isPermissionMode(body.mode) ? body.mode : undefined,
       title: typeof body.title === "string" ? body.title : undefined,
       owner: { kind: "human", id: user.id, name: user.name, channel: "web" },
     });
@@ -213,18 +219,12 @@ export function mountApi(app: Express, ctx: AppContext): void {
     res.json(await ctx.missions.detail(String(req.params.id)));
   });
   router.patch("/missions/:id", async (req, res) => {
-    const user = actorUser(res, ctx);
-    const body = (req.body ?? {}) as { title?: unknown; mode?: unknown };
+    const body = (req.body ?? {}) as { title?: unknown };
     const missionId = String(req.params.id);
-    if (body.title !== undefined && (typeof body.title !== "string" || body.title.trim().length < 1 || body.title.trim().length > 80)) {
+    if (typeof body.title !== "string" || body.title.trim().length < 1 || body.title.trim().length > 80) {
       throw httpError(400, "INVALID_TITLE", "title must be 1–80 characters");
     }
-    if (body.mode !== undefined && !isPermissionMode(body.mode)) throw httpError(400, "INVALID_MODE", "mode is invalid");
-    if (body.title === undefined && body.mode === undefined) throw httpError(400, "INVALID_REQUEST", "title or mode is required");
-    if (body.mode !== undefined) {
-      await ctx.missions.setMode(missionId, body.mode, { kind: "human", id: user.id, name: user.name, channel: "web" });
-    }
-    if (body.title !== undefined) await ctx.store.updateMission(missionId, { title: body.title.trim() });
+    await ctx.store.updateMission(missionId, { title: body.title.trim() });
     const mission = await ctx.store.getMission(missionId);
     if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
     res.json(toSummary(mission));
@@ -501,6 +501,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
       ...(faultDictionary ? { faultDictionary } : {}),
     });
     await ctx.store.saveResults(missionId, revision.n, { bench: [...(revision.results.bench ?? []), result] });
+    ctx.debug.event(missionId, "bench", "bench run evaluated", { runId: result.runId, verdict: result.verdict, kind: result.kind, revision: revision.n });
     await ctx.db.insert(runs).values({ id: result.runId, missionId, revision: revision.n, kind: result.kind, result: JSON.stringify(result), createdAt: new Date() });
     const virtual = result.runId.startsWith("virtual-");
     await ctx.store.appendEvent({
@@ -545,6 +546,20 @@ export function mountApi(app: Express, ctx: AppContext): void {
     await ctx.store.saveResults(missionId, revision.n, { photos, artifacts: { [`photo-step-${step}.jpg`]: hash } });
     await ctx.store.appendEvent({ missionId, channel: "web", actor: actorFor(res, ctx), kind: "photo.checked", text: `Photo check for step ${step}`, revision: revision.n, data: photo });
     res.json(photo);
+  });
+  router.get("/debug/missions/:id/log", async (req, res) => {
+    if (!ctx.lanGuard.isLoopback(req)) throw httpError(403, "lan_loopback_required", "This endpoint is available on the ViBread laptop only");
+    res.json({ lines: ctx.debug.tail(String(req.params.id), typeof req.query.tail === "string" ? Number(req.query.tail) : 500) });
+  });
+  router.get("/debug/server-log", async (req, res) => {
+    if (!ctx.lanGuard.isLoopback(req)) throw httpError(403, "lan_loopback_required", "This endpoint is available on the ViBread laptop only");
+    res.json({ lines: ctx.debug.tail(null, typeof req.query.tail === "string" ? Number(req.query.tail) : 500) });
+  });
+  router.post("/debug/client-errors", async (req, res) => {
+    const body = (req.body ?? {}) as { message?: unknown; stack?: unknown; url?: unknown; userAgent?: unknown; missionId?: unknown; componentStack?: unknown };
+    if (typeof body.message !== "string" || body.message.length > 8000) throw httpError(400, "INVALID_CLIENT_ERROR", "message is required");
+    ctx.debug.event(typeof body.missionId === "string" ? body.missionId : null, "client", body.message, body);
+    res.status(204).send();
   });
   router.get("/lan/devices", async (req, res) => {
     if (!ctx.lanGuard.isLoopback(req)) throw httpError(403, "lan_loopback_required", "This endpoint is available on the ViBread laptop only");
@@ -670,16 +685,11 @@ function toSummary(mission: Mission): unknown {
     id: mission.id,
     title: mission.title,
     brief: mission.brief,
-    mode: mission.mode,
     phase: mission.phase,
     currentRevision: mission.currentRevision,
     releasedRevision: mission.releasedRevision,
     updatedAt: mission.updatedAt,
   };
-}
-
-function isPermissionMode(value: unknown): value is PermissionMode {
-  return value === "plan" || value === "ask" || value === "review" || value === "autopilot";
 }
 
 function eventStepNumber(data: unknown): number | undefined {

@@ -7,7 +7,6 @@ import type {
   ApprovalRequest,
   InventoryItem,
   Mission,
-  PermissionMode,
   Revision,
   RevisionResults,
   TimelineEvent,
@@ -22,7 +21,6 @@ import type { ApprovalView, BuildState, MissionDetail, MissionSummary } from "./
 export interface ToolContext {
   missionId: string;
   actor: Actor;
-  mode: PermissionMode;
   signal?: AbortSignal;
 }
 
@@ -49,11 +47,10 @@ export interface MissionStore {
     inventory: InventoryItem[];
     /** List-only parts the owner has, as text lines for the design agent (Mission.inventoryNotes). */
     inventoryNotes?: string[];
-    mode: PermissionMode;
   }): Promise<Mission>;
   getMission(id: string): Promise<Mission | null>;
   listMissions(ownerId: string): Promise<Mission[]>;
-  updateMission(id: string, patch: Partial<Pick<Mission, "title" | "mode" | "phase" | "currentRevision" | "releasedRevision" | "inventory">>): Promise<Mission>;
+  updateMission(id: string, patch: Partial<Pick<Mission, "title" | "phase" | "currentRevision" | "releasedRevision" | "inventory">>): Promise<Mission>;
   /** Assigns n = latest + 1 and the revision hash. */
   createRevision(missionId: string, input: { circuit: Circuit; suite?: TestSuite; author: Actor; note?: string; parent?: number }): Promise<Revision>;
   /** Latest revision when `n` is omitted. */
@@ -69,27 +66,26 @@ export interface MissionStore {
   subscribe(listener: (event: TimelineEvent) => void): () => void;
 }
 
-/** The authority for every approval (PLAN §5.10). UI/iMessage decisions are requests; the broker decides. */
+/**
+ * Physical bench requests (flash, rail checkpoint, self-test). Agents and remote clients may only request them; the bench
+ * browser runs one after a human click, and a linked iMessage handle may pre-approve it. Nothing else needs approval.
+ */
 export interface ApprovalBroker {
-  /** Applies policyFor(mode, actionClass); creates a pending request when the outcome needs a human. */
-  evaluate(input: {
+  /** Files a pending bench request (or returns the identical pending/approved-and-unused one). */
+  requestBench(input: {
     missionId: string;
-    mode: PermissionMode;
-    actionClass: ActionClass;
+    /** "flash-bench" | "rail-checkpoint" | "run-selftest" | "flash-app". */
     action: string;
     input: unknown;
     revisionHash: string;
     actor: Actor;
     summary: string;
     consequence: string;
-    allGo?: boolean;
-  }): Promise<{ outcome: "approved" | "denied" | "user-approval" | "bench-click"; request?: ApprovalRequest; reason?: string }>;
-  /** First valid decision wins. Physical actions: an iMessage "GO" becomes `preApprovedBy`, never execution. */
+  }): Promise<ApprovalRequest>;
+  /** First valid decision wins. An iMessage "GO" becomes `preApprovedBy`, never execution. */
   decide(approvalId: string, decision: ApprovalDecision, decider: Actor): Promise<ApprovalRequest>;
   get(approvalId: string): Promise<ApprovalRequest | null>;
   listPending(missionId: string): Promise<ApprovalRequest[]>;
-  /** One-shot: marks an approved request consumed if `actionHash` matches and it has not expired. */
-  consume(approvalId: string, actionHash: string): Promise<boolean>;
 }
 
 /** What a non-streaming channel (iMessage, MCP, A2A) gets back from one agent turn. */
@@ -111,13 +107,11 @@ export interface MissionService {
     brief: string;
     inventory?: InventoryItem[];
     inventoryEntryIds?: string[];
-    mode?: PermissionMode;
     owner: Actor;
     title?: string;
   }): Promise<Mission>;
   list(ownerId: string): Promise<MissionSummary[]>;
   detail(missionId: string): Promise<MissionDetail>;
-  setMode(missionId: string, mode: PermissionMode, actor: Actor): Promise<Mission>;
   /** Runs one design-agent turn to completion for a non-streaming channel. */
   say(missionId: string, text: string, actor: Actor): Promise<AgentTurnResult>;
   decide(approvalId: string, decision: ApprovalDecision, actor: Actor): Promise<ApprovalView>;

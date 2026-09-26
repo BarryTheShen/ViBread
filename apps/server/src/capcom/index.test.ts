@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { approvalOutcome, benchAskOptionTitle, benchAskValueForOption, capcomLinkUrl, cloudSendDelayMs, faultAlertText, isFaultAlertEvent, isQuietHours, isSelectedPollOption, isSupportedInboundContentType, missionSelection, pendingApprovalIndex, pollTitleForApproval, shouldSendCelebrationEffect } from "./index.js";
+import { approvalOutcome, benchAskOptionTitle, benchAskValueForOption, capcomLinkUrl, capcomMissionLink, cloudSendDelayMs, faultAlertText, isFaultAlertEvent, isQuietHours, isSelectedPollOption, isSupportedInboundContentType, missionSelection, pendingApprovalIndex, pollTitleForApproval, shouldSendApprovalPoll, shouldSendCelebrationEffect } from "./index.js";
 
 describe("CAPCOM timeline alerts", () => {
   it("does not duplicate the Houston prefix from bench diagnoses", () => {
@@ -84,5 +84,14 @@ describe("CAPCOM timeline alerts", () => {
   it("builds phone-reachable CAPCOM links from phoneUrl", () => {
     expect(capcomLinkUrl("http://192.168.1.24:8787/")).toBe("http://192.168.1.24:8787/");
     expect(capcomLinkUrl("https://vibread.example", "pair-token/")).toBe("https://vibread.example/?pair=pair-token%2F");
+  });
+
+  it("builds pair-aware Build Mode links for GO for build", () => {
+    expect(capcomMissionLink("http://192.168.1.24:8787/", "mission/1", "pair-token")).toBe("http://192.168.1.24:8787/b/mission%2F1?pair=pair-token");
+  });
+
+  it("polls only physical approvals", () => {
+    expect(shouldSendApprovalPoll("physical")).toBe(true);
+    expect(shouldSendApprovalPoll("state-changing")).toBe(false);
   });
 });

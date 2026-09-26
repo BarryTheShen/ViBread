@@ -1,10 +1,7 @@
 import { randomUUID } from "node:crypto";
-import type { Actor, ApprovalRequest, ToolRegistry } from "@vibread/core";
+import type { Actor, ToolRegistry } from "@vibread/core";
 import { ToolInputError, createAiToolset, errorMessage, isClaudeNotConnected } from "@vibread/tools";
 import {
-  InvalidToolApprovalError,
-  InvalidToolApprovalSignatureError,
-  ToolCallNotFoundForApprovalError,
   convertToModelMessages,
   hasToolCall,
   isStepCount,
@@ -16,9 +13,9 @@ import {
 } from "ai";
 import { z } from "zod";
 import type { AgentDeps, MissionEvent } from "./deps.js";
-import { approvalMetadata, type ApprovalLinks } from "./approval-links.js";
 import type { AgentModels } from "./models.js";
 import { designSystemPrompt } from "./prompts.js";
+import { actorForLog } from "./trace.js";
 
 /** Upper bound on model steps per run (PLAN §5.2 `stopWhen: isStepCount(20)`). */
 export const MAX_STEPS = 20;
@@ -58,10 +55,10 @@ export interface RunManager {
   active(missionId: string): ActiveRun | undefined;
   /**
    * The run GET /chat/stream should replay: the active run, or a run that finished within the last few seconds without
-   * anyone watching it (e.g. a resume after an approval that completed before the browser reconnected).
+   * anyone watching it (e.g. a short iMessage-started run that completed before the browser connected).
    */
   replayable(missionId: string): ActiveRun | undefined;
-  start(missionId: string, input: { message?: UIMessage; actor: Actor }): Promise<ActiveRun>;
+  start(missionId: string, input: { message: UIMessage; actor: Actor }): Promise<ActiveRun>;
   stop(missionId: string): boolean;
   /** Replay-from-start + live stream of a run's UI chunks. */
   stream(run: ActiveRun): ReadableStream<UIMessageChunk>;
@@ -78,8 +75,6 @@ const askUser = tool({
 });
 
 function friendlyError(error: unknown): string {
-  if (InvalidToolApprovalSignatureError.isInstance(error)) return "Approval rejected: its signature is missing or invalid, so nothing was run.";
-  if (InvalidToolApprovalError.isInstance(error) || ToolCallNotFoundForApprovalError.isInstance(error)) return "Approval rejected: it does not match a pending action.";
   if (isClaudeNotConnected(error)) return errorMessage(error);
   return `The agent hit an error: ${errorMessage(error)}`;
 }
@@ -91,6 +86,9 @@ function lastAssistant(messages: UIMessage[]): UIMessage | undefined {
 interface TrackedRun extends ActiveRun {
   wake: Set<() => void>;
   error?: string;
+  startedAt: number;
+  /** From streamText's onEnd (absent when the run was aborted or failed before finishing). */
+  stats?: { steps: number; finish: string; usage: { input?: number; output?: number } };
   watched: boolean;
   finishedAt?: number;
 }
@@ -105,52 +103,23 @@ interface PreparedRun {
 }
 
 export function createRunManager(
-  deps: AgentDeps & { models: AgentModels; tools: ToolRegistry; links: ApprovalLinks; sendMachine: (missionId: string, event: MissionEvent) => Promise<void> },
+  deps: AgentDeps & { models: AgentModels; tools: ToolRegistry; sendMachine: (missionId: string, event: MissionEvent) => Promise<void> },
 ): RunManager {
-  const { store, broker, messages, config, log, links } = deps;
+  const { store, broker, messages, log, debug } = deps;
   const runs = new Map<string, TrackedRun>();
   const unwatched = new Map<string, TrackedRun>();
 
-  /**
-   * The person wrote a new message instead of deciding: open approvals in the history are denied (broker + tool part), so
-   * every tool call has a result and the model sees that the action did not run.
-   */
-  async function supersedeOpenApprovals(missionId: string, history: UIMessage[]): Promise<UIMessage[]> {
-    const reason = "Not approved: the person replied with a new message instead.";
-    const system: Actor = { kind: "system", id: "chat", name: "ViBread", channel: "system" };
-    const next: UIMessage[] = [];
-    for (const message of history) {
-      if (message.role !== "assistant") {
-        next.push(message);
-        continue;
-      }
-      const parts: UIMessage["parts"] = [];
-      for (const part of message.parts) {
-        if ("state" in part && part.state === "approval-requested") {
-          const link = links.resolve(part.approval.id);
-          if (link) await broker.decide(link.brokerId, "deny", system).catch(() => undefined);
-          parts.push({ ...part, state: "output-denied", approval: { ...part.approval, approved: false, reason } } as UIMessage["parts"][number]);
-        } else parts.push(part);
-      }
-      next.push({ ...message, parts });
-    }
-    return next;
-  }
-
-  async function setup(run: TrackedRun, input: { message?: UIMessage; actor: Actor }): Promise<PreparedRun> {
+  async function setup(run: TrackedRun, input: { message: UIMessage; actor: Actor }): Promise<PreparedRun> {
     const { missionId } = run;
     const mission = await store.getMission(missionId);
     if (!mission) throw new ToolInputError(`Mission ${missionId} does not exist.`, 404);
     // Resolved per run: the owner may connect or disconnect their Claude account at any time.
-    const { model, credential } = await deps.models.design(mission.ownerId);
+    const { model, credential } = await deps.models.design(mission.ownerId, { missionId, purpose: "design" });
 
-    let history = await links.hydrate(missionId);
-    if (input.message) {
-      history = [...(await supersedeOpenApprovals(missionId, history)), input.message];
-      await messages.save(missionId, history);
-      const text = input.message.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
-      await store.appendEvent({ missionId, channel: input.actor.channel, actor: input.actor, kind: "message", text: text.slice(0, 2000) });
-    }
+    const history = [...(await messages.list(missionId)), input.message];
+    await messages.save(missionId, history);
+    const text = input.message.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
+    await store.appendEvent({ missionId, channel: input.actor.channel, actor: input.actor, kind: "message", text: text.slice(0, 2000) });
     if (mission.phase === "BRIEF" || mission.phase === "CLARIFY") await deps.sendMachine(missionId, { type: "DESIGN_STARTED" });
     if (credential.kind === "claude-account") {
       await store.appendEvent({
@@ -163,14 +132,8 @@ export function createRunManager(
       });
     }
 
-    // Broker requests behind approvals already in this history (resume after a decision, possibly after a restart).
-    const approvals = new Map<string, ApprovalRequest>();
-    for (const link of links.fromHistory(missionId, history)) {
-      const request = await broker.get(link.brokerId);
-      if (request) approvals.set(link.toolCallId, request);
-    }
     const agentActor: Actor = { kind: "agent", id: "design-agent", name: "Design agent", channel: input.actor.channel };
-    const toolset = createAiToolset({ registry: deps.tools, broker, store, ctx: { missionId, actor: agentActor }, approvals });
+    const toolset = createAiToolset({ registry: deps.tools, broker, store, ctx: { missionId, actor: agentActor } });
     const tools: ToolSet = { ...toolset.tools, ask_user: askUser };
     const names = Object.keys(tools);
 
@@ -179,8 +142,6 @@ export function createRunManager(
       system: designSystemPrompt({ mission, revision: await store.getRevision(missionId) }),
       messages: await convertToModelMessages(history, { tools }),
       tools,
-      toolApproval: toolset.toolApproval,
-      experimental_toolApprovalSecret: config.approvalSecret,
       stopWhen: [isStepCount(MAX_STEPS), hasToolCall("ask_user")],
       prepareStep: ({ steps }) => {
         const iterations = steps.flatMap((s) => s.toolCalls).filter((c) => c.toolName === "propose_design").length;
@@ -188,19 +149,19 @@ export function createRunManager(
       },
       abortSignal: run.controller.signal,
       onError: ({ error }) => log.warn({ missionId, err: errorMessage(error) }, "design agent stream error"),
+      onEnd: ({ steps, finishReason, totalUsage }) => {
+        run.stats = {
+          steps: steps.length,
+          finish: finishReason,
+          usage: { ...(totalUsage.inputTokens !== undefined ? { input: totalUsage.inputTokens } : {}), ...(totalUsage.outputTokens !== undefined ? { output: totalUsage.outputTokens } : {}) },
+        };
+      },
     });
 
     let outcome: RunOutcome | undefined;
     const ui = result.toUIMessageStream({
       originalMessages: history,
       generateMessageId: randomUUID,
-      messageMetadata: ({ part }) => {
-        if (part.type !== "tool-approval-request" || part.isAutomatic) return undefined;
-        const request = toolset.approvals.get(part.toolCall.toolCallId);
-        if (!request) return undefined;
-        links.record({ approvalId: part.approvalId, brokerId: request.id, missionId, toolCallId: part.toolCall.toolCallId });
-        return approvalMetadata({ approvalId: part.approvalId }, request, part.toolCall.toolCallId);
-      },
       onError: (error) => {
         run.error = friendlyError(error);
         return run.error;
@@ -247,6 +208,15 @@ export function createRunManager(
       text: "",
       ...(run.error ? { error: run.error } : {}),
     };
+    const toolCalls = lastAssistant(outcome.messages)?.parts.flatMap((p) => (p.type.startsWith("tool-") ? [p.type.slice(5)] : [])) ?? [];
+    const result = outcome.error ? "error" : outcome.aborted ? "aborted" : outcome.question ? "asked" : "done";
+    debug.event(
+      run.missionId,
+      "agent",
+      `design run ${result} in ${((Date.now() - run.startedAt) / 1000).toFixed(1)}s`,
+      { runId: run.id, ms: Date.now() - run.startedAt, outcome: result, ...(run.stats ?? {}), toolCalls, ...(outcome.error ? { error: outcome.error } : {}), ...(outcome.question ? { question: outcome.question } : {}) },
+      outcome.error ? "error" : "info",
+    );
     resolve(outcome);
   }
 
@@ -273,6 +243,7 @@ export function createRunManager(
         finished: new Promise<RunOutcome>((resolve) => (resolveFinished = resolve)),
         wake: new Set(),
         watched: false,
+        startedAt: Date.now(),
       };
       runs.set(missionId, run); // reserved before the first await: two concurrent starts can't both run
       let prepared: PreparedRun;
@@ -280,8 +251,10 @@ export function createRunManager(
         prepared = await setup(run, input);
       } catch (error) {
         runs.delete(missionId);
+        debug.event(missionId, "agent", `design run couldn't start: ${errorMessage(error)}`.slice(0, 300), { runId: run.id, actor: actorForLog(input.actor), error: errorMessage(error) }, "warn");
         throw error;
       }
+      debug.event(missionId, "agent", `design run started by ${input.actor.kind} ${input.actor.id} (${input.actor.channel})`, { runId: run.id, actor: actorForLog(input.actor) });
       void drive(run, prepared, resolveFinished);
       return run;
     },

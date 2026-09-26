@@ -1,7 +1,7 @@
 import type { ChatMessage } from "@mui/x-chat/types";
 import type { UIMessage } from "ai";
 import { describe, expect, it } from "vitest";
-import { approvalMetaOf, approvalResponse, decisionOf, normalizeChunks, rememberToolCalls, toChatMessages, toUserUiMessage, type ToolCallRegistry } from "./uiMessages.js";
+import { normalizeChunks, rememberToolCalls, toChatMessages, toUserUiMessage, type ToolCallRegistry } from "./uiMessages.js";
 
 async function collect<T>(input: T[], transform: TransformStream<T, T>): Promise<T[]> {
   const out: T[] = [];
@@ -97,82 +97,46 @@ describe("toUserUiMessage", () => {
   });
 });
 
-describe("approval decisions", () => {
-  it("round-trips all three decisions through MUI X Chat's approved/reason pair", () => {
-    for (const decision of ["approve-once", "approve-mission", "deny"] as const) {
-      expect(decisionOf(approvalResponse("ap", decision))).toBe(decision);
-    }
-    expect(decisionOf({ approved: true })).toBe("approve-once");
-    expect(decisionOf({ approved: false, reason: "approve-mission" })).toBe("deny");
-  });
-
-  it("reads approval card copy from message metadata and rejects incomplete entries", () => {
-    const meta = {
-      vibread: {
-        approvals: {
-          a: { summary: "Release r2", consequence: "Build uses r2", actionClass: "release", revisionHash: "abc", expiresAt: "2026-09-26T10:00:00Z" },
-          b: { summary: "No consequence" },
-        },
-      },
-    };
-    expect(approvalMetaOf(meta, "a")).toEqual({
-      summary: "Release r2",
-      consequence: "Build uses r2",
-      actionClass: "release",
-      revisionHash: "abc",
-      expiresAt: "2026-09-26T10:00:00Z",
-    });
-    expect(approvalMetaOf(meta, "b")).toBeUndefined();
-    expect(approvalMetaOf(undefined, "a")).toBeUndefined();
-  });
-});
-
 describe("normalizeChunks", () => {
-  it("renames AI SDK messageMetadata to metadata and accumulates approval copy across chunks", async () => {
+  it("renames AI SDK messageMetadata to the metadata field MUI X Chat reads", async () => {
     type Chunk = { type: string; [k: string]: unknown };
     const out = await collect<Chunk>(
       [
         { type: "start", messageId: "a1" },
-        { type: "message-metadata", messageMetadata: { vibread: { approvals: { x: { summary: "X" } } } } },
-        { type: "message-metadata", messageMetadata: { vibread: { approvals: { y: { summary: "Y" } } }, other: 1 } },
+        { type: "message-metadata", messageMetadata: { vibread: { recorded: { label: "R" } } } },
         { type: "text-delta", id: "t", delta: "hi" },
       ],
       normalizeChunks<Chunk>(),
     );
     expect(out[0]).toEqual({ type: "start", messageId: "a1" });
-    expect(out[1].metadata).toEqual({ vibread: { approvals: { x: { summary: "X" } } } });
-    expect(out[2].metadata).toEqual({ vibread: { approvals: { x: { summary: "X" }, y: { summary: "Y" } } }, other: 1 });
-    expect(out[3]).toEqual({ type: "text-delta", id: "t", delta: "hi" });
+    expect(out[1].metadata).toEqual({ vibread: { recorded: { label: "R" } } });
+    expect(out[2]).toEqual({ type: "text-delta", id: "t", delta: "hi" });
   });
 });
 
 describe("normalizeChunks tool names", () => {
   type Chunk = { type: string; [k: string]: unknown };
 
-  it("fills the name and input MUI X Chat would overwrite from an approval request that carries only ids", async () => {
+  it("fills the name and input MUI X Chat would overwrite from a part-creating chunk that lacks them", async () => {
     const out = await collect<Chunk>(
       [
-        { type: "tool-input-available", toolCallId: "c1", toolName: "release_revision", input: { revision: 2 } },
-        { type: "tool-approval-request", toolCallId: "c1", approvalId: "ap-1" },
+        { type: "tool-input-start", toolCallId: "c1", toolName: "run_erc" },
+        { type: "tool-input-available", toolCallId: "c1", input: { revision: 2 } },
         { type: "tool-output-available", toolCallId: "c1", output: { summary: "ok" } },
       ],
       normalizeChunks<Chunk>(),
     );
-    expect(out[1]).toEqual({ type: "tool-approval-request", toolCallId: "c1", approvalId: "ap-1", toolName: "release_revision", input: { revision: 2 } });
+    expect(out[1]).toEqual({ type: "tool-input-available", toolCallId: "c1", toolName: "run_erc", input: { revision: 2 } });
     expect(out[2]).toEqual({ type: "tool-output-available", toolCallId: "c1", output: { summary: "ok" } });
   });
 
-  it("names a call that starts mid-stream after a reconnect from the loaded history part with the same toolCallId", async () => {
+  it("names a call that resumes mid-stream after a reconnect from the loaded history part with the same toolCallId", async () => {
     const registry: ToolCallRegistry = new Map();
     const history: UIMessage[] = [
-      {
-        id: "a1",
-        role: "assistant",
-        parts: [{ type: "tool-release_revision", toolCallId: "c7", state: "approval-requested", input: { revision: 3 }, approval: { id: "ap-7" } }],
-      },
+      { id: "a1", role: "assistant", parts: [{ type: "tool-propose_design", toolCallId: "c7", state: "input-streaming", input: { note: "r3" } }] },
     ];
     rememberToolCalls(toChatMessages(history, "m1"), registry);
-    const [resumed] = await collect<Chunk>([{ type: "tool-approval-request", toolCallId: "c7", approvalId: "ap-7" }], normalizeChunks<Chunk>(registry));
-    expect(resumed).toMatchObject({ toolName: "release_revision", input: { revision: 3 } });
+    const [resumed] = await collect<Chunk>([{ type: "tool-input-available", toolCallId: "c7" }], normalizeChunks<Chunk>(registry));
+    expect(resumed).toMatchObject({ toolName: "propose_design", input: { note: "r3" } });
   });
 });

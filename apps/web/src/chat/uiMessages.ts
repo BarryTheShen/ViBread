@@ -1,5 +1,4 @@
 import type { ChatMessage, ChatMessagePart, ChatToolApproval, ChatToolInvocationState } from "@mui/x-chat/types";
-import type { ActionClass, ApprovalDecision } from "@vibread/core";
 import { getToolName, isToolUIPart, type UIMessage } from "ai";
 import { isRecord } from "../lib/guards.js";
 
@@ -80,41 +79,6 @@ export function toUserUiMessage(message: ChatMessage): UIMessage {
   return { id: message.id, role: "user", parts };
 }
 
-/**
- * MUI X Chat's approval response carries only `approved` + `reason`; ViBread has three decisions. The decision rides in
- * `reason` so the runtime's optimistic `approval-responded` state and our POST /api/approvals body agree.
- */
-export function approvalResponse(id: string, decision: ApprovalDecision): { id: string; approved: boolean; reason: ApprovalDecision } {
-  return { id, approved: decision !== "deny", reason: decision };
-}
-
-export function decisionOf(input: { approved: boolean; reason?: string }): ApprovalDecision {
-  if (!input.approved) return "deny";
-  return input.reason === "approve-mission" ? "approve-mission" : "approve-once";
-}
-
-/** Approval card copy the agent streams as `message-metadata` (`{ vibread: { approvals: { [id]: … } } }`). */
-export interface ApprovalMeta {
-  summary: string;
-  consequence: string;
-  actionClass: ActionClass;
-  revisionHash: string;
-  expiresAt: string;
-}
-
-export function approvalMetaOf(metadata: unknown, approvalId: string): ApprovalMeta | undefined {
-  if (!isRecord(metadata) || !isRecord(metadata.vibread) || !isRecord(metadata.vibread.approvals)) return undefined;
-  const entry = metadata.vibread.approvals[approvalId];
-  if (!isRecord(entry) || typeof entry.summary !== "string" || typeof entry.consequence !== "string") return undefined;
-  return {
-    summary: entry.summary,
-    consequence: entry.consequence,
-    actionClass: typeof entry.actionClass === "string" ? (entry.actionClass as ActionClass) : "state-changing",
-    revisionHash: typeof entry.revisionHash === "string" ? entry.revisionHash : "",
-    expiresAt: typeof entry.expiresAt === "string" ? entry.expiresAt : "",
-  };
-}
-
 /** Mark on messages replayed from a recorded real-model run (`metadata.vibread.recorded`), never a live reply. */
 export function recordedLabelOf(metadata: unknown): string | undefined {
   if (!isRecord(metadata) || !isRecord(metadata.vibread) || !isRecord(metadata.vibread.recorded)) return undefined;
@@ -145,18 +109,16 @@ export function rememberToolCalls(messages: ChatMessage[], registry: ToolCallReg
 }
 
 /** Chunks MUI X Chat applies `toolName`/`input` from — a missing field overwrites the part's value with undefined. */
-const NAMED_TOOL_CHUNKS: Record<string, true> = { "tool-input-start": true, "tool-input-available": true, "tool-approval-request": true };
+const NAMED_TOOL_CHUNKS: Record<string, true> = { "tool-input-start": true, "tool-input-available": true };
 
 /**
  * Normalizes AI SDK UI-stream chunks for MUI X Chat's stream processor:
- * - AI SDK `message-metadata` carries `messageMetadata`; MUI X Chat reads `metadata` and merges it shallowly, so the
- *   `vibread.approvals` map is accumulated here to keep earlier approvals' card copy.
- * - AI SDK `tool-approval-request` carries only ids, and a run resumed after a reconnect can start mid-call; MUI X Chat
- *   copies `toolName`/`input` from these chunks as-is (creating a part without a name). They are filled in from the
- *   same call's earlier chunk or the loaded history (`registry`).
+ * - AI SDK `message-metadata` carries `messageMetadata`; MUI X Chat reads `metadata`.
+ * - A run resumed after a reconnect can start mid-call; MUI X Chat copies `toolName`/`input` from the part-creating
+ *   chunks as-is (creating a part without a name when they lack one). They are filled in from the same call's earlier
+ *   chunk or the loaded history (`registry`).
  */
 export function normalizeChunks<T>(registry: ToolCallRegistry = new Map()): TransformStream<T, T> {
-  let approvals: Record<string, unknown> = {};
   return new TransformStream<T, T>({
     transform(chunk, controller) {
       if (isRecord(chunk) && typeof chunk.toolCallId === "string" && typeof chunk.type === "string") {
@@ -179,18 +141,8 @@ export function normalizeChunks<T>(registry: ToolCallRegistry = new Map()): Tran
         }
       }
       if (isRecord(chunk) && chunk.type === "message-metadata" && "messageMetadata" in chunk && !("metadata" in chunk)) {
-        const meta: unknown = chunk.messageMetadata;
-        const merged: Record<string, unknown> = isRecord(meta) ? { ...meta } : {};
-        if (isRecord(merged.vibread)) {
-          const vibread = { ...merged.vibread };
-          if (isRecord(vibread.approvals)) {
-            approvals = { ...approvals, ...vibread.approvals };
-            vibread.approvals = approvals;
-          }
-          merged.vibread = vibread;
-        }
         // Same chunk with the field MUI X Chat reads; the union member is unchanged ("message-metadata").
-        const normalized = { ...chunk, metadata: merged } as T;
+        const normalized = { ...chunk, metadata: isRecord(chunk.messageMetadata) ? chunk.messageMetadata : {} } as T;
         controller.enqueue(normalized);
         return;
       }

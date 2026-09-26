@@ -1,7 +1,7 @@
+import type { DebugArea, DebugLevel, DebugLog } from "../services/debug-log.js";
 import { randomUUID } from "node:crypto";
 import {
   hashJson,
-  policyFor,
   revisionHash,
   sha256Hex,
   type ApprovalBroker,
@@ -131,22 +131,18 @@ export function memoryBroker(): MemoryBroker {
   const requests = new Map<string, ApprovalRequest>();
   return {
     all: () => [...requests.values()],
-    async evaluate(input) {
-      const outcome = policyFor(input.mode, input.actionClass, { allGo: input.allGo });
-      if (outcome === "approved") return { outcome };
-      if (outcome === "denied") return { outcome, reason: "permission mode denies state-changing actions" };
+    async requestBench(input) {
       const actionHash = hashJson({ revisionHash: input.revisionHash, action: input.action, input: input.input });
-      // Mirrors ServerCore's broker: an identical pending request, or an identical APPROVED one nobody consumed yet, is
-      // returned; denied / expired / consumed requests never are, so a retry creates a new pending request.
+      // Mirrors ServerCore's broker: an identical pending or approved-and-unused bench request is returned instead.
       const existing = [...requests.values()].find(
         (r) => r.missionId === input.missionId && r.revisionHash === input.revisionHash && r.actionHash === actionHash && (r.status === "pending" || r.status === "approved"),
       );
-      if (existing) return { outcome: existing.status === "approved" && outcome !== "bench-click" ? "approved" : outcome, request: structuredClone(existing) };
+      if (existing) return structuredClone(existing);
       const request: ApprovalRequest = {
         id: randomUUID(),
         missionId: input.missionId,
         revisionHash: input.revisionHash,
-        actionClass: input.actionClass,
+        actionClass: "physical",
         action: input.action,
         actionHash,
         summary: input.summary,
@@ -157,14 +153,20 @@ export function memoryBroker(): MemoryBroker {
         status: "pending",
       };
       requests.set(request.id, request);
-      return { outcome, request: structuredClone(request) };
+      return structuredClone(request);
     },
     async decide(id, decision, decider) {
       if (decider.kind === "agent" || decider.channel === "mcp" || decider.channel === "a2a") throw new Error("remote actors cannot decide approvals");
       const r = requests.get(id);
       if (!r) throw new Error("approval not found");
       if (r.status !== "pending") return structuredClone(r);
-      const next: ApprovalRequest = { ...r, status: decision === "deny" ? "denied" : "approved", decision, decidedBy: decider };
+      const next: ApprovalRequest = {
+        ...r,
+        status: decision === "deny" ? "denied" : "approved",
+        decision,
+        decidedBy: decider,
+        ...(decision !== "deny" && decider.channel === "imessage" ? { preApprovedBy: decider } : {}),
+      };
       requests.set(id, next);
       return structuredClone(next);
     },
@@ -174,12 +176,6 @@ export function memoryBroker(): MemoryBroker {
     },
     async listPending(missionId) {
       return [...requests.values()].filter((r) => r.missionId === missionId && r.status === "pending").map((r) => structuredClone(r));
-    },
-    async consume(id, actionHash) {
-      const r = requests.get(id);
-      if (!r || r.actionHash !== actionHash || r.actionClass === "physical" || r.status !== "approved") return false;
-      requests.set(id, { ...r, status: "consumed" });
-      return true;
     },
   };
 }
@@ -318,7 +314,23 @@ export function fakeClaudeAccounts(accounts: Record<string, { endpoint: ClaudeEn
   };
 }
 
-export function testDeps(): AgentDeps & { broker: MemoryBroker; machine: RecordingMachine } {
+export type RecordingDebugLog = DebugLog & { entries: { missionId: string | null; area: DebugArea; message: string; data?: unknown; level: DebugLevel }[] };
+
+/** In-memory ctx.debug: keeps every entry as given (the file log's redaction/capping is ServerCore's, tested there). */
+export function recordingDebugLog(): RecordingDebugLog {
+  const entries: RecordingDebugLog["entries"] = [];
+  return {
+    entries,
+    event(missionId, area, message, data, level = "info") {
+      entries.push({ missionId, area, message, ...(data === undefined ? {} : { data }), level });
+    },
+    tail(missionId, count = 500) {
+      return entries.filter((e) => e.missionId === missionId).slice(-count).map((e) => JSON.stringify(e));
+    },
+  };
+}
+
+export function testDeps(): AgentDeps & { broker: MemoryBroker; machine: RecordingMachine; debug: RecordingDebugLog } {
   const store = memoryStore();
   return {
     // Built by the server's own loadConfig from a fixed env, so the test config always has the current shape.
@@ -339,6 +351,7 @@ export function testDeps(): AgentDeps & { broker: MemoryBroker; machine: Recordi
     messages: memoryMessages(),
     claudeAccounts: fakeClaudeAccounts(),
     inventory: memoryInventory(),
+    debug: recordingDebugLog(),
   };
 }
 

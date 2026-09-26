@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import type { ClaudeAccountService } from "../claude/accounts.js";
 import type { ServerConfig } from "../config.js";
 import type { MissionMachine } from "../services/machine.js";
+import type { DebugLog } from "../services/debug-log.js";
 import type { MessageStore } from "../store/messages.js";
 
 export type { ServerConfig } from "../config.js";
@@ -26,4 +27,6 @@ export interface AgentDeps {
   /** Per-user Claude accounts (PLAN §5.11 item 16); models.ts prefers the mission owner's account over the server key. */
   claudeAccounts: ClaudeAccountService;
   inventory: InventoryReader;
+  /** Per-mission debug log (ServerCore, services/debug-log.ts): agent runs, model calls, tool calls (trace.ts). */
+  debug: DebugLog;
 }

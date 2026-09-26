@@ -5,9 +5,8 @@ import type {
   ApprovalBroker,
   ApprovalDecision,
   ApprovalRequest,
-  PermissionMode,
 } from "@vibread/core";
-import { hashJson, policyFor } from "@vibread/core";
+import { hashJson } from "@vibread/core";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import type { MissionStore } from "@vibread/core";
 import type { DB } from "../db/schema.js";
@@ -75,46 +74,35 @@ export interface ApprovalBrokerDependencies {
 export class SqlApprovalBroker implements ApprovalBroker {
   constructor(private readonly deps: ApprovalBrokerDependencies) {}
 
-  async evaluate(input: {
+  /** Files a physical bench request; an identical pending or approved-and-unused one is returned instead. */
+  async requestBench(input: {
     missionId: string;
-    mode: PermissionMode;
-    actionClass: ActionClass;
     action: string;
     input: unknown;
     revisionHash: string;
     actor: Actor;
     summary: string;
     consequence: string;
-    allGo?: boolean;
-  }): Promise<{ outcome: "approved" | "denied" | "user-approval" | "bench-click"; request?: ApprovalRequest; reason?: string }> {
-    const outcome = policyFor(input.mode, input.actionClass, { allGo: input.allGo });
-    if (outcome === "approved") return { outcome };
-    if (outcome === "denied") return { outcome, reason: "permission mode denies state-changing actions" };
-    const grantable = input.actionClass === "state-changing" || input.actionClass === "release";
-    if (grantable) {
-      const grant = this.deps.sqlite
-        .prepare('SELECT "missionId" FROM "approval_grants" WHERE "missionId" = ? AND "actionClass" = ? AND "action" = ? AND "mode" = ?')
-        .get(input.missionId, input.actionClass, input.action, input.mode) as { missionId: string } | undefined;
-      if (grant) return { outcome: "approved" };
-    }
+  }): Promise<ApprovalRequest> {
+    const actionClass: ActionClass = "physical";
     const actionHash = hashJson({ revisionHash: input.revisionHash, action: input.action, input: input.input });
     const approved = this.deps.sqlite
       .prepare('SELECT * FROM "approvals" WHERE "missionId" = ? AND "revisionHash" = ? AND "actionHash" = ? AND "status" = ? AND "consumedAt" IS NULL AND "expiresAt" > ? ORDER BY "createdAt" DESC LIMIT 1')
       .get(input.missionId, input.revisionHash, actionHash, "approved", Date.now()) as ApprovalRow | undefined;
-    if (approved) return { outcome: outcome === "bench-click" ? "bench-click" : "approved", request: this.toRequest(approved) };
+    if (approved) return this.toRequest(approved);
     this.deps.sqlite
       .prepare('UPDATE "approvals" SET "status" = ? WHERE "missionId" = ? AND "status" = ? AND "expiresAt" <= ?')
       .run("expired", input.missionId, "pending", Date.now());
     const existing = this.deps.sqlite
       .prepare('SELECT * FROM "approvals" WHERE "missionId" = ? AND "revisionHash" = ? AND "actionHash" = ? AND "status" = ? ORDER BY "createdAt" DESC LIMIT 1')
       .get(input.missionId, input.revisionHash, actionHash, "pending") as ApprovalRow | undefined;
-    if (existing) return { outcome, request: this.toRequest(existing) };
+    if (existing) return this.toRequest(existing);
     const now = Date.now();
     const row: ApprovalRow = {
       id: randomUUID(),
       missionId: input.missionId,
       revisionHash: input.revisionHash,
-      actionClass: input.actionClass,
+      actionClass,
       action: input.action,
       actionHash,
       summary: input.summary,
@@ -162,7 +150,7 @@ export class SqlApprovalBroker implements ApprovalBroker {
         data: { approval: request },
       });
     }
-    return { outcome, request };
+    return request;
   }
 
   async decide(approvalId: string, decision: ApprovalDecision, decider: Actor): Promise<ApprovalRequest> {
@@ -180,14 +168,6 @@ export class SqlApprovalBroker implements ApprovalBroker {
     const decidedBy = JSON.stringify(decider);
     const approved = decision !== "deny";
     const preApprovedBy = row.actionClass === "physical" && decider.channel === "imessage" && approved ? decidedBy : null;
-    if (decision === "approve-mission" && approved && (row.actionClass === "state-changing" || row.actionClass === "release")) {
-      const mission = this.deps.sqlite.prepare('SELECT "mode" FROM "missions" WHERE "id" = ?').get(row.missionId) as { mode: PermissionMode } | undefined;
-      if (mission) {
-        this.deps.sqlite
-          .prepare('INSERT INTO "approval_grants" ("missionId", "actionClass", "action", "mode", "createdAt") VALUES (?, ?, ?, ?, ?) ON CONFLICT("missionId", "actionClass", "action") DO UPDATE SET "mode" = excluded."mode", "createdAt" = excluded."createdAt"')
-          .run(row.missionId, row.actionClass, row.action, mission.mode, Date.now());
-      }
-    }
     this.deps.sqlite
       .prepare('UPDATE "approvals" SET "status" = ?, "decision" = ?, "decidedBy" = ?, "preApprovedBy" = ? WHERE "id" = ? AND "status" = ?')
       .run(approved ? "approved" : "denied", decision, decidedBy, preApprovedBy, approvalId, "pending");
@@ -216,18 +196,6 @@ export class SqlApprovalBroker implements ApprovalBroker {
     return rows.map((row) => this.toRequest(row));
   }
 
-  async consume(approvalId: string, actionHash: string): Promise<boolean> {
-    const row = this.deps.sqlite.prepare('SELECT * FROM "approvals" WHERE "id" = ?').get(approvalId) as ApprovalRow | undefined;
-    if (!row || row.actionHash !== actionHash || row.actionClass === "physical") return false;
-    if (row.expiresAt <= Date.now()) {
-      this.deps.sqlite.prepare('UPDATE "approvals" SET "status" = ? WHERE "id" = ? AND "status" = ?').run("expired", approvalId, "approved");
-      return false;
-    }
-    const result = this.deps.sqlite
-      .prepare('UPDATE "approvals" SET "status" = ?, "consumedAt" = ? WHERE "id" = ? AND "status" = ? AND "actionHash" = ?')
-      .run("consumed", Date.now(), approvalId, "approved", actionHash);
-    return result.changes === 1;
-  }
   async listBenchRequests(missionId: string, revisionHash: string, revision: number | null): Promise<BenchRequestView[]> {
     const now = Date.now();
     const rows = this.deps.sqlite

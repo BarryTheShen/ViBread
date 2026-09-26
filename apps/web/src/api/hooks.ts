@@ -1,5 +1,5 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { CreateMissionRequest, PermissionMode } from "@vibread/core";
+import type { CreateMissionRequest } from "@vibread/core";
 import { api, getJson, getText, HttpError, sendJson } from "./client.js";
 
 export const queryKeys = {
@@ -88,17 +88,6 @@ export function useCreateMission() {
   return useMutation({
     mutationFn: (body: CreateMissionRequest) => api.createMission(body),
     onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.missions }),
-  });
-}
-
-export function useSetMode(id: string) {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (mode: PermissionMode) => api.setMode(id, mode),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.mission(id) });
-      void qc.invalidateQueries({ queryKey: queryKeys.missions });
-    },
   });
 }
 

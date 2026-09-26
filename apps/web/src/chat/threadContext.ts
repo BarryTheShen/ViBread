@@ -1,4 +1,4 @@
-import type { Channel, PermissionMode, TimelineEvent } from "@vibread/core";
+import type { Channel, TimelineEvent } from "@vibread/core";
 import { createContext, useContext, type ReactNode, type RefObject } from "react";
 import type { MissionChatAdapter } from "./missionAdapter.js";
 
@@ -19,8 +19,6 @@ export interface ChatThreadValue {
   draft: string;
   setDraft(text: string): void;
   inputRef: RefObject<HTMLTextAreaElement | null>;
-  mode: PermissionMode;
-  onModeChange(mode: PermissionMode): void;
 }
 
 export const ChatThreadContext = createContext<ChatThreadValue | null>(null);

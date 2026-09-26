@@ -10,4 +10,9 @@ describe("toolLabel", () => {
     expect(toolLabel("vibread_list_missions").done).toBe("Finished vibread list missions");
     expect(toolLabel("run_erc").active).toBe("Checking the circuit…");
   });
+
+  it("names the design version a release was for", () => {
+    expect(toolLabel("release_revision", { revision: 2 })).toEqual({ active: "Releasing design r2…", done: "Released design r2" });
+    expect(toolLabel("release_revision", {}).done).toBe("Released the design for building");
+  });
 });

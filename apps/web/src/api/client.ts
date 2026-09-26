@@ -12,7 +12,6 @@ import type {
   MissionDetail,
   MissionSummary,
   ModuleSummary,
-  PermissionMode,
   RevisionDetail,
   RevisionSummary,
   TimelineEvent,
@@ -90,7 +89,6 @@ export const api = {
   missions: (signal?: AbortSignal) => getJson<MissionSummary[]>("/api/missions", signal),
   createMission: (body: CreateMissionRequest) => sendJson<MissionSummary>("POST", "/api/missions", body),
   mission: (id: string, signal?: AbortSignal) => getJson<MissionDetail>(m(id), signal),
-  setMode: (id: string, mode: PermissionMode) => sendJson<MissionSummary>("PATCH", m(id), { mode }),
   timeline: (id: string, after?: string, signal?: AbortSignal) =>
     getJson<TimelineEvent[]>(`${m(id)}/timeline${after ? `?after=${encodeURIComponent(after)}` : ""}`, signal),
   revisions: (id: string, signal?: AbortSignal) => getJson<RevisionSummary[]>(`${m(id)}/revisions`, signal),

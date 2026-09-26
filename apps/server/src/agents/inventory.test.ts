@@ -80,16 +80,17 @@ describe("inventory → mission (plan §5.4)", () => {
     expect(prompt).toMatch(/- .*servo/i);
   });
 
-  it("add_part's approval card says 'not in your inventory' only for parts the mission doesn't have", async () => {
+  it("add_part adds directly and says 'not in your inventory' only for parts the mission doesn't have", async () => {
     const { deps, runtime } = runtimeWith(ENTRIES, [USER_TILT]);
-    const mission = await runtime.missions.create({ brief: golden.brief, owner: OWNER, mode: "review" });
-    const ask = (args: unknown) => invokeTool({ registry: runtime.tools, broker: deps.broker, store: deps.store, ctx: { missionId: mission.id, actor: OWNER }, name: "add_part", args });
-    const missing = await ask({ module: "buzzer-active", count: 1 });
-    expect(missing.status === "approval-required" && missing.approval.summary).toBe("Add 1× buzzer-active to your parts list — not in your inventory");
-    const owned = await ask({ module: "led", count: 1, params: { color: "yellow" } });
-    expect(owned.status === "approval-required" && owned.approval.summary).toBe("Add 1× led to your parts list");
-    const otherColor = await ask({ module: "led", count: 1, params: { color: "blue" } });
-    expect(otherColor.status === "approval-required" && otherColor.approval.summary).toContain("not in your inventory");
+    const mission = await runtime.missions.create({ brief: golden.brief, owner: OWNER });
+    const add = async (args: unknown) => {
+      const result = await invokeTool({ registry: runtime.tools, broker: deps.broker, store: deps.store, ctx: { missionId: mission.id, actor: OWNER }, name: "add_part", args });
+      return result.status === "executed" ? (result.output as { summary: string; inInventory: boolean }) : undefined;
+    };
+    expect(await add({ module: "buzzer-active", count: 1 })).toMatchObject({ inInventory: false, summary: expect.stringContaining("not in your inventory") });
+    expect(await add({ module: "led", count: 1, params: { color: "yellow" } })).toMatchObject({ inInventory: true, summary: expect.not.stringContaining("not in your inventory") });
+    expect(await add({ module: "led", count: 1, params: { color: "blue" } })).toMatchObject({ inInventory: false });
+    expect(deps.broker.all()).toEqual([]);
   });
 
   it("vibread_get_inventory groups the owner's entries by type with support levels", async () => {

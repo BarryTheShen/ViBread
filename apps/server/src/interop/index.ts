@@ -81,7 +81,6 @@ function requiredScope(actionClass: ToolDef["actionClass"]): string {
     case "physical":
       return "bench:request";
     case "state-changing":
-    case "release":
     case "bom-change":
       return "circuits:write";
   }
@@ -129,10 +128,9 @@ function extractObjectShape(schema: z.ZodType<unknown>): Record<string, z.ZodTyp
 
 function mcpToolShape(def: ToolDef): Record<string, z.ZodType<unknown>> {
   const existing = extractObjectShape(def.input);
-  if (existing) return { ...existing, missionId: z.string().describe("ViBread mission ID"), approvalId: z.string().optional().describe("Approval id returned by a previous call") };
+  if (existing) return { ...existing, missionId: z.string().describe("ViBread mission ID") };
   return {
     missionId: z.string().describe("ViBread mission ID"),
-    approvalId: z.string().optional().describe("Approval id returned by a previous call"),
     input: def.input,
   };
 }
@@ -152,7 +150,7 @@ async function callTool(def: ToolDef, args: Record<string, unknown>, request: Re
   const needed = requiredScope(def.actionClass);
   if (!hasScope(scopes, needed)) throw new Error(`Missing scope: ${needed}`);
 
-  const { missionId: _ignored, approvalId, input: nestedInput, ...objectInput } = args;
+  const { missionId: _ignored, input: nestedInput, ...objectInput } = args;
   const input = extractObjectShape(def.input) ? objectInput : nestedInput;
   const parsed = await def.input.parseAsync(input);
   const gated = await invokeTool({
@@ -162,21 +160,16 @@ async function callTool(def: ToolDef, args: Record<string, unknown>, request: Re
     ctx: { missionId, actor },
     name: def.name,
     args: parsed,
-    ...(typeof approvalId === "string" ? { approvalId } : {}),
   });
   switch (gated.status) {
     case "executed":
       return gated.output;
-    case "denied":
-      return { executed: false, denied: true, reason: gated.reason };
-    case "approval-required":
-      return { executed: false, pending: true, approvalId: gated.approval.id, approval: approvalView(gated.approval), message: "Ask the human to approve this in ViBread, then call this tool again with approvalId." };
     case "bench-click":
       return {
         requested: true,
         executed: false,
         pending: true,
-        approval: gated.approval ? approvalView(gated.approval) : undefined,
+        approval: approvalView(gated.approval),
         output: gated.output,
         message: "Physical action requested. It remains pending until a human clicks the bench control.",
       };
@@ -217,7 +210,6 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
         inputSchema: {
           brief: z.string().min(1),
           title: z.string().optional(),
-          mode: z.enum(["plan", "ask", "review", "autopilot"]).optional(),
           inventory: z.array(
             z.object({
               module: z.string(),
@@ -228,12 +220,11 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
           ).optional(),
         },
       },
-      async ({ brief, title, mode, inventory }) => {
+      async ({ brief, title, inventory }) => {
         const actor = actorFor(authUserId(request), "mcp");
         const mission = await ctx.missions.create({
           brief,
           title,
-          mode,
           owner: actor,
           // No parts given → MissionService copies the owner's inventory (plan §5.4).
           ...(inventory ? { inventory: inventory as InventoryItem[] } : {}),
@@ -246,7 +237,7 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
       {
         title: "Talk to the ViBread agent",
         description: "Send a natural-language turn to a mission agent.",
-        inputSchema: { missionId: z.string(), text: z.string().min(1), approvalId: z.string().optional() },
+        inputSchema: { missionId: z.string(), text: z.string().min(1) },
       },
       async ({ missionId, text }) => {
         await ownedMission(ctx, missionId, request);
@@ -259,7 +250,7 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
       {
         title: "Continue an ask-back task",
         description: "Answer the last question from ViBread and continue the mission turn.",
-        inputSchema: { missionId: z.string(), answer: z.string().min(1), approvalId: z.string().optional() },
+        inputSchema: { missionId: z.string(), answer: z.string().min(1) },
       },
       async ({ missionId, answer }) => {
         await ownedMission(ctx, missionId, request);
@@ -572,7 +563,7 @@ function createA2aExecutor(ctx: AppContext): AgentExecutor {
       let result: AgentTurnResult;
 
       if (!missionId) {
-        const mission = await ctx.missions.create({ brief: textOf(incoming), owner: actor, mode: "review" });
+        const mission = await ctx.missions.create({ brief: textOf(incoming), owner: actor });
         missionId = mission.id;
       }
       result = await ctx.missions.say(missionId, textOf(incoming), actor);

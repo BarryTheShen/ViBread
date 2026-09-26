@@ -7,7 +7,6 @@ import type {
   InventoryItem,
   Mission,
   MissionStore,
-  PermissionMode,
   Revision,
   RevisionResults,
   TestSuite,
@@ -83,7 +82,6 @@ export class SqlMissionStore implements MissionStore {
     ownerId: string;
     inventory: InventoryItem[];
     inventoryNotes?: string[];
-    mode: PermissionMode;
   }): Promise<Mission> {
     const id = randomUUID();
     const now = Date.now();
@@ -91,7 +89,8 @@ export class SqlMissionStore implements MissionStore {
       .prepare(
         'INSERT INTO "missions" ("id", "title", "brief", "ownerId", "mode", "phase", "inventory", "inventoryNotes", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, input.title, input.brief, input.ownerId, input.mode, "BRIEF", JSON.stringify(input.inventory), input.inventoryNotes ? JSON.stringify(input.inventoryNotes) : null, now, now);
+      // "mode" is a legacy NOT NULL column (permission modes were removed); it holds a fixed value and is never read.
+      .run(id, input.title, input.brief, input.ownerId, "none", "BRIEF", JSON.stringify(input.inventory), input.inventoryNotes ? JSON.stringify(input.inventoryNotes) : null, now, now);
     const mission = await this.getMission(id);
     if (!mission) throw new Error("mission was not persisted");
     await this.appendEvent({
@@ -118,27 +117,23 @@ export class SqlMissionStore implements MissionStore {
 
   async updateMission(
     id: string,
-    patch: Partial<Pick<Mission, "title" | "mode" | "phase" | "currentRevision" | "releasedRevision" | "inventory">>,
+    patch: Partial<Pick<Mission, "title" | "phase" | "currentRevision" | "releasedRevision" | "inventory">>,
   ): Promise<Mission> {
     const current = await this.getMission(id);
     if (!current) throw new Error("mission not found");
     const next = {
       title: patch.title ?? current.title,
-      mode: patch.mode ?? current.mode,
       phase: patch.phase ?? current.phase,
       inventory: patch.inventory ?? current.inventory,
       currentRevision: patch.currentRevision ?? current.currentRevision ?? null,
       releasedRevision: patch.releasedRevision ?? current.releasedRevision ?? null,
     };
-    if (next.mode !== current.mode) {
-      this.deps.sqlite.prepare('DELETE FROM "approval_grants" WHERE "missionId" = ?').run(id);
-    }
     const now = Date.now();
     this.deps.sqlite
       .prepare(
-        'UPDATE "missions" SET "title" = ?, "mode" = ?, "phase" = ?, "inventory" = ?, "currentRevision" = ?, "releasedRevision" = ?, "updatedAt" = ? WHERE "id" = ?',
+        'UPDATE "missions" SET "title" = ?, "phase" = ?, "inventory" = ?, "currentRevision" = ?, "releasedRevision" = ?, "updatedAt" = ? WHERE "id" = ?',
       )
-      .run(next.title, next.mode, next.phase, JSON.stringify(next.inventory), next.currentRevision, next.releasedRevision, now, id);
+      .run(next.title, next.phase, JSON.stringify(next.inventory), next.currentRevision, next.releasedRevision, now, id);
     const mission = await this.getMission(id);
     if (!mission) throw new Error("mission disappeared during update");
     if (next.phase !== current.phase) {
@@ -315,7 +310,6 @@ export class SqlMissionStore implements MissionStore {
       title: row.title,
       brief: row.brief,
       ownerId: row.ownerId,
-      mode: row.mode as PermissionMode,
       phase: row.phase as Mission["phase"],
       inventory: JSON.parse(row.inventory) as InventoryItem[],
       ...(row.inventoryNotes ? { inventoryNotes: JSON.parse(row.inventoryNotes) as string[] } : {}),

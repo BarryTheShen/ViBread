@@ -15,7 +15,7 @@ export function createTestAuthor(deps: { models: AgentModels; store: MissionStor
     async write({ missionId, brief, design, coverageGaps, signal }) {
       const mission = await deps.store.getMission(missionId);
       if (!mission) throw new ToolInputError(`Mission ${missionId} does not exist.`, 404);
-      const { model } = await deps.models.fast(mission.ownerId);
+      const { model } = await deps.models.fast(mission.ownerId, { missionId, purpose: "test-author" });
       let gaps: string[] = [];
       let suite: TestSuite | undefined;
       for (let attempt = 0; attempt < MAX_ATTEMPTS && (!suite || gaps.length); attempt++) {

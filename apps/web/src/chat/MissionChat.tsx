@@ -7,11 +7,10 @@ import Typography from "@mui/material/Typography";
 import { ChatBox, ChatMessageInlineMeta, type ChatMessageInlineMetaProps } from "@mui/x-chat";
 import { useChat, useChatStore, useMessageContext, type ChatPartRendererMap } from "@mui/x-chat/headless";
 import { processStream } from "@mui/x-chat-headless/stream";
-import type { ApprovalView, Channel, MissionDetail, PermissionMode, TimelineEvent } from "@vibread/core";
+import type { Channel, MissionDetail, TimelineEvent } from "@vibread/core";
 import { Children, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { api } from "../api/client.js";
 import { RecordedChip } from "../components/RecordedChip.js";
-import { ApprovalCard } from "./ApprovalCard.js";
 import { Composer } from "./Composer.js";
 import { createMissionChatAdapter, type MissionChatAdapter } from "./missionAdapter.js";
 import { useMissionShell } from "./missionShell.js";
@@ -32,18 +31,10 @@ const partRenderers: ChatPartRendererMap = {
 
 const SUGGESTIONS = ["Why did you pick these resistors?", "Make the LEDs fade instead of switching", "Explain the tests in simple words"];
 
-const CHANNEL_NAMES: Record<Channel, string> = {
-  web: "this app",
-  imessage: "iMessage",
-  mcp: "Claude Code",
-  a2a: "another agent",
-  system: "ViBread",
-};
-
 /**
- * Streams runs this browser did not start: the continuation after an approval decision (from here or iMessage) and
- * runs started from iMessage / Claude Code. Uses GET chat/stream through the adapter and MUI X Chat's own stream
- * processor, so the parts land in the same assistant message as a normal send.
+ * Streams runs this browser did not start (started from iMessage / Claude Code, or before this page loaded). Uses GET
+ * chat/stream through the adapter and MUI X Chat's own stream processor, so the parts land in the same assistant
+ * message as a normal send.
  */
 function ActiveRunFollower({ adapter, missionId, agentBusy }: { adapter: MissionChatAdapter; missionId: string; agentBusy: boolean }) {
   const store = useChatStore();
@@ -75,8 +66,6 @@ function ActiveRunFollower({ adapter, missionId, agentBusy }: { adapter: Mission
     },
     [adapter, missionId, store],
   );
-
-  useEffect(() => adapter.onApprovalDecided(() => void follow()), [adapter, follow]);
 
   useEffect(() => {
     if (agentBusy && !chat.isStreaming && Date.now() - lastAttempt.current > 3_000) void follow();
@@ -187,50 +176,21 @@ function ThreadContent({ children, ownerState: _ownerState, ...rest }: { childre
   );
 }
 
-/**
- * `composerRoot` slot: ViBread's own chat box (chat/Composer.tsx) wired to the MUI X Chat runtime, with approvals that
- * were requested outside this chat (iMessage, Claude Code, before this page loaded) pinned above it.
- */
+/** `composerRoot` slot: ViBread's own chat box (chat/Composer.tsx) wired to the MUI X Chat runtime. */
 function ComposerSlot() {
   const chat = useChat();
   const { missionId, detail } = useMissionShell();
-  const { adapter, canChat, hasDesign, draft, setDraft, inputRef, mode, onModeChange } = useChatThread();
+  const { canChat, hasDesign, draft, setDraft, inputRef } = useChatThread();
   const running = chat.isStreaming || detail.agentBusy;
-  const inChat = new Set(
-    chat.messages
-      .flatMap((m) => m.parts)
-      .flatMap((p) => ((p.type === "tool" || p.type === "dynamic-tool") && p.toolInvocation.approvalId ? [p.toolInvocation.approvalId] : [])),
-  );
-  const outside = detail.pendingApprovals.filter((a) => a.status === "pending" && !inChat.has(a.id));
-  const awaitingDecision = chat.messages.some((m) => m.parts.some((p) => (p.type === "tool" || p.type === "dynamic-tool") && p.toolInvocation.state === "approval-requested"));
   const send = (text: string) => void chat.sendMessage({ parts: [{ type: "text", text }] });
   return (
     <Box sx={{ maxWidth: CHAT_MAX_WIDTH, mx: "auto", width: "100%", px: 2, pb: 2, boxSizing: "border-box" }}>
-      {outside.length > 0 && (
-        <Box component="section" aria-label="Waiting for your decision" sx={{ maxHeight: "40vh", overflowY: "auto", mb: 1 }}>
-          {outside.map((a: ApprovalView) => (
-            <ApprovalCard
-              key={a.id}
-              approvalId={a.id}
-              missionId={missionId}
-              summary={a.summary}
-              consequence={`${a.consequence} Requested by ${a.requestedBy.name ?? a.requestedBy.kind} (${CHANNEL_NAMES[a.requestedBy.channel]}).`}
-              actionClass={a.actionClass}
-              revisionHash={a.revisionHash}
-              expiresAt={a.expiresAt}
-              dense
-              // The adapter posts the decision and the chat follows the resumed agent run.
-              onDecide={async (decision) => void (await adapter.decide(a.id, decision))}
-            />
-          ))}
-        </Box>
-      )}
       {chat.error && (
         <Alert severity="error" sx={{ mb: 1 }} onClose={() => chat.setError(null)}>
           {chat.error.message}
         </Alert>
       )}
-      {hasDesign && canChat && !running && outside.length === 0 && !awaitingDecision && !draft && (
+      {hasDesign && canChat && !running && !draft && (
         <Stack direction="row" sx={{ display: "flex", flexDirection: "row", gap: 1, flexWrap: "wrap", mb: 1 }} aria-label="Suggestions">
           {SUGGESTIONS.map((s) => (
             <Chip
@@ -249,8 +209,6 @@ function ComposerSlot() {
       <Composer
         placeholder={hasDesign ? "Reply to Claude — ask why, or say what to change…" : "Reply to Claude…"}
         label="Message Claude"
-        mode={mode}
-        onModeChange={onModeChange}
         running={running}
         disabled={!canChat}
         disabledReason={canChat ? undefined : "Claude isn't connected, so it can't reply. Connect it in Settings — checks, tests and building still work."}
@@ -273,8 +231,6 @@ export interface MissionChatProps {
   adapter: MissionChatAdapter;
   events: TimelineEvent[];
   canChat: boolean;
-  mode: PermissionMode;
-  onModeChange(mode: PermissionMode): void;
   /** Composer text, owned by the page so buttons elsewhere ("Ask Claude to redesign…") can prefill it. */
   draft: string;
   setDraft(text: string): void;
@@ -283,14 +239,14 @@ export interface MissionChatProps {
 }
 
 /** The mission conversation: MUI X Chat thread + timeline rows + ViBread's chat box. */
-export function MissionChat({ missionId, detail, adapter, events, canChat, mode, onModeChange, draft, setDraft, inputRef, afterMessages }: MissionChatProps) {
+export function MissionChat({ missionId, detail, adapter, events, canChat, draft, setDraft, inputRef, afterMessages }: MissionChatProps) {
   const m = detail.mission;
   const hasDesign = m.currentRevision !== undefined;
   // The server moves a fresh mission BRIEF → CLARIFY on creation; either way no design exists yet.
   const isNewMission = (m.phase === "BRIEF" || m.phase === "CLARIFY") && m.currentRevision === undefined;
   const thread = useMemo<ChatThreadValue>(
-    () => ({ adapter, events, canChat, hasDesign, designChannel: detail.revision?.author.channel, afterMessages, draft, setDraft, inputRef, mode, onModeChange }),
-    [adapter, events, canChat, hasDesign, detail.revision?.author.channel, afterMessages, draft, setDraft, inputRef, mode, onModeChange],
+    () => ({ adapter, events, canChat, hasDesign, designChannel: detail.revision?.author.channel, afterMessages, draft, setDraft, inputRef }),
+    [adapter, events, canChat, hasDesign, detail.revision?.author.channel, afterMessages, draft, setDraft, inputRef],
   );
   return (
     <ChatThreadContext.Provider value={thread}>

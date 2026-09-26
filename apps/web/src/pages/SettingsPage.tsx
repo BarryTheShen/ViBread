@@ -10,7 +10,6 @@ import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
 import CardContent from "@mui/material/CardContent";
 import Checkbox from "@mui/material/Checkbox";
-import Chip from "@mui/material/Chip";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
@@ -32,22 +31,22 @@ import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useColorScheme } from "@mui/material/styles";
+import { useQuery } from "@tanstack/react-query";
 import type { TokenMintResponse } from "@vibread/core";
 import { QRCodeSVG } from "qrcode.react";
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router";
+import { getJson } from "../api/client.js";
 import { authClient } from "../api/auth.js";
 import { ClaudeAccountSection } from "./ClaudeAccountSection.js";
-import { useConnections, useImessageCode, useLanDevices, useMintToken, useRevokeToken, useUnpairAllPhones } from "../api/hooks.js";
+import { useConnections, useImessageCode, useLanDevices, useMintToken, useMissions, useRevokeToken, useUnpairAllPhones } from "../api/hooks.js";
 import { ErrorOrSignIn, ProviderButtons, useProviders } from "../components/SignIn.js";
-import { useDefaultMode } from "../lib/prefs.js";
 import { agoLabel, expiryLabel, useNow } from "../lib/time.js";
 import { MONO_FONT } from "../theme.js";
-import { MODE_HELP, ModePicker, PHYSICAL_NOTE } from "../chat/Composer.js";
 
 const SCOPES = [
   { id: "circuits:read", label: "Read your missions and designs" },
-  { id: "circuits:write", label: "Propose design changes (your permission mode still applies)" },
+  { id: "circuits:write", label: "Propose design changes" },
   { id: "bench:request", label: "Ask for bench actions (a person still clicks Start at the bench)" },
 ] as const;
 
@@ -377,9 +376,117 @@ function AccountSection() {
   );
 }
 
+interface DiagnosticEntry {
+  at: string;
+  area: string;
+  level: string;
+  message: string;
+}
+
+function diagnosticEntries(value: unknown, fallbackArea: string): DiagnosticEntry[] {
+  const records =
+    Array.isArray(value) ? value : typeof value === "object" && value !== null
+      ? ("entries" in value && Array.isArray(value.entries) ? value.entries : "lines" in value && Array.isArray(value.lines) ? value.lines : "logs" in value && Array.isArray(value.logs) ? value.logs : [])
+      : [];
+  return records.map((record) => {
+    if (typeof record === "string") return { at: "", area: fallbackArea, level: "info", message: record };
+    if (typeof record !== "object" || record === null) return { at: "", area: fallbackArea, level: "info", message: String(record) };
+    const item = record as Record<string, unknown>;
+    const message = typeof item.message === "string" ? item.message : typeof item.text === "string" ? item.text : JSON.stringify(record);
+    const at = typeof item.at === "string" ? item.at : typeof item.timestamp === "string" ? item.timestamp : typeof item.time === "string" ? item.time : "";
+    const area = typeof item.area === "string" ? item.area : typeof item.scope === "string" ? item.scope : fallbackArea;
+    const level = typeof item.level === "string" ? item.level : typeof item.severity === "string" ? item.severity : "info";
+    return { at, area, level, message };
+  });
+}
+
+function diagnosticLine(entry: DiagnosticEntry): string {
+  const at = entry.at ? `[${entry.at}] ` : "";
+  return `${at}${entry.area} ${entry.level}: ${entry.message}`;
+}
+
+function DiagnosticsSection() {
+  const missions = useMissions();
+  const [missionId, setMissionId] = useState("");
+  const [area, setArea] = useState("all");
+  const [level, setLevel] = useState("all");
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [copied, setCopied] = useState(false);
+  const serverLog = useQuery({
+    queryKey: ["debug", "server-log"],
+    queryFn: ({ signal }) => getJson<unknown>("/api/debug/server-log?tail=300", signal),
+    refetchInterval: autoRefresh ? 3_000 : false,
+    retry: false,
+  });
+  const missionLog = useQuery({
+    queryKey: ["debug", "mission-log", missionId],
+    queryFn: ({ signal }) => getJson<unknown>(`/api/debug/missions/${encodeURIComponent(missionId)}/log?tail=300`, signal),
+    enabled: missionId.length > 0,
+    refetchInterval: autoRefresh ? 3_000 : false,
+    retry: false,
+  });
+  const entries = [
+    ...diagnosticEntries(serverLog.data, "server"),
+    ...diagnosticEntries(missionLog.data, `mission:${missionId}`),
+  ];
+  const areas = [...new Set(entries.map((entry) => entry.area))].sort();
+  const levels = [...new Set(entries.map((entry) => entry.level))].sort();
+  const filtered = entries.filter((entry) => (area === "all" || entry.area === area) && (level === "all" || entry.level === level));
+  const copyReport = () => {
+    const clipboard = navigator.clipboard;
+    if (!clipboard) return;
+    const report = filtered.map(diagnosticLine).join("\n");
+    void clipboard.writeText(report).then(() => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2_000);
+    });
+  };
+  return (
+    <Section title="Diagnostics" id="diagnostics-heading">
+      <Typography color="text.secondary">
+        Recent laptop and mission logs help diagnose a failed build. Logs stay on this machine until you copy them.
+      </Typography>
+      <Stack direction={{ xs: "column", sm: "row" }} sx={{ gap: 1.5, alignItems: { sm: "center" }, flexWrap: "wrap" }}>
+        <FormControl size="small" sx={{ minWidth: 190 }}>
+          <InputLabel id="diagnostics-mission-label">Mission log (optional)</InputLabel>
+          <Select labelId="diagnostics-mission-label" label="Mission log (optional)" value={missionId} onChange={(event) => setMissionId(event.target.value)}>
+            <MenuItem value="">No mission</MenuItem>
+            {(missions.data ?? []).map((mission) => <MenuItem key={mission.id} value={mission.id}>{mission.title}</MenuItem>)}
+          </Select>
+        </FormControl>
+        <FormControl size="small" sx={{ minWidth: 130 }}>
+          <InputLabel id="diagnostics-area-label">Area</InputLabel>
+          <Select labelId="diagnostics-area-label" label="Area" value={area} onChange={(event) => setArea(event.target.value)}>
+            <MenuItem value="all">All areas</MenuItem>
+            {areas.map((value) => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+          </Select>
+        </FormControl>
+        <FormControl size="small" sx={{ minWidth: 130 }}>
+          <InputLabel id="diagnostics-level-label">Level</InputLabel>
+          <Select labelId="diagnostics-level-label" label="Level" value={level} onChange={(event) => setLevel(event.target.value)}>
+            <MenuItem value="all">All levels</MenuItem>
+            {levels.map((value) => <MenuItem key={value} value={value}>{value}</MenuItem>)}
+          </Select>
+        </FormControl>
+        <FormControlLabel control={<Checkbox checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />} label="Auto-refresh" />
+        <Button variant="outlined" startIcon={<ContentCopyIcon />} onClick={copyReport} disabled={filtered.length === 0}>
+          {copied ? "Copied" : "Copy for bug report"}
+        </Button>
+      </Stack>
+      {(serverLog.isError || missionLog.isError) && (
+        <Alert severity="info">
+          Diagnostic logs are unavailable from this browser unless ViBread is running on the laptop.
+        </Alert>
+      )}
+      <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 300, overflow: "auto", bgcolor: "code.main", color: "text.primary", borderRadius: 1, fontFamily: MONO_FONT, fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+        {filtered.length > 0 ? filtered.map(diagnosticLine).join("\n") : "No diagnostic entries match these filters."}
+      </Box>
+    </Section>
+  );
+}
+
 function GeneralSection() {
   const { mode, setMode } = useColorScheme();
-  const [defaultMode, setDefaultMode] = useDefaultMode();
   return (
     <Section title="General" id="general-heading">
       <FormControl fullWidth size="small">
@@ -395,16 +502,6 @@ function GeneralSection() {
           <MenuItem value="dark">Dark</MenuItem>
         </Select>
       </FormControl>
-      <Stack direction={{ xs: "column", sm: "row" }} sx={{ gap: 2, alignItems: { sm: "center" }, flexWrap: "wrap" }}>
-        <Box>
-          <Typography variant="body2" sx={{ color: "text.secondary", mb: 0.25 }}>New missions start in</Typography>
-          <ModePicker value={defaultMode} onChange={setDefaultMode} />
-        </Box>
-        <Chip variant="outlined" label="Saved in this browser" />
-      </Stack>
-      <Typography sx={{ color: "text.secondary" }}>
-        {MODE_HELP[defaultMode]} {PHYSICAL_NOTE}
-      </Typography>
     </Section>
   );
 }
@@ -440,6 +537,7 @@ export default function SettingsPage() {
             <PhonesSection />
           </>
         )}
+        <DiagnosticsSection />
         <Section title="About" id="about-heading">
           <Typography>ViBread helps you prototype Arduino circuits with an AI-assisted design and build workflow.</Typography>
           <Typography color="text.secondary">Not affiliated with Anthropic.</Typography>

@@ -20,9 +20,15 @@ export interface ResolvedModel {
  *
  * This file is the only place that constructs an AI provider.
  */
+/** What a model call is for, so the debug log can attribute it (trace.ts). */
+export interface ModelTrace {
+  missionId: string | null;
+  purpose: "design" | "test-author" | "retro" | "photo-check" | "scan";
+}
+
 export interface AgentModels {
-  design(ownerId: string): Promise<ResolvedModel>;
-  fast(ownerId: string): Promise<ResolvedModel>;
+  design(ownerId: string, trace: ModelTrace): Promise<ResolvedModel>;
+  fast(ownerId: string, trace: ModelTrace): Promise<ResolvedModel>;
 }
 
 /**
