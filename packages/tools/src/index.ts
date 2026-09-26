@@ -3,13 +3,14 @@ export { FAULTS_ARTIFACT, loadFaultDictionary, type BackgroundLog } from "./faul
 export { createToolRegistry, type RegistryHooks } from "./registry.js";
 export { TestsNotWrittenError, createDesignOps, reviewRevision, type DesignOps } from "./design.js";
 export { createAiToolset, type AiToolset, type AiToolsetOptions } from "./ai-sdk.js";
-export { currentActionHash, describeAction, evaluatePolicy, invokeTool, type GatedResult, type PolicyDecision } from "./gate.js";
+export { brokerAction, currentActionHash, describeAction, evaluatePolicy, invokeTool, type GatedResult, type PolicyDecision } from "./gate.js";
 export {
   ClaudeNotConnectedError,
   ToolInputError,
   allGo,
   artifactUrl,
   circuitInterface,
+  BENCH_ACTIONS,
   DETERMINISTIC_CONSOLES,
   deterministicGo,
   errorMessage,

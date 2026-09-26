@@ -10,7 +10,7 @@ import {
   type ToolDef,
   type ToolRegistry,
 } from "@vibread/core";
-import { ToolInputError, allGo } from "./common.js";
+import { BENCH_ACTIONS, BENCH_ACTION_TEXT, ToolInputError, allGo, type BenchAction } from "./common.js";
 
 /** Plain-language approval card text for a tool call (PLAN §5.8 "Approval card"). */
 export function describeAction(def: ToolDef, input: unknown, nextRevision: number): { summary: string; consequence: string } {
@@ -33,8 +33,10 @@ export function describeAction(def: ToolDef, input: unknown, nextRevision: numbe
         summary: `Add ${String(args.count)}× ${String(args.module)} to your parts list`,
         consequence: "The design may then use a part you need to have on hand.",
       };
-    case "request_bench_action":
-      return { summary: `Bench: ${String(args.action)}`, consequence: "Runs only when you click Start at the bench." };
+    case "request_bench_action": {
+      const text = BENCH_ACTION_TEXT[args.action as BenchAction] ?? String(args.action);
+      return { summary: `Bench: ${text}`, consequence: "Runs only when you click Start at the bench that holds the USB cable." };
+    }
     default:
       return { summary: `${def.title}`, consequence: def.description };
   }
@@ -50,8 +52,26 @@ export interface PolicyDecision {
 /** The revision an action binds to: the released-to-be revision for release_revision, else the latest ("none" before any). */
 async function boundRevision(store: MissionStore, def: ToolDef, missionId: string, args: unknown): Promise<{ latest: Revision | null; target: Revision | null; revisionHash: string }> {
   const latest = await store.getRevision(missionId);
-  const target = def.name === "release_revision" ? await store.getRevision(missionId, Number((args as { revision?: number }).revision)) : latest;
+  let target = latest;
+  if (def.name === "release_revision") target = await store.getRevision(missionId, Number((args as { revision?: number }).revision));
+  else if (def.actionClass === "physical") {
+    // The bench lists and runs requests for the mission's current revision only.
+    const current = (await store.getMission(missionId))?.currentRevision;
+    target = current === undefined ? null : await store.getRevision(missionId, current);
+    return { latest, target, revisionHash: target?.hash ?? "none" };
+  }
   return { latest, target, revisionHash: target?.hash ?? latest?.hash ?? "none" };
+}
+
+/**
+ * The broker's `action` for a tool call: the tool name, except for physical tools, whose action is the bench action
+ * itself ("flash-app", "run-selftest", …) — that is what the bench lists, starts, and iMessage pre-approves.
+ */
+export function brokerAction(def: ToolDef, args: unknown): string {
+  if (def.actionClass !== "physical") return def.name;
+  const action = (args as { action?: unknown } | undefined)?.action;
+  if (typeof action !== "string" || !(BENCH_ACTIONS as readonly string[]).includes(action)) throw new ToolInputError(`Unknown bench action ${String(action)}.`);
+  return action;
 }
 
 /**
@@ -60,7 +80,7 @@ async function boundRevision(store: MissionStore, def: ToolDef, missionId: strin
  */
 export async function currentActionHash(store: MissionStore, def: ToolDef, missionId: string, args: unknown): Promise<string> {
   const { revisionHash } = await boundRevision(store, def, missionId, args);
-  return hashJson({ revisionHash, action: def.name, input: args });
+  return hashJson({ revisionHash, action: brokerAction(def, args), input: args });
 }
 
 /** Asks the ApprovalBroker (the authority, PLAN §5.10) about one tool call in the mission's current mode. */
@@ -81,7 +101,7 @@ export async function evaluatePolicy(input: {
     missionId: ctx.missionId,
     mode: mission.mode,
     actionClass: def.actionClass,
-    action: def.name,
+    action: brokerAction(def, args),
     input: args,
     revisionHash,
     actor: ctx.actor,
@@ -123,7 +143,7 @@ export async function invokeTool(input: {
 
   if (input.approvalId) {
     const request = await input.broker.get(input.approvalId);
-    if (!request || request.missionId !== input.ctx.missionId || request.action !== def.name) {
+    if (!request || request.missionId !== input.ctx.missionId || request.action !== brokerAction(def, args)) {
       return { status: "denied", reason: "That approval does not belong to this action." };
     }
     if (!(await input.broker.consume(request.id, await currentActionHash(input.store, def, input.ctx.missionId, args)))) {
@@ -133,6 +153,14 @@ export async function invokeTool(input: {
     return { status: "executed", output: await def.handler({ ...input.ctx, mode: mission?.mode ?? "review" }, args) };
   }
 
+  if (def.actionClass === "physical") {
+    // Never executed here: the handler validates and describes the request (no side effects) before it is filed as a
+    // bench-click request, so a refused request (wrong revision, no design) leaves nothing on the bench.
+    const mission = await input.store.getMission(input.ctx.missionId);
+    const output = await def.handler({ ...input.ctx, mode: mission?.mode ?? "review" }, args);
+    const decision = await evaluatePolicy({ broker: input.broker, store: input.store, def, ctx: input.ctx, args });
+    return { status: "bench-click", ...(decision.request ? { approval: decision.request } : {}), output };
+  }
   const decision = await evaluatePolicy({ broker: input.broker, store: input.store, def, ctx: input.ctx, args });
   const ctx: ToolContext = { ...input.ctx, mode: decision.mode };
   // An identical action a human already approved and nobody has used: consume it one-shot, then run it.
@@ -152,6 +180,6 @@ export async function invokeTool(input: {
       if (!decision.request) throw new Error("The approval broker asked for a human but created no request.");
       return { status: "approval-required", approval: decision.request };
     case "bench-click":
-      return { status: "bench-click", ...(decision.request ? { approval: decision.request } : {}), output: await def.handler(ctx, args) };
+      throw new Error("Only physical tools are bench-click actions.");
   }
 }
