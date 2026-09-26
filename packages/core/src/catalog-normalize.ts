@@ -305,23 +305,111 @@ function findType(text: string, types: PartType[]): PartType | undefined {
   return candidates.find((candidate) => phraseFound(text, candidate.alias))?.type;
 }
 
+function splitInventoryText(text: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
+    if (character === "(") depth += 1;
+    else if (character === ")") depth = Math.max(0, depth - 1);
+    else if (depth === 0 && (character === "," || character === ";" || character === "\n")) {
+      const part = text.slice(start, index).trim();
+      if (part) parts.push(part);
+      start = index + 1;
+    }
+  }
+  const final = text.slice(start).trim();
+  if (final) parts.push(final);
+  return parts;
+}
+
+function countWord(value: string): number | undefined {
+  const numeric = Number(value);
+  if (/^\d+$/.test(value) && Number.isFinite(numeric)) return numeric;
+  return NUMBER_WORDS[value.toLowerCase()];
+}
+
+interface CountedDescriptor {
+  quantity: number;
+  descriptor: string;
+  explicit: boolean;
+}
+
+function countedDescriptor(value: string): CountedDescriptor {
+  let descriptor = value.trim();
+  let quantity = 1;
+  let explicit = false;
+  const leading = descriptor.match(/^\s*(?:(\d+)|([a-z]+))(?:\s*[x×](?=[\s\d]|$)|\s+|\b)/i);
+  if (leading) {
+    const parsed = countWord(leading[1] ?? leading[2]!);
+    if (parsed !== undefined) {
+      quantity = positiveCount(parsed);
+      explicit = true;
+      descriptor = descriptor.slice(leading[0].length).trim();
+    }
+  }
+  const trailing = descriptor.match(/^(.*?)\s+[x×]\s*(\d+|[a-z]+)\s*$/i);
+  if (trailing) {
+    const parsed = countWord(trailing[2]!);
+    if (parsed !== undefined) {
+      quantity = positiveCount(parsed);
+      explicit = true;
+      descriptor = trailing[1]!.trim();
+    }
+  }
+  return { quantity, descriptor, explicit };
+}
+
+function optionVariants(type: PartType, item: PartField, option: string): string[] {
+  const variants = [option];
+  if (type.id === "arduino" && item.key === "board" && option === "uno-r3") variants.push("uno", "uno r3", "arduino uno");
+  if (option.includes("-")) variants.push(option.replace(/-/g, " "));
+  return variants;
+}
+
+function choiceOptionScore(source: string, type: PartType, item: PartField, option: string): number {
+  const exactScore = optionVariants(type, item, option)
+    .filter((variant) => phraseFound(source, variant))
+    .reduce((best, variant) => Math.max(best, normalizedPhrase(variant).length), 0);
+  if (exactScore > 0) return exactScore;
+  const significantTokens = normalizedPhrase(option)
+    .replace(/[-_]/g, " ")
+    .split(" ")
+    .filter((token) => token.length > 1);
+  return significantTokens.reduce((best, token) => phraseFound(source, token) ? Math.max(best, token.length) : best, 0);
+}
+
 function extractNumericTokens(text: string): string[] {
   return text.match(/(?<![A-Za-z0-9.])\d+(?:\.\d+)?(?:\s*[kKmMrR]\s*\d+|\s*[kKmMrR])?(?:\s*(?:Ω|ohms?|ohm))?(?![A-Za-z])/gi) ?? [];
 }
 
-function parsedValues(type: PartType, text: string): Record<string, FieldValue> {
+function parsedOhms(type: PartType, text: string): number | undefined {
+  const tokens = extractNumericTokens(text);
+  return tokens.map((token) => {
+    // A bare 220 in a typed parts list conventionally means 220 Ω; keep 103's
+    // established SMD-code behavior through the public ohmsFromText helper.
+    if (type.mapping.kind === "module" && type.mapping.module === "resistor" && /^\d{3}$/.test(token.trim()) && token.trim() !== "103") return Number(token);
+    return ohmsFromText(token);
+  }).find((item): item is number => item !== undefined);
+}
+
+interface ParsedValues {
+  values: Record<string, FieldValue>;
+  ambiguous: boolean;
+}
+
+function parsedValues(type: PartType, text: string): ParsedValues {
   const values: Record<string, FieldValue> = {};
+  let ambiguous = false;
   const source = normalizedPhrase(text);
   const module = type.mapping.kind === "module" || type.mapping.kind === "modelled" ? type.mapping.module : undefined;
   if (module === "resistor" || module === "potentiometer" || type.fields.some((item) => item.key === "ohms")) {
-    const ohms = extractNumericTokens(text).map(ohmsFromText).find((item): item is number => item !== undefined);
+    const ohms = parsedOhms(type, text);
     if (ohms !== undefined && type.fields.some((item) => item.key === "ohms")) values.ohms = ohms;
   }
   for (const item of type.fields) {
-    if (item.key === "color") {
-      const option = item.options?.find((candidate) => phraseFound(source, candidate));
-      if (option) values[item.key] = option;
-    } else if (item.key === "size") {
+    if (item.key === "size") {
       const mm = source.match(/\b(\d+)\s*mm\b/);
       const option = mm ? item.options?.find((candidate) => candidate === mm[1]) : undefined;
       if (option) values[item.key] = option;
@@ -329,45 +417,98 @@ function parsedValues(type: PartType, text: string): Record<string, FieldValue> 
       const match = source.match(/(\d+(?:\.\d+)?)\s*(?:u|µ|μ)f\b/);
       if (match) values[item.key] = Number(match[1]);
     } else if (item.kind === "choice" && item.options) {
-      const option = item.options.find((candidate) => phraseFound(source, candidate));
-      if (option) values[item.key] = option;
+      const matches = item.options
+        .map((option) => ({ option, score: choiceOptionScore(source, type, item, option) }))
+        .filter((candidate) => candidate.score > 0);
+      const bestScore = Math.max(0, ...matches.map((candidate) => candidate.score));
+      const best = matches.filter((candidate) => candidate.score === bestScore);
+      const winnerContainsOthers = best.length === 1 && matches.every((candidate) => candidate === best[0] || normalizedPhrase(best[0]!.option).replace(/[-_]/g, " ").includes(normalizedPhrase(candidate.option).replace(/[-_]/g, " ")));
+      if (best.length === 1 && winnerContainsOthers) values[item.key] = best[0]!.option;
+      else if (best.length > 1 || matches.length > 1) ambiguous = true;
     } else if (item.kind === "number" && item.key === "cells") {
       const match = source.match(/\b(\d+)\s*(?:cell|cells)\b/);
       if (match) values[item.key] = Number(match[1]);
     }
   }
-  return values;
+  return { values, ambiguous };
+}
+
+function parseAtomicLine(line: string, types: PartType[]): ParsedPartLine {
+  const counted = countedDescriptor(line);
+  const type = findType(counted.descriptor, types);
+  if (!type) return { text: line, typeId: null, values: {}, quantity: counted.quantity, status: "unknown" };
+  const parsed = parsedValues(type, counted.descriptor);
+  const missingRequired = type.fields.some((item) => item.required && parsed.values[item.key] === undefined);
+  return {
+    text: line,
+    typeId: type.id,
+    values: parsed.values,
+    quantity: counted.quantity,
+    status: parsed.ambiguous || missingRequired ? "needs-look" : "ready",
+  };
+}
+
+function conjunctionVariants(line: string, types: PartType[]): [string, string] | undefined {
+  const conjunction = /\s+(?:&|and)\s+/i.exec(line);
+  if (!conjunction || conjunction.index === undefined) return undefined;
+  const before = line.slice(0, conjunction.index).trim();
+  const after = line.slice(conjunction.index + conjunction[0].length).trim();
+  const words = after.split(/\s+/).filter(Boolean);
+  for (let start = words.length - 1; start >= 1; start -= 1) {
+    const suffix = words.slice(start).join(" ");
+    const left = `${before} ${suffix}`.trim();
+    const right = `${words.slice(0, start).join(" ")} ${suffix}`.trim();
+    if (findType(left, types) && findType(right, types)) return [left, right];
+  }
+  return undefined;
+}
+
+function withNeedsLook(line: string, types: PartType[]): ParsedPartLine {
+  const parsed = parseAtomicLine(line, types);
+  return { ...parsed, text: line, values: {}, status: "needs-look" };
+}
+
+function parentheticalExpansion(line: string, types: PartType[]): ParsedPartLine[] | undefined {
+  const open = line.indexOf("(");
+  const close = line.lastIndexOf(")");
+  if (open < 0 || close <= open) return undefined;
+  const base = line.slice(0, open).trim();
+  const inside = line.slice(open + 1, close).trim();
+  const suffix = line.slice(close + 1).trim();
+  const baseCounted = countedDescriptor(base);
+  if (!inside || !findType(baseCounted.descriptor, types)) return undefined;
+  const options = splitInventoryText(inside);
+  const eachOption = options.find((option) => /^(?:\d+|[a-z]+)\s+each$/i.test(option.trim()));
+  const meaningful = options.filter((option) => option !== eachOption);
+  if (!meaningful.length) return undefined;
+  const eachCount = eachOption ? countWord(eachOption.trim().split(/\s+/)[0]!) : undefined;
+  const countedOptions = meaningful.map(countedDescriptor);
+  const allExplicit = countedOptions.every((option) => option.explicit);
+  let sharedCount: number | undefined = eachCount === undefined && meaningful.length === 1 ? baseCounted.quantity : undefined;
+  if (sharedCount === undefined && eachCount === undefined && !allExplicit && baseCounted.quantity % meaningful.length === 0) sharedCount = baseCounted.quantity / meaningful.length;
+  if (sharedCount === undefined && eachCount === undefined && !allExplicit) return [withNeedsLook(line, types)];
+  return meaningful.flatMap((option, index) => {
+    const countedOption = countedOptions[index]!;
+    const quantity = countedOption.explicit ? countedOption.quantity : eachCount ?? sharedCount ?? baseCounted.quantity;
+    const optionDescriptor = countedOption.explicit ? countedOption.descriptor : option;
+    const descriptor = `${quantity} ${baseCounted.descriptor} ${optionDescriptor}${suffix ? ` ${suffix}` : ""}`;
+    return [parseAtomicLine(descriptor, types)].map((parsed) => ({ ...parsed, text: `${base} (${option})${suffix ? ` ${suffix}` : ""}` }));
+  });
+}
+
+function parseSegment(line: string, types: PartType[], allowConjunction = true): ParsedPartLine[] {
+  const expanded = parentheticalExpansion(line, types);
+  if (expanded) return expanded;
+  if (allowConjunction) {
+    const variants = conjunctionVariants(line, types);
+    if (variants) return variants.flatMap((variant) => parseSegment(variant, types, false));
+  }
+  return [parseAtomicLine(line, types)];
 }
 
 /** Parse comma/newline/semicolon-separated typed inventory text without an AI call. */
 export function parsePartsText(text: string, types: PartType[]): ParsedPartLine[] {
-  return text
-    .split(/[\n,;]+/)
-    .map((part) => part.trim())
-    .filter(Boolean)
-    .map((line): ParsedPartLine => {
-      let remainder = line;
-      let quantity = 1;
-      const countMatch = remainder.match(/^\s*(?:(\d+)|([a-z]+))(?:\s*[x×](?=[\s\d]|$)|\s+|\b)/i);
-      if (countMatch) {
-        const numeric = countMatch[1] ? Number(countMatch[1]) : NUMBER_WORDS[countMatch[2]!.toLowerCase()];
-        if (numeric !== undefined) {
-          quantity = positiveCount(numeric);
-          remainder = remainder.slice(countMatch[0].length).trim();
-        }
-      }
-      const type = findType(remainder, types);
-      if (!type) return { text: line, typeId: null, values: {}, quantity, status: "unknown" };
-      const values = parsedValues(type, remainder);
-      const missingRequired = type.fields.some((item) => item.required && values[item.key] === undefined);
-      return {
-        text: line,
-        typeId: type.id,
-        values,
-        quantity,
-        status: missingRequired ? "needs-look" : "ready",
-      };
-    });
+  return splitInventoryText(text).flatMap((line) => parseSegment(line, types));
 }
 
 function paramsFor(type: PartType, entry: InventoryEntry, mapping: Extract<PartType["mapping"], { kind: "module" | "modelled" }>): Record<string, unknown> {

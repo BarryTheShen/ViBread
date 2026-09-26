@@ -30,6 +30,7 @@ const ATTRIBUTION: Record<Attribution, string> = {
 /** The bench diagnosis: what failed, the likeliest causes, and the breadboard with the suspect holes/parts highlighted. */
 export function DiagnosisView({ missionId, revision }: { missionId: string; revision: RevisionDetail }) {
   const run = revision.results.bench?.at(-1);
+  const practice = run?.runId.startsWith("virtual-") ?? false;
   const [picked, setPicked] = useState(0);
   const [showAll, setShowAll] = useState(false);
   const boardUrl = revision.artifactUrls["breadboard.svg"];
@@ -54,7 +55,10 @@ export function DiagnosisView({ missionId, revision }: { missionId: string; revi
   if (run.verdict === "pass") {
     return (
       <Alert severity="success">
-        The last bench test on design r{revision.n} passed{run.runId.startsWith("virtual-") ? " on the virtual board" : ""}: nothing to diagnose.
+        <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap" }}>
+          <Typography component="span">The last bench test on design r{revision.n} passed: nothing to diagnose.</Typography>
+          {practice && <Chip size="small" variant="outlined" label="Virtual board · self-test (practice)" />}
+        </Stack>
       </Alert>
     );
   }
@@ -65,7 +69,7 @@ export function DiagnosisView({ missionId, revision }: { missionId: string; revi
         <Typography sx={{ fontWeight: 600 }}>{run.diagnosis.summary || (run.verdict === "incomplete" ? "The bench test didn't finish." : "The bench test failed.")}</Typography>
         <Stack direction="row" sx={{ gap: 1, mt: 0.5, flexWrap: "wrap" }}>
           <Chip size="small" variant="outlined" label={`Likely: ${ATTRIBUTION[run.diagnosis.attribution]}`} />
-          {run.runId.startsWith("virtual-") && <Chip size="small" variant="outlined" label="Virtual board" />}
+          {practice && <Chip size="small" variant="outlined" label="Virtual board · self-test (practice)" />}
           {failed.length > 0 && <Chip size="small" variant="outlined" label={`${failed.length} test${failed.length === 1 ? "" : "s"} not passing`} />}
         </Stack>
       </Alert>

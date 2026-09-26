@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { THEME_TOKENS } from "./theme.js";
+import { createMissionTheme, THEME_TOKENS } from "./theme.js";
 
 /** WCAG 2.2 relative luminance contrast ratio for two sRGB hex colours. */
 export function contrastRatio(foreground: string, background: string): number {
@@ -50,5 +50,16 @@ describe("ViBread theme contrast tokens", () => {
     for (const [foreground, background] of uiPairs) {
       expect(contrastRatio(foreground, background), `${foreground} on ${background}`).toBeGreaterThanOrEqual(3);
     }
+  });
+
+  it("keeps focused outlined fields notch-safe", () => {
+    const theme = createMissionTheme(true);
+    const root = theme.components?.MuiOutlinedInput?.styleOverrides?.root;
+    expect(root).toBeDefined();
+    expect(typeof root).not.toBe("function");
+    const styles = root as Record<string, Record<string, string>>;
+    expect(styles["&.Mui-focused"]).toBeUndefined();
+    expect(styles["&.Mui-focused:focus-within"]).toBeUndefined();
+    expect(styles["&.Mui-focused .MuiOutlinedInput-notchedOutline"]).toEqual({ borderColor: "var(--mui-palette-primary-main)", borderWidth: 2 });
   });
 });

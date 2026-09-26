@@ -34,7 +34,7 @@ export class SqlCatalogService implements CatalogService {
   }
 
   async upsert(ownerId: string, input: PartType): Promise<PartType> {
-    const type: PartType = { ...input, id: input.id.startsWith("u-") ? input.id : `u-${randomUUID()}`, builtIn: false };
+    const type: PartType = { ...input, id: typeof input.id === "string" && input.id.startsWith("u-") ? input.id : `u-${randomUUID()}`, builtIn: false };
     this.deps.sqlite.prepare('INSERT INTO "part_types" ("id", "ownerId", "json", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?) ON CONFLICT("id") DO UPDATE SET "json" = excluded."json", "updatedAt" = excluded."updatedAt"').run(type.id, ownerId, JSON.stringify(type), Date.now(), Date.now());
     return type;
   }

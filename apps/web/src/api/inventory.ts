@@ -176,16 +176,17 @@ export function useCreateScan() {
   });
 }
 
+export function scanPollingInterval(status: ScanView["status"] | undefined): number | false {
+  return status === "ready" || status === "failed" || status === "accepted" ? false : 1_500;
+}
+
 export function useScan(scanId: string, enabled = true) {
   return useQuery({
     queryKey: inventoryQueryKeys.scan(scanId),
     queryFn: ({ signal }) => fetchScan(scanId, signal),
     enabled: Boolean(scanId) && enabled,
-    refetchInterval: (query) => {
-      const status = query.state.data?.status;
-      return status === "waiting" || status === "analyzing" ? 1_500 : false;
-    },
-    refetchIntervalInBackground: false,
+    refetchInterval: (query) => scanPollingInterval(query.state.data?.status),
+    refetchIntervalInBackground: true,
   });
 }
 

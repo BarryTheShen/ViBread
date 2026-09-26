@@ -13,6 +13,10 @@ import CardContent from "@mui/material/CardContent";
 import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
 import Container from "@mui/material/Container";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
 import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import InputAdornment from "@mui/material/InputAdornment";
@@ -126,6 +130,7 @@ export default function InventoryPage() {
   const [sourceType, setSourceType] = useState<PartType | undefined>();
   const [editing, setEditing] = useState<InventoryRow | undefined>();
   const [menu, setMenu] = useState<{ anchor: HTMLElement; entry: InventoryRow } | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<InventoryRow | null>(null);
 
   const types = catalog.data?.types ?? [];
   const typeById = useMemo(() => new Map(types.map((type) => [type.id, type])), [types]);
@@ -250,8 +255,16 @@ export default function InventoryPage() {
       <Menu open={Boolean(menu)} anchorEl={menu?.anchor} onClose={() => setMenu(null)}>
         <MenuItem onClick={() => { if (menu) setEditing(menu.entry); setMenu(null); setAddOpen(true); }}><EditOutlinedIcon fontSize="small" sx={{ mr: 1 }} />Edit fields</MenuItem>
         <MenuItem onClick={() => { if (menu) setEditing(menu.entry); setMenu(null); setAddOpen(true); }}>Change type</MenuItem>
-        <MenuItem onClick={() => { if (menu && window.confirm("Delete this inventory entry?")) remove.mutate(menu.entry.id); setMenu(null); }} sx={{ color: "error.main" }}><DeleteOutlineOutlinedIcon fontSize="small" sx={{ mr: 1 }} />Delete</MenuItem>
+        <MenuItem onClick={() => { if (menu) setPendingDelete(menu.entry); setMenu(null); }} sx={{ color: "error.main" }}><DeleteOutlineOutlinedIcon fontSize="small" sx={{ mr: 1 }} />Delete</MenuItem>
       </Menu>
+      <Dialog open={Boolean(pendingDelete)} onClose={() => setPendingDelete(null)} aria-labelledby="delete-inventory-title">
+        <DialogTitle id="delete-inventory-title">Delete this inventory entry?</DialogTitle>
+        <DialogContent><Typography color="text.secondary">This removes {pendingDelete ? formatEntryLabel(typeById.get(pendingDelete.typeId), pendingDelete.values) : "this part"} from your shared inventory.</Typography></DialogContent>
+        <DialogActions>
+          <Button onClick={() => setPendingDelete(null)}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={() => { if (pendingDelete) remove.mutate(pendingDelete.id, { onSuccess: () => setPendingDelete(null) }); }}>Delete</Button>
+        </DialogActions>
+      </Dialog>
       <AddPartDialog open={addOpen} catalog={catalog.data} entry={editing} onClose={() => { setAddOpen(false); setEditing(undefined); }} onSave={savePart} />
       <TypePartsDialog open={typePartsOpen} catalog={catalog.data} onClose={() => setTypePartsOpen(false)} onSaved={() => setTypePartsOpen(false)} />
       <PartTypeEditor open={typeEditorOpen} catalog={catalog.data} source={sourceType} onClose={() => { setTypeEditorOpen(false); setSourceType(undefined); }} onSaved={() => { setTypeEditorOpen(false); setSourceType(undefined); }} />
