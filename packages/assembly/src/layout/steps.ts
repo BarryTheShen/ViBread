@@ -1,0 +1,232 @@
+import {
+  MODULES,
+  formatOhms,
+  modulePins,
+  resistorBands,
+  type Circuit,
+  type Jumper,
+  type Layout,
+  type Part,
+  type Step,
+  type StepList,
+  type TestId,
+} from "@vibread/core";
+
+import { layoutHash } from "./allocator.js";
+
+function endpointText(endpoint: Jumper["from"]): string {
+  return "board" in endpoint ? `Arduino ${endpoint.board}` : endpoint.hole;
+}
+
+function partById(circuit: Circuit): Map<string, Part> {
+  return new Map(circuit.parts.map((part) => [part.id, part]));
+}
+
+function partCallout(part: Part): string {
+  if (part.module === "resistor") {
+    const ohms = Number(part.params.ohms);
+    const tolerance = Number(part.params.tolerancePct ?? 5);
+    const bands = resistorBands(ohms, tolerance).join("-");
+    return `1× ${formatOhms(ohms)} resistor — ${bands}`;
+  }
+  if (part.module === "led") {
+    const color = typeof part.params.color === "string" ? part.params.color : "red";
+    return `1× ${color} LED — anode (+, long leg) and cathode (−, short leg)`;
+  }
+  if (part.module === "button") return "1× 4-leg push button — align the body over the centre channel";
+  if (part.module === "photoresistor") return "1× photoresistor — either direction; keep its face visible";
+  if (part.module === "potentiometer") return "1× potentiometer — outer legs A/B, middle leg W";
+  if (part.module === "buzzer-active") return "1× active buzzer — + long leg, − short leg";
+  if (part.module === "buzzer-passive") return "1× passive buzzer — + leg, − leg";
+  return `1× ${MODULES[part.module].name}`;
+}
+
+function placementText(part: Part, layout: Layout): { text: string; holes: string[] } {
+  const placement = layout.placements.find((entry) => entry.part === part.id);
+  if (!placement) return { text: `No placement was generated for ${part.id}.`, holes: [] };
+  const pins = modulePins(part)
+    .map((pin) => `${pin.id} → ${placement.pins[pin.id] ?? "unplaced"}`)
+    .join(", ");
+  let orientation = "Before inserting, check the pin labels.";
+  const footprint = MODULES[part.module].footprint;
+  if (footprint.kind === "two-lead" && footprint.polarized) {
+    const first = footprint.pins[0];
+    const second = footprint.pins[1];
+    orientation = `Before inserting, orient ${first} (+, long leg) toward its labelled hole and ${second} (−, short leg) toward its labelled hole.`;
+  } else if (footprint.kind === "button4") {
+    orientation = "Before inserting, put the button body across the centre channel; legs 1–2 face one side and 3–4 face the other pair of rows.";
+  } else if (part.module === "potentiometer") {
+    orientation = "Before inserting, keep the three legs in order A, W, B from the part's labelled side.";
+  }
+  return {
+    text: `${orientation} Insert ${part.id}: ${pins}. Exact holes: ${Object.values(placement.pins).join(", ")}.`,
+    holes: Object.values(placement.pins),
+  };
+}
+
+function jumperText(jumper: Jumper): string {
+  return `Connect ${jumper.id} on net ${jumper.net} from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. The label and endpoints are authoritative; wire color is only a visual aid.`;
+}
+
+function inventoryText(circuit: Circuit): string {
+  const items = [...circuit.parts]
+    .sort((a, b) => a.id.localeCompare(b.id))
+    .map((part) => `${part.id} (${MODULES[part.module].name})`)
+    .join(", ");
+  return `Find these exact parts before starting: ${items}. Do not connect USB yet.`;
+}
+
+function orientationText(layout: Layout): string {
+  const board = layout.board.includes("nano") ? "Nano across the centre channel" : "Uno beside the breadboard";
+  return `${board}. Rows are numbered from 1 upward; columns a–e are the left five-hole strips and f–j are the right five-hole strips. Top rails are T+ (5 V, red) and T− (GND, black). Read the printed hole IDs, not wire color.`;
+}
+
+function railJumpers(layout: Layout): Jumper[] {
+  return layout.jumpers.filter((jumper) => {
+    const isPowerRail = jumper.net === "5V" || jumper.net === "GND";
+    const touchesRail = [jumper.from, jumper.to].some((endpoint) => "hole" in endpoint && endpoint.hole.startsWith("T"));
+    const hasBoardEndpoint = "board" in jumper.from || "board" in jumper.to;
+    return isPowerRail && (touchesRail || hasBoardEndpoint);
+  });
+}
+
+function testsForSubsection(circuit: Circuit): TestId[] {
+  const tests = new Set<TestId>(["net.continuity"]);
+  if (circuit.parts.some((part) => part.module === "button")) tests.add("button.interactive");
+  if (circuit.parts.some((part) => part.module === "photoresistor")) tests.add("light.relative");
+  if (circuit.parts.some((part) => part.module === "potentiometer")) tests.add("pot.sweep");
+  if (circuit.parts.some((part) => part.module === "led")) tests.add("led.sequence");
+  if (circuit.parts.some((part) => part.module.startsWith("buzzer"))) tests.add("buzzer.confirm");
+  return [...tests];
+}
+
+export function buildSteps(circuit: Circuit, layout: Layout): StepList {
+  const steps: Step[] = [];
+  const partMap = partById(circuit);
+  const push = (step: Omit<Step, "n">): void => {
+    steps.push({ ...step, n: steps.length + 1 });
+  };
+
+  push({
+    kind: "inventory",
+    title: "Check the inventory",
+    text: inventoryText(circuit),
+    plug: "unplugged",
+    adds: { parts: [], jumpers: [] },
+    holes: [],
+    callouts: [...circuit.parts].sort((a, b) => a.id.localeCompare(b.id)).map(partCallout),
+  });
+  push({
+    kind: "orientation",
+    title: "Learn the board orientation",
+    text: orientationText(layout),
+    plug: "unplugged",
+    adds: { parts: [], jumpers: [] },
+    holes: [],
+    callouts: [],
+  });
+  push({
+    kind: "unplug",
+    title: "Unplug USB",
+    text: "USB must be unplugged before placing any part or jumper. Keep it unplugged until a checkpoint explicitly says plug in.",
+    plug: "unplugged",
+    adds: { parts: [], jumpers: [] },
+    holes: [],
+    callouts: [],
+  });
+
+  const rails = railJumpers(layout);
+  push({
+    kind: "rails",
+    title: "Connect the top power rails",
+    text: `With USB unplugged, connect the Arduino 5 V header to T+ and GND to T−. Exact rail holes: ${rails.flatMap((jumper) => [endpointText(jumper.from), endpointText(jumper.to)]).join(", ") || "see the labelled T+2 and T−2 rails"}. Red/black colors are aids; verify the T+ and T− labels.`,
+    plug: "unplugged",
+    adds: { parts: [], jumpers: rails.map((jumper) => jumper.id) },
+    holes: rails.flatMap((jumper) => ["hole" in jumper.from ? jumper.from.hole : "", "hole" in jumper.to ? jumper.to.hole : ""]).filter(Boolean),
+    callouts: [],
+  });
+  push({
+    kind: "checkpoint",
+    title: "Rail checkpoint — plug in",
+    text: "Plug in USB only for this checkpoint. The rails.vcc test should report a healthy 5 V rail; unplug again before touching the build.",
+    plug: "plugged",
+    adds: { parts: [], jumpers: [] },
+    holes: [],
+    callouts: [],
+    checkpoint: { tests: ["rails.vcc"], text: "Pass rails.vcc before continuing; a failure means stop and inspect T+ / T−." },
+  });
+  push({
+    kind: "unplug",
+    title: "Unplug USB before parts",
+    text: "Unplug USB again. Never insert or move a part while the circuit is powered.",
+    plug: "unplugged",
+    adds: { parts: [], jumpers: [] },
+    holes: [],
+    callouts: [],
+  });
+
+  for (const part of [...circuit.parts].sort((a, b) => a.id.localeCompare(b.id))) {
+    const placed = placementText(part, layout);
+    push({
+      kind: "place",
+      title: `Insert ${part.id} — ${MODULES[part.module].name}`,
+      text: `${placed.text} Keep USB unplugged.`,
+      plug: "unplugged",
+      adds: { parts: [part.id], jumpers: [] },
+      holes: placed.holes,
+      callouts: [partCallout(part)],
+    });
+  }
+
+  const nonRailJumpers = layout.jumpers.filter((jumper) => !rails.some((rail) => rail.id === jumper.id));
+  for (const jumper of nonRailJumpers) {
+    push({
+      kind: "jumper",
+      title: `Add ${jumper.id} — ${jumper.net}`,
+      text: `${jumperText(jumper)} Keep USB unplugged.`,
+      plug: "unplugged",
+      adds: { parts: [], jumpers: [jumper.id] },
+      holes: ["hole" in jumper.from ? jumper.from.hole : "", "hole" in jumper.to ? jumper.to.hole : ""].filter(Boolean),
+      callouts: [],
+    });
+  }
+
+  push({
+    kind: "checkpoint",
+    title: "Subsection checkpoint — plug in",
+    text: "Plug in USB for the assembled subsection. Run the continuity and component-specific checks, then unplug before changing anything.",
+    plug: "plugged",
+    adds: { parts: [], jumpers: [] },
+    holes: [],
+    callouts: [],
+    checkpoint: { tests: testsForSubsection(circuit), text: "A failed check is a wiring/design/code clue; stop and inspect the named net before continuing." },
+  });
+  push({
+    kind: "unplug",
+    title: "Unplug USB before final review",
+    text: "Unplug USB. Compare every visible part and jumper with its labelled hole before final power-up.",
+    plug: "unplugged",
+    adds: { parts: [], jumpers: [] },
+    holes: [],
+    callouts: [],
+  });
+  push({
+    kind: "power-up",
+    title: "Final power-up",
+    text: "Everything is inserted and checked. Plug in USB for the final power-up, then run the complete self-test. Do not move wires while plugged in.",
+    plug: "plugged",
+    adds: { parts: [], jumpers: [] },
+    holes: [],
+    callouts: [],
+    checkpoint: { tests: ["rails.vcc", "pins.readonly"], text: "Run the full staged self-test and stop on any fault." },
+  });
+
+  // Keep the part map referenced here so malformed layouts fail with a useful
+  // instruction instead of silently producing a step with no hole text.
+  for (const part of circuit.parts) {
+    if (!partMap.has(part.id)) throw new Error(`Cannot build steps: circuit part ${part.id} is missing`);
+  }
+  return { schema: "vibread.steps/1", layoutHash: layoutHash(layout), steps };
+}
+
+export { partCallout };

@@ -1,0 +1,72 @@
+import pino from "pino";
+import type { Logger } from "pino";
+import type { MissionService, MissionStore, ApprovalBroker, ToolRegistry } from "@vibread/core";
+import type { ServerAuth } from "./auth.js";
+import { createAgentRuntime } from "./agents/index.js";
+import { createServerAuth } from "./auth.js";
+import { loadConfig, type ServerConfig } from "./config.js";
+import { openDatabase, type DB, type OpenDatabase } from "./db/index.js";
+import { createMissionMachine, type MissionMachine, type MissionEvent } from "./services/machine.js";
+import { createApprovalBroker } from "./services/approvals.js";
+import { createLinkService, type LinkService } from "./services/links.js";
+import { createTokenService, type TokenService } from "./services/tokens.js";
+import { createMessageStore, type MessageStore } from "./store/messages.js";
+import { createMissionStore } from "./store/missions.js";
+import { ensureOperatorUser } from "./auth.js";
+import type { AgentRuntime } from "./agents/index.js";
+export type { MissionMachine, MissionEvent, TokenService, LinkService, MessageStore };
+
+export interface AppContext {
+  config: ServerConfig;
+  log: Logger;
+  db: DB;
+  store: MissionStore;
+  broker: ApprovalBroker;
+  machine: MissionMachine;
+  tokens: TokenService;
+  links: LinkService;
+  missions: MissionService;
+  tools: ToolRegistry;
+  runtime: AgentRuntime;
+  messages: MessageStore;
+  operator(): Promise<{ id: string; name: string }>;
+}
+
+export interface AppContextHandle {
+  ctx: AppContext;
+  auth: ServerAuth["auth"];
+  close(): void;
+}
+
+export function createAppContext(input: { config?: ServerConfig; log?: Logger } = {}): AppContextHandle {
+  const config = input.config ?? loadConfig();
+  const log = input.log ?? pino({ level: process.env.LOG_LEVEL ?? "info" });
+  const opened: OpenDatabase = openDatabase(config.dataDir);
+  const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: config.dataDir });
+  const broker = createApprovalBroker({ db: opened.db, sqlite: opened.sqlite, approvalSecret: config.approvalSecret });
+  const machine = createMissionMachine({ db: opened.db, sqlite: opened.sqlite, store });
+  const tokens = createTokenService({ db: opened.db, sqlite: opened.sqlite });
+  const links = createLinkService({ db: opened.db, sqlite: opened.sqlite });
+  const messages = createMessageStore({ db: opened.db, sqlite: opened.sqlite });
+  const runtime = createAgentRuntime({ config, log, store, broker, machine, messages });
+  const ctx: AppContext = {
+    config,
+    log,
+    db: opened.db,
+    store,
+    broker,
+    machine,
+    tokens,
+    links,
+    missions: runtime.missions,
+    tools: runtime.tools,
+    runtime,
+    messages,
+    async operator() {
+      ensureOperatorUser(opened.sqlite);
+      return { id: "operator", name: "Operator" };
+    },
+  };
+  const auth = createServerAuth(config, opened.db).auth;
+  return { ctx, auth, close: opened.close };
+}

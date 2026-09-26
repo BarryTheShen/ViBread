@@ -1,0 +1,831 @@
+import {
+  BOARD_PROFILES,
+  BREADBOARD_PROFILES,
+  contactGroup,
+  parseHole,
+  type BenchRunResult,
+  type BenchTestResult,
+  type Calibration,
+  type Circuit,
+  type DeviceLine,
+  type Endpoint,
+  type HoleId,
+  type Layout,
+  type SelfTestPlan,
+  type SelfTestSubject,
+  type SubjectResult,
+} from "@vibread/core";
+import { runDiagnosisRules, type DiagnosisSignature, type RuleCause, type RuleEvent } from "./rules.js";
+
+const ADC_FULL_SCALE = 1023;
+const LIGHT_CHANGE_MIN = ADC_FULL_SCALE * 0.15;
+const PINNED_LOW = 5;
+const PINNED_HIGH = 1018;
+
+type TestStatus = SubjectResult["status"];
+
+
+interface SignatureState {
+  buttonStuckLow: boolean;
+  buttonPin?: string;
+  buttonPart?: string;
+  ledMismatch: boolean;
+  ledExpectedPart?: string;
+  ledExpectedOrder?: number;
+  ledObservedOrder?: number;
+  lightPinnedRail: boolean;
+  lightPin?: string;
+  lightPart?: string;
+  outputStuck: boolean;
+  outputPin?: string;
+  outputPart?: string;
+  outputLevel?: 0 | 1;
+  noBanner: boolean;
+  designMismatch: boolean;
+}
+
+interface EvaluationContext {
+  circuit: Circuit;
+  layout?: Layout;
+  plan: SelfTestPlan;
+  lines: DeviceLine[];
+  answers: Record<string, string>;
+  subjects: SelfTestSubject[];
+  signatures: SignatureState;
+  calibrations: Calibration[];
+}
+
+
+
+function linesForTest(lines: DeviceLine[], test: string): DeviceLine[] {
+  const selected: DeviceLine[] = [];
+  let active: string | undefined;
+  for (const line of lines) {
+    if (line.t === "begin") active = line.test;
+    if (active === test) selected.push(line);
+    if (line.t === "end" && active === line.test) active = undefined;
+  }
+  if (selected.length > 0 || lines.some((line) => line.t === "begin")) return selected;
+  if (test === "pins.readonly") return lines.filter((line) => line.t === "read" || line.t === "probe");
+  if (test === "button.interactive") return lines.filter((line) => line.t === "read" || line.t === "obs");
+  return selected;
+}
+
+
+function asksFor(lines: DeviceLine[], test: string, kind?: Extract<DeviceLine, { t: "ask" }>['kind']): Array<Extract<DeviceLine, { t: "ask" }>> {
+  return lines.filter(
+    (line): line is Extract<DeviceLine, { t: "ask" }> => line.t === "ask" && line.test === test && (kind === undefined || line.kind === kind),
+  );
+}
+
+function endStatus(lines: DeviceLine[], test: string): Exclude<Extract<DeviceLine, { t: "end" }>['status'], "skipped"> | undefined {
+  const ends = lines.filter(
+    (line): line is Extract<DeviceLine, { t: "end" }> => line.t === "end" && line.test === test,
+  );
+  const last = ends.at(-1);
+  return last?.status === "skipped" ? undefined : last?.status;
+}
+
+function aggregate(statuses: TestStatus[]): TestStatus {
+  if (statuses.some((status) => status === "fail")) return "fail";
+  if (statuses.some((status) => status === "unknown")) return "unknown";
+  if (statuses.some((status) => status === "skipped")) return "skipped";
+  return "pass";
+}
+
+function testResult(test: BenchTestResult["test"], subjects: SubjectResult[], summary: string): BenchTestResult {
+  return { test, status: aggregate(subjects.map((subject) => subject.status)), subjects, summary };
+}
+
+function mvRange(board: SelfTestPlan["board"]): { min: number; max: number; nominal: number } {
+  const nominal = (BOARD_PROFILES[board]?.vcc ?? 5) * 1000;
+  return { nominal, min: nominal * 0.9, max: nominal * 1.1 };
+}
+
+function ratio(line: Extract<DeviceLine, { t: "read" }>): number | undefined {
+  if (line.n <= 0 || line.ones < 0 || line.ones > line.n) return undefined;
+  return line.ones / line.n;
+}
+
+function stableLevel(line: Extract<DeviceLine, { t: "read" }>): 0 | 1 | undefined {
+  const value = ratio(line);
+  if (value === undefined) return undefined;
+  if (value >= 0.9) return 1;
+  if (value <= 0.1) return 0;
+  return undefined;
+}
+
+function statusForEnd(lines: DeviceLine[], test: string): TestStatus | undefined {
+  const status = endStatus(lines, test);
+  if (status === "fail") return "fail";
+  if (status === "unknown") return "unknown";
+  if (status === "pass") return "pass";
+  return undefined;
+}
+
+function evaluateRails(context: EvaluationContext): BenchTestResult {
+  const lines = context.lines;
+  const hello = lines.find((line): line is Extract<DeviceLine, { t: "hello" }> => line.t === "hello");
+  const vcc = lines.find((line): line is Extract<DeviceLine, { t: "vcc" }> => line.t === "vcc");
+  const range = mvRange(context.plan.board);
+  let status: TestStatus = "unknown";
+  let observed = "no VCC reading";
+  if (vcc !== undefined) {
+    observed = `${vcc.mv} mV`;
+    status = vcc.mv >= range.min && vcc.mv <= range.max ? "pass" : "fail";
+  }
+  if (hello === undefined) {
+    status = status === "fail" ? "fail" : "unknown";
+    observed = vcc === undefined ? "no hello banner or VCC reading" : `${vcc.mv} mV, but no hello banner`;
+  } else if (hello.design !== context.plan.design || hello.board !== context.plan.board) {
+    context.signatures.designMismatch = true;
+    status = "fail";
+    observed = `hello design ${hello.design}, board ${hello.board}`;
+  }
+  const subject: SubjectResult = {
+    part: "board",
+    pin: "VCC",
+    status,
+    observed,
+    expected: `${Math.round(range.nominal)} mV ± 10% and design ${context.plan.design}`,
+  };
+  const summary = status === "pass" ? "USB power and the design banner look healthy." : status === "fail" ? "VCC or the design banner is outside the expected signature." : "Waiting for the board banner and VCC reading.";
+  return testResult("rails.vcc", [subject], summary);
+}
+
+function evaluatePins(context: EvaluationContext): { result: BenchTestResult; stuck: BenchTestResult | undefined } {
+  const segment = linesForTest(context.lines, "pins.readonly");
+  const readLines = segment.filter((line): line is Extract<DeviceLine, { t: "read" }> => line.t === "read");
+  const probes = segment.filter((line): line is Extract<DeviceLine, { t: "probe" }> => line.t === "probe");
+  const stuckLines = context.lines.filter((line): line is Extract<DeviceLine, { t: "stuck" }> => line.t === "stuck");
+  const subjects: SubjectResult[] = [];
+  const stuckSubjects: SubjectResult[] = [];
+
+  for (const subject of context.subjects) {
+    if (subject.kind === "button") {
+      const desiredPull = subject.pull === "internal-up" ? 1 : 0;
+      const releasedLevel = subject.pressedLevel === 0 ? 1 : 0;
+      const read = readLines.find((candidate) => candidate.pin === subject.pin && candidate.pull === desiredPull);
+      const stuck = stuckLines.find((candidate) => candidate.pin === subject.pin);
+      let status: TestStatus = "unknown";
+      let observed = "no released-state read";
+      if (stuck !== undefined) {
+        status = "fail";
+        observed = `stuck ${stuck.level === 0 ? "LOW" : "HIGH"}`;
+        if (stuck.level === 0 && !context.signatures.buttonStuckLow) {
+          context.signatures.buttonStuckLow = true;
+          context.signatures.buttonPin = subject.pin;
+          context.signatures.buttonPart = subject.part;
+        }
+      } else if (read !== undefined) {
+        const level = stableLevel(read);
+        if (level === undefined) {
+          observed = `${read.ones}/${read.n} HIGH samples (indeterminate)`;
+        } else {
+          observed = level === 1 ? "HIGH" : "LOW";
+          status = level === releasedLevel ? "pass" : "fail";
+          if (status === "fail" && level === 0) {
+            context.signatures.buttonStuckLow = true;
+            context.signatures.buttonPin = subject.pin;
+            context.signatures.buttonPart = subject.part;
+          }
+        }
+      }
+      subjects.push({ part: subject.part, pin: subject.pin, status, observed, expected: `released ${releasedLevel === 1 ? "HIGH" : "LOW"} with ${subject.pull}` });
+      continue;
+    }
+
+    if (subject.kind === "led" || subject.kind === "buzzer") {
+      const subjectProbes = probes.filter((probe) => probe.pin === subject.pin);
+      const stuck = stuckLines.find((candidate) => candidate.pin === subject.pin);
+      let status: TestStatus = "unknown";
+      let observed = "no safe readback probe";
+      if (stuck !== undefined) {
+        status = "fail";
+        observed = `stuck ${stuck.level === 0 ? "LOW" : "HIGH"}`;
+      } else if (subjectProbes.length > 0) {
+        const mismatch = subjectProbes.find((probe) => probe.drive !== probe.readback);
+        if (mismatch !== undefined) {
+          status = "fail";
+          observed = `drive ${mismatch.drive}, readback ${mismatch.readback}`;
+        } else {
+          status = "pass";
+          observed = `${subjectProbes.length} probe readback(s) matched`;
+        }
+      }
+      if (status === "fail") {
+        const failingProbe = subjectProbes.find((probe) => probe.drive !== probe.readback);
+        const stuckLevel = stuck?.level ?? (failingProbe?.readback ?? 0);
+        context.signatures.outputStuck = true;
+        context.signatures.outputPin = subject.pin;
+        context.signatures.outputPart = subject.part;
+        context.signatures.outputLevel = stuckLevel;
+      }
+      subjects.push({ part: subject.part, pin: subject.pin, status, observed, expected: "probe readback equals the driven level" });
+      continue;
+    }
+
+    const reads = readLines.filter((read) => read.pin === subject.pin);
+    subjects.push({
+      part: subject.part,
+      pin: subject.pin,
+      status: reads.length > 0 ? "pass" : "unknown",
+      observed: reads.length > 0 ? `${reads.length} passive read(s)` : "no passive read",
+      expected: "safe passive read only",
+    });
+  }
+
+  for (const line of stuckLines) {
+    const subject = context.subjects.find((candidate) => candidate.pin === line.pin);
+    const part = subject?.part ?? "board";
+    stuckSubjects.push({
+      part,
+      pin: line.pin,
+      status: "fail",
+      observed: `stuck ${line.level === 0 ? "LOW" : "HIGH"}`,
+      expected: "not stuck",
+    });
+    if (subject?.kind === "button" && line.level === 0) {
+      context.signatures.buttonStuckLow = true;
+      context.signatures.buttonPin = line.pin;
+      context.signatures.buttonPart = subject.part;
+    }
+    if (subject !== undefined && (subject.kind === "led" || subject.kind === "buzzer")) {
+      context.signatures.outputStuck = true;
+      context.signatures.outputPin = line.pin;
+      context.signatures.outputPart = subject.part;
+      context.signatures.outputLevel = line.level;
+    }
+  }
+
+  const result = testResult(
+    "pins.readonly",
+    subjects,
+    aggregate(subjects.map((subject) => subject.status)) === "pass" ? "All safe readback probes matched." : "Read-only pin checks found a mismatch or need more telemetry.",
+  );
+  const stuck = stuckSubjects.length > 0
+    ? testResult("digital.stuck", stuckSubjects, `${stuckSubjects.length} pin(s) reported stuck; no further drive should be attempted.`)
+    : undefined;
+  return { result, stuck };
+}
+
+function normalizedAnswer(raw: string | undefined): string | undefined {
+  if (raw === undefined) return undefined;
+  return raw.trim().toLowerCase();
+}
+
+function answerMissing(raw: string | undefined): boolean {
+  const value = normalizedAnswer(raw);
+  return value === undefined || value.length === 0 || value === "timeout" || value === "timed out" || value === "unknown";
+}
+
+function valueLevel(value: boolean | number | string): 0 | 1 | undefined {
+  if (typeof value === "boolean") return value ? 1 : 0;
+  if (typeof value === "number") return value === 0 ? 0 : value === 1 ? 1 : undefined;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "pressed" || normalized === "press" || normalized === "low" || normalized === "0") return 0;
+  if (normalized === "released" || normalized === "release" || normalized === "high" || normalized === "1") return 1;
+  return undefined;
+}
+
+function evaluateButton(context: EvaluationContext, subject: Extract<SelfTestSubject, { kind: "button" }>): SubjectResult {
+  const segment = linesForTest(context.lines, "button.interactive");
+  const asks = asksFor(context.lines, "button.interactive").filter((ask) => ask.part === undefined || ask.part === subject.part);
+  const missingAnswer = asks.some((ask) => answerMissing(context.answers[ask.id]));
+  const observations = segment.filter(
+    (line): line is Extract<DeviceLine, { t: "obs" }> => line.t === "obs" && (line.part === undefined || line.part === subject.part),
+  );
+  const reads = segment.filter(
+    (line): line is Extract<DeviceLine, { t: "read" }> => line.t === "read" && line.pin === subject.pin,
+  );
+  const expectedPressed = subject.pressedLevel;
+  const expectedReleased = expectedPressed === 0 ? 1 : 0;
+  let sawPressed = false;
+  let sawReleased = false;
+  let wrongLevel = false;
+  for (const observation of observations) {
+    const key = observation.key.toLowerCase();
+    if (key.includes("press")) {
+      if (typeof observation.v === "boolean") {
+        if (observation.v) sawPressed = true;
+      } else {
+        const level = valueLevel(observation.v);
+        if (level === expectedPressed) sawPressed = true;
+        else if (level !== undefined) wrongLevel = true;
+      }
+    }
+    if (key.includes("release")) {
+      if (typeof observation.v === "boolean") {
+        if (observation.v) sawReleased = true;
+      } else {
+        const level = valueLevel(observation.v);
+        if (level === expectedReleased) sawReleased = true;
+        else if (level !== undefined) wrongLevel = true;
+      }
+    }
+  }
+  for (const read of reads) {
+    const level = stableLevel(read);
+    if (level === expectedPressed) sawPressed = true;
+    if (level === expectedReleased) sawReleased = true;
+    if (level !== undefined && level !== expectedPressed && level !== expectedReleased) wrongLevel = true;
+  }
+  const needsRelease = asks.some((ask) => ask.kind === "release");
+  let status: TestStatus;
+  let observed: string;
+  if (wrongLevel) {
+    status = "fail";
+    observed = "button transition had the wrong level";
+  } else if (sawPressed && (!needsRelease || sawReleased)) {
+    status = missingAnswer ? "unknown" : "pass";
+    observed = sawReleased ? "pressed and released" : "pressed";
+  } else if (statusForEnd(context.lines, "button.interactive") === "fail") {
+    status = "fail";
+    observed = "device reported a failed button test";
+  } else {
+    status = "unknown";
+    observed = missingAnswer ? "human answer or transition timed out" : "no button transition telemetry";
+  }
+  return { part: subject.part, pin: subject.pin, status, observed, expected: `press ${expectedPressed === 1 ? "HIGH" : "LOW"}, release ${expectedReleased === 1 ? "HIGH" : "LOW"}` };
+}
+
+function evaluateButtons(context: EvaluationContext): BenchTestResult {
+  const subjects = context.subjects.filter((subject): subject is Extract<SelfTestSubject, { kind: "button" }> => subject.kind === "button");
+  const results = subjects.map((subject) => evaluateButton(context, subject));
+  return testResult("button.interactive", results, aggregate(results.map((result) => result.status)) === "pass" ? "Button transitions matched the pull-up expectation." : "The button needs a clean press-and-release transition.");
+}
+
+function adcReadings(context: EvaluationContext, subject: Extract<SelfTestSubject, { kind: "light" | "pot" }>): Array<Extract<DeviceLine, { t: "adc" }>> {
+  return context.lines.filter(
+    (line): line is Extract<DeviceLine, { t: "adc" }> => line.t === "adc" && line.pin === subject.pin,
+  );
+}
+
+function firstPhase(readings: Array<Extract<DeviceLine, { t: "adc" }>>, phase: string): number | undefined {
+  const reading = readings.find((candidate) => candidate.phase.toLowerCase() === phase);
+  return reading !== undefined && Number.isFinite(reading.med) ? reading.med : undefined;
+}
+
+function calibrationFor(part: string, ambient: number, covered: number): Calibration {
+  const threshold = (ambient + covered) / 2;
+  const hysteresis = Math.max(10, Math.abs(ambient - covered) * 0.1);
+  return {
+    part,
+    ambient,
+    covered,
+    threshold,
+    hysteresis,
+    macros: {
+      [`VB_CAL_${part}_DARK`]: threshold,
+      [`VB_CAL_${part}_HYST`]: hysteresis,
+    },
+  };
+}
+
+function evaluateLight(context: EvaluationContext, subject: Extract<SelfTestSubject, { kind: "light" }>): SubjectResult {
+  const readings = adcReadings(context, subject);
+  const ambient = firstPhase(readings, "ambient");
+  const covered = firstPhase(readings, "covered");
+  if (ambient !== undefined && covered !== undefined) context.calibrations.push(calibrationFor(subject.part, ambient, covered));
+  const asks = asksFor(context.lines, "light.relative").filter((ask) => ask.part === undefined || ask.part === subject.part);
+  const missingAnswer = asks.some((ask) => answerMissing(context.answers[ask.id]));
+  if (ambient === undefined || covered === undefined) {
+    const status = statusForEnd(context.lines, "light.relative") === "fail" ? "fail" : "unknown";
+    return { part: subject.part, pin: subject.pin, status, observed: status === "fail" ? "device reported a failed light test without ADC data" : "ambient or covered ADC reading is missing", expected: "at least 15% ADC change when covered" };
+  }
+  const pinnedAmbient = ambient <= PINNED_LOW || ambient >= PINNED_HIGH;
+  const pinnedCovered = covered <= PINNED_LOW || covered >= PINNED_HIGH;
+  if (pinnedAmbient || pinnedCovered) {
+    context.signatures.lightPinnedRail = true;
+    context.signatures.lightPin = subject.pin;
+    context.signatures.lightPart = subject.part;
+    return { part: subject.part, pin: subject.pin, status: "fail", observed: `ADC ${ambient} → ${covered} (pinned at a rail)`, expected: "ambient and covered readings away from 0/1023 rails" };
+  }
+  const delta = Math.abs(ambient - covered);
+  const direction = subject.brighterReadsHigher ? ambient > covered : ambient < covered;
+  const status: TestStatus = delta >= LIGHT_CHANGE_MIN && direction && !missingAnswer ? "pass" : delta < LIGHT_CHANGE_MIN || !direction ? "fail" : "unknown";
+  return {
+    part: subject.part,
+    pin: subject.pin,
+    status,
+    observed: `ADC ${ambient} → ${covered} (Δ ${Math.round(delta)})`,
+    expected: `${Math.round(LIGHT_CHANGE_MIN)}+ ADC counts and ${subject.brighterReadsHigher ? "ambient higher than covered" : "ambient lower than covered"}`,
+  };
+}
+
+function evaluateLights(context: EvaluationContext): BenchTestResult {
+  const subjects = context.subjects.filter((subject): subject is Extract<SelfTestSubject, { kind: "light" }> => subject.kind === "light");
+  const results = subjects.map((subject) => evaluateLight(context, subject));
+  return testResult("light.relative", results, aggregate(results.map((result) => result.status)) === "pass" ? "The sensor changed enough between room light and a covered sensor." : "The light sensor did not produce a reliable relative change.");
+}
+
+function evaluatePot(context: EvaluationContext, subject: Extract<SelfTestSubject, { kind: "pot" }>): SubjectResult {
+  const readings = adcReadings(context, subject);
+  const min = firstPhase(readings, "min");
+  const max = firstPhase(readings, "max");
+  const asks = asksFor(context.lines, "pot.sweep").filter((ask) => ask.part === undefined || ask.part === subject.part);
+  const missingAnswer = asks.some((ask) => answerMissing(context.answers[ask.id]));
+  if (min === undefined || max === undefined) {
+    const status = statusForEnd(context.lines, "pot.sweep") === "fail" ? "fail" : "unknown";
+    return { part: subject.part, pin: subject.pin, status, observed: status === "fail" ? "device reported a failed pot test without ADC data" : "minimum or maximum ADC reading is missing", expected: "pot span ≥ 50% of full scale" };
+  }
+  const span = Math.abs(max - min);
+  const status: TestStatus = span >= ADC_FULL_SCALE * 0.5 ? (missingAnswer ? "unknown" : "pass") : "fail";
+  return { part: subject.part, pin: subject.pin, status, observed: `ADC ${min} → ${max} (span ${Math.round(span)})`, expected: `span ≥ ${Math.round(ADC_FULL_SCALE * 0.5)} counts` };
+}
+
+function evaluatePots(context: EvaluationContext): BenchTestResult {
+  const subjects = context.subjects.filter((subject): subject is Extract<SelfTestSubject, { kind: "pot" }> => subject.kind === "pot");
+  const results = subjects.map((subject) => evaluatePot(context, subject));
+  return testResult("pot.sweep", results, aggregate(results.map((result) => result.status)) === "pass" ? "The knob swept across its usable range." : "The knob did not show a half-scale sweep.");
+}
+
+function ledOrderForValue(value: string, plan: SelfTestPlan): number | undefined {
+  const normalized = value.trim().toLowerCase();
+  const numeric = /^\d+$/.test(normalized) ? Number(normalized) : undefined;
+  if (numeric !== undefined && plan.subjects.some((subject) => subject.kind === "led" && subject.order === numeric)) return numeric;
+  const byPart = plan.subjects.find((subject): subject is Extract<SelfTestSubject, { kind: "led" }> => subject.kind === "led" && normalized.includes(subject.part.toLowerCase()));
+  if (byPart !== undefined) return byPart.order;
+  const byLabel = plan.subjects.find((subject): subject is Extract<SelfTestSubject, { kind: "led" }> => subject.kind === "led" && normalized.includes(subject.label.toLowerCase()));
+  return byLabel?.order;
+}
+
+function evaluateLeds(context: EvaluationContext): BenchTestResult {
+  const leds = context.subjects.filter((subject): subject is Extract<SelfTestSubject, { kind: "led" }> => subject.kind === "led");
+  const asks = asksFor(context.lines, "led.sequence", "which-led");
+  const subjectResults: SubjectResult[] = [];
+  if (asks.length === 0) {
+    const status: TestStatus = statusForEnd(context.lines, "led.sequence") === "fail" ? "fail" : "unknown";
+    return testResult(
+      "led.sequence",
+      leds.map((led) => ({ part: led.part, pin: led.pin, status, observed: status === "fail" ? "device reported a failed LED test without an answer" : "no which-light prompt", expected: `light ${led.order}` })),
+      status === "fail" ? "The device reported an LED sequence failure." : "Waiting for the person to identify each blinking light.",
+    );
+  }
+  for (const [index, ask] of asks.entries()) {
+    const expected = ask.part === undefined ? leds[index] : leds.find((led) => led.part === ask.part);
+    if (expected === undefined) continue;
+    const raw = context.answers[ask.id];
+    const observedOrder = answerMissing(raw) ? undefined : ledOrderForValue(raw ?? "", context.plan);
+    let status: TestStatus = "unknown";
+    let observed = raw === undefined ? "no answer" : raw;
+    if (observedOrder !== undefined) {
+      status = observedOrder === expected.order ? "pass" : "fail";
+      observed = `light ${observedOrder}`;
+      if (status === "fail" && !context.signatures.ledMismatch) {
+        context.signatures.ledMismatch = true;
+        context.signatures.ledExpectedPart = expected.part;
+        context.signatures.ledExpectedOrder = expected.order;
+        context.signatures.ledObservedOrder = observedOrder;
+      }
+    } else if (!answerMissing(raw)) {
+      status = "fail";
+      observed = raw ?? "unrecognized answer";
+      if (!context.signatures.ledMismatch) {
+        context.signatures.ledMismatch = true;
+        context.signatures.ledExpectedPart = expected.part;
+        context.signatures.ledExpectedOrder = expected.order;
+      }
+    }
+    subjectResults.push({ part: expected.part, pin: expected.pin, status, observed, expected: `light ${expected.order} (${expected.label})` });
+  }
+  return testResult(
+    "led.sequence",
+    subjectResults.length > 0 ? subjectResults : leds.map((led) => ({ part: led.part, pin: led.pin, status: "unknown", observed: "no matching prompt", expected: `light ${led.order}` })),
+    aggregate(subjectResults.map((result) => result.status)) === "pass" ? "The person identified each LED in the expected order." : "The blinking LED answers did not match the physical order.",
+  );
+}
+
+function evaluateBuzzer(context: EvaluationContext): BenchTestResult {
+  const buzzers = context.subjects.filter((subject): subject is Extract<SelfTestSubject, { kind: "buzzer" }> => subject.kind === "buzzer");
+  const asks = asksFor(context.lines, "buzzer.confirm", "heard-beep");
+  const subjects = buzzers.map((buzzer, index) => {
+    const ask = asks.find((candidate) => candidate.part === buzzer.part) ?? asks[index];
+    const raw = ask === undefined ? undefined : context.answers[ask.id];
+    const value = normalizedAnswer(raw);
+    let status: TestStatus = "unknown";
+    let observed = "no hearing confirmation";
+    if (value === "yes" || value === "heard" || value === "beep") {
+      status = "pass";
+      observed = "heard a beep";
+    } else if (value === "no" || value === "silent") {
+      status = "fail";
+      observed = "no beep heard";
+    } else if (statusForEnd(context.lines, "buzzer.confirm") === "fail") {
+      status = "fail";
+      observed = "device reported a buzzer failure";
+    }
+    return { part: buzzer.part, pin: buzzer.pin, status, observed, expected: "heard a beep" };
+  });
+  return testResult("buzzer.confirm", subjects, aggregate(subjects.map((subject) => subject.status)) === "pass" ? "The buzzer was audible." : "The buzzer needs an audible confirmation.");
+}
+
+function endpointHole(endpoint: Endpoint): HoleId | undefined {
+  return "hole" in endpoint ? endpoint.hole : undefined;
+}
+
+
+function unique<T>(items: T[]): T[] {
+  return [...new Set(items)];
+}
+
+function netIdsForPart(circuit: Circuit, partId: string): Set<string> {
+  const ids = new Set<string>();
+  const queue: string[] = [];
+  for (const net of circuit.nets) {
+    if (net.pins.some((pin) => pin.part === partId)) {
+      ids.add(net.id);
+      queue.push(net.id);
+    }
+  }
+  const visited = new Set<string>();
+  while (queue.length > 0) {
+    const netId = queue.shift();
+    if (netId === undefined || visited.has(netId)) continue;
+    visited.add(netId);
+    const net = circuit.nets.find((candidate) => candidate.id === netId);
+    if (net === undefined || net.kind !== "signal") continue;
+    for (const ref of net.pins) {
+      const part = circuit.parts.find((candidate) => candidate.id === ref.part);
+      if (part?.module !== "resistor") continue;
+      const otherPin = ref.pin === "1" ? "2" : "1";
+      const otherNet = circuit.nets.find((candidate) => candidate.pins.some((pin) => pin.part === ref.part && pin.pin === otherPin));
+      if (otherNet !== undefined && !ids.has(otherNet.id)) {
+        ids.add(otherNet.id);
+        queue.push(otherNet.id);
+      }
+    }
+  }
+  return ids;
+}
+
+function highlightForCause(cause: string, context: EvaluationContext): { holes: HoleId[]; parts: string[]; jumpers: string[] } {
+  const layout = context.layout;
+  if (layout === undefined) return { holes: [], parts: [], jumpers: [] };
+  const profile = BREADBOARD_PROFILES[context.circuit.breadboard.profile];
+  const parts = new Set<string>();
+  const jumpers = new Set<string>();
+  const holes = new Set<HoleId>();
+  const addPart = (partId: string | undefined): void => {
+    if (partId === undefined) return;
+    parts.add(partId);
+    const placement = layout.placements.find((candidate) => candidate.part === partId);
+    if (placement !== undefined) for (const hole of Object.values(placement.pins)) holes.add(hole);
+  };
+  const addJumper = (jumperId: string): void => {
+    jumpers.add(jumperId);
+    const jumper = layout.jumpers.find((candidate) => candidate.id === jumperId);
+    if (jumper !== undefined) {
+      const from = endpointHole(jumper.from);
+      const to = endpointHole(jumper.to);
+      if (from !== undefined) holes.add(from);
+      if (to !== undefined) holes.add(to);
+    }
+  };
+  const jumperNetIds = (partId: string): void => {
+    const nets = netIdsForPart(context.circuit, partId);
+    for (const jumper of layout.jumpers) if (nets.has(jumper.net)) addJumper(jumper.id);
+  };
+
+  if (cause === "button-leg-in-gnd-row" || cause === "button-rotated-90" || cause === "jumper-to-gnd") {
+    const buttonId = context.signatures.buttonPart ?? context.subjects.find((subject) => subject.kind === "button")?.part;
+    addPart(buttonId);
+    if (buttonId !== undefined) {
+      const groundNetIds = new Set(context.circuit.nets.filter((net) => net.kind === "ground" && net.pins.some((pin) => pin.part === buttonId)).map((net) => net.id));
+      const placement = layout.placements.find((candidate) => candidate.part === buttonId);
+      const buttonGroundHoles = placement === undefined
+        ? []
+        : Object.entries(placement.pins).filter(([pin]) => context.circuit.nets.some((net) => groundNetIds.has(net.id) && net.pins.some((ref) => ref.part === buttonId && ref.pin === pin))).map(([, hole]) => hole);
+      for (const hole of buttonGroundHoles) holes.add(hole);
+      const groups = new Set(buttonGroundHoles.map((hole) => contactGroup(profile, hole)).filter((group): group is string => group !== null));
+      for (const jumper of layout.jumpers) {
+        const endpoints = [endpointHole(jumper.from), endpointHole(jumper.to)].filter((hole): hole is HoleId => hole !== undefined);
+        if (endpoints.some((hole) => {
+          const group = contactGroup(profile, hole);
+          return group !== null && groups.has(group);
+        })) addJumper(jumper.id);
+      }
+    }
+  } else if (cause === "led-jumpers-swapped" || cause === "led-reversed" || cause === "led-missing") {
+    const expected = context.signatures.ledExpectedPart;
+    addPart(expected);
+    if (expected !== undefined) jumperNetIds(expected);
+    for (const subject of context.subjects) if (subject.kind === "led" && (cause === "led-jumpers-swapped" || subject.part === expected)) {
+      addPart(subject.part);
+      jumperNetIds(subject.part);
+    }
+  } else if (cause === "divider-resistor-missing" || cause === "sensor-missing" || cause === "sensor-wrong-row") {
+    const lightPart = context.signatures.lightPart ?? context.subjects.find((subject) => subject.kind === "light")?.part;
+    addPart(lightPart);
+    if (lightPart !== undefined) jumperNetIds(lightPart);
+    const lightNets = netIdsForPart(context.circuit, lightPart ?? "");
+    for (const part of context.circuit.parts) {
+      if (part.module !== "resistor") continue;
+      if (context.circuit.nets.some((net) => lightNets.has(net.id) && net.pins.some((pin) => pin.part === part.id))) {
+        addPart(part.id);
+        jumperNetIds(part.id);
+      }
+    }
+  } else if (cause === "output-jumper-in-rail-row" || cause === "missing-resistor") {
+    const outputPart = context.signatures.outputPart ?? context.subjects.find((subject) => subject.kind === "led" || subject.kind === "buzzer")?.part;
+    addPart(outputPart);
+    if (outputPart !== undefined) jumperNetIds(outputPart);
+    if (cause === "missing-resistor" && outputPart !== undefined) {
+      const outputNets = netIdsForPart(context.circuit, outputPart);
+      for (const part of context.circuit.parts) {
+        if (part.module === "resistor" && context.circuit.nets.some((net) => outputNets.has(net.id) && net.pins.some((pin) => pin.part === part.id))) addPart(part.id);
+      }
+    }
+  } else if (cause === "rail-short" || cause === "cable") {
+    for (const jumper of layout.jumpers) if (jumper.net === "5V" || jumper.net === "GND") addJumper(jumper.id);
+  }
+
+  return { holes: unique([...holes]), parts: unique([...parts]), jumpers: unique([...jumpers]) };
+}
+
+function rowForPart(context: EvaluationContext, partId: string | undefined, pin?: string): number | undefined {
+  if (context.layout === undefined || partId === undefined) return undefined;
+  const placement = context.layout.placements.find((candidate) => candidate.part === partId);
+  if (placement === undefined) return undefined;
+  const hole = pin === undefined ? Object.values(placement.pins)[0] : placement.pins[pin];
+  const parsed = hole === undefined ? undefined : parseHole(hole);
+  return parsed?.kind === "terminal" ? parsed.row : undefined;
+}
+
+function primaryRule(events: RuleEvent[]): RuleEvent | undefined {
+  return [...events].sort((left, right) => right.priority - left.priority)[0];
+}
+
+function signatureRecord(signatures: SignatureState): Record<DiagnosisSignature, boolean> {
+  return {
+    buttonStuckLow: signatures.buttonStuckLow,
+    ledMismatch: signatures.ledMismatch,
+    lightPinnedRail: signatures.lightPinnedRail,
+    outputStuck: signatures.outputStuck,
+    noBanner: signatures.noBanner,
+  };
+}
+
+function summaryFor(event: RuleEvent | undefined, context: EvaluationContext, fallback: string): string {
+  if (event === undefined) return fallback;
+  switch (event.signature) {
+    case "buttonStuckLow": {
+      const pin = context.signatures.buttonPin ?? "the button pin";
+      const part = context.signatures.buttonPart ?? context.subjects.find((subject) => subject.kind === "button")?.part ?? "button";
+      const row = rowForPart(context, part);
+      return `Houston, we have a problem: ${pin} reads LOW even with ${part} released — its leg${row === undefined ? "" : ` shares row ${row}`} with the GND jumper.`;
+    }
+    case "ledMismatch": {
+      const part = context.signatures.ledExpectedPart ?? "the LED";
+      const expected = context.signatures.ledExpectedOrder ?? 0;
+      const observed = context.signatures.ledObservedOrder ?? 0;
+      const row = rowForPart(context, part);
+      return `Houston, we have a problem: ${part} on light ${expected} blinked as light ${observed}${row === undefined ? "" : ` near row ${row}`} — check the LED jumpers.`;
+    }
+    case "lightPinnedRail": {
+      const pin = context.signatures.lightPin ?? "the light pin";
+      const part = context.signatures.lightPart ?? "light sensor";
+      const row = rowForPart(context, part);
+      return `Houston, we have a problem: ${pin} (${part}) is pinned at a rail in both light phases${row === undefined ? "" : ` near row ${row}`} — inspect the divider.`;
+    }
+    case "outputStuck": {
+      const pin = context.signatures.outputPin ?? "the output pin";
+      const part = context.signatures.outputPart ?? "output";
+      const level = context.signatures.outputLevel === 0 ? "LOW" : "HIGH";
+      const row = rowForPart(context, part);
+      return `Houston, we have a problem: ${pin} (${part}) is stuck ${level}${row === undefined ? "" : ` near row ${row}`} — unplug before changing the wiring.`;
+    }
+    case "noBanner": {
+      const railRow = event.causes.some((cause) => cause.cause === "rail-short") ? rowForPart(context, "board") : undefined;
+      return `Houston, we have a problem: the board did not send its hello banner${railRow === undefined ? "" : ` near row ${railRow}`} — unplug, check the 5 V/GND rails, and try a data USB cable.`;
+    }
+  }
+}
+
+function candidateScore(event: RuleEvent, cause: RuleCause): number {
+  return event.priority + cause.likelihood;
+}
+
+function candidatesFor(events: RuleEvent[], context: EvaluationContext): BenchRunResult["diagnosis"]["candidates"] {
+  const candidates = events.flatMap((event) => event.causes.map((cause) => ({ event, cause, score: candidateScore(event, cause) })));
+  candidates.sort((left, right) => right.score - left.score);
+  return candidates.map(({ cause }) => ({
+    cause: cause.cause,
+    title: cause.title,
+    likelihood: cause.likelihood,
+    highlight: highlightForCause(cause.cause, context),
+    fix: cause.fix,
+  }));
+}
+
+function verdictFor(results: BenchTestResult[]): BenchRunResult["verdict"] {
+  if (results.some((result) => result.status === "fail")) return "fail";
+  if (results.some((result) => result.status === "unknown")) return "incomplete";
+  return "pass";
+}
+
+export async function evaluateRun(input: {
+  circuit: Circuit;
+  layout?: Layout;
+  plan: SelfTestPlan;
+  lines: DeviceLine[];
+  answers: Record<string, string>;
+  kind: BenchRunResult["kind"];
+  revision: number;
+  runId: string;
+}): Promise<BenchRunResult> {
+  const hasHello = input.lines.some((line) => line.t === "hello");
+  const noisyFailure = input.lines.some((line) => {
+    if (line.t !== "err" && line.t !== "log") return false;
+    return /usb|power|reset|banner|disconnect|drop/i.test(line.msg);
+  });
+  const context: EvaluationContext = {
+    circuit: input.circuit,
+    layout: input.layout,
+    plan: input.plan,
+    lines: input.lines,
+    answers: input.answers,
+    subjects: input.plan.subjects,
+    signatures: {
+      buttonStuckLow: false,
+      ledMismatch: false,
+      lightPinnedRail: false,
+      outputStuck: false,
+      noBanner: !hasHello || noisyFailure,
+      designMismatch: false,
+    },
+    calibrations: [],
+  };
+
+  const results: BenchTestResult[] = [];
+  for (const test of input.plan.tests) {
+    switch (test) {
+      case "rails.vcc":
+        results.push(evaluateRails(context));
+        break;
+      case "pins.readonly": {
+        const evaluated = evaluatePins(context);
+        results.push(evaluated.result);
+        if (evaluated.stuck !== undefined) results.push(evaluated.stuck);
+        break;
+      }
+      case "button.interactive":
+        results.push(evaluateButtons(context));
+        break;
+      case "light.relative":
+        results.push(evaluateLights(context));
+        break;
+      case "pot.sweep":
+        results.push(evaluatePots(context));
+        break;
+      case "led.sequence":
+        results.push(evaluateLeds(context));
+        break;
+      case "buzzer.confirm":
+        results.push(evaluateBuzzer(context));
+        break;
+      case "digital.stuck":
+      case "net.continuity":
+        break;
+    }
+  }
+
+  const events = await runDiagnosisRules(signatureRecord(context.signatures));
+  const primary = primaryRule(events);
+  const verdict = verdictFor(results);
+  const fallback = verdict === "pass"
+    ? "All bench checks passed."
+    : verdict === "incomplete"
+      ? "Houston, we have a problem: the bench run is incomplete — telemetry or a human answer timed out."
+      : context.signatures.designMismatch
+        ? "Houston, we have a problem: the board's design banner does not match this revision."
+        : "Houston, we have a problem: a bench signature did not match the design.";
+  const diagnosis = {
+    attribution: primary?.attribution ?? (context.signatures.designMismatch ? "design" : verdict === "pass" ? "none" : verdict === "incomplete" ? "unknown" : "component"),
+    candidates: candidatesFor(events, context),
+    summary: summaryFor(primary, context, fallback),
+  } as BenchRunResult["diagnosis"];
+
+  return {
+    runId: input.runId,
+    revision: input.revision,
+    kind: input.kind,
+    results,
+    diagnosis,
+    calibration: context.calibrations,
+    verdict,
+  };
+}
+
+export function calibrationMacros(calibration: Calibration[]): Record<string, number> {
+  const macros: Record<string, number> = {};
+  for (const entry of calibration) {
+    const generated = {
+      [`VB_CAL_${entry.part}_DARK`]: entry.threshold,
+      [`VB_CAL_${entry.part}_HYST`]: entry.hysteresis,
+    };
+    for (const [name, value] of Object.entries(generated)) macros[name] = value;
+    for (const [name, value] of Object.entries(entry.macros)) macros[name] = value;
+  }
+  return macros;
+}
