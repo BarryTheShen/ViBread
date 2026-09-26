@@ -11,6 +11,7 @@ export type LiveSimInput =
 
 export type LiveSimOutput =
   | { type: "started" }
-  | { type: "state"; timeMs: number; parts: Record<string, number> }
+  /** `tones`: what each buzzer is producing right now in Hz (0 = silent), for the speaker. */
+  | { type: "state"; timeMs: number; parts: Record<string, number>; tones: Record<string, number> }
   | { type: "serial"; text: string }
   | { type: "error"; message: string };

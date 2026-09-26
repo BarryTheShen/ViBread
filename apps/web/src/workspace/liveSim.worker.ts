@@ -2,6 +2,7 @@
 
 import type { Circuit } from "@vibread/core";
 import { SimSession } from "@vibread/sim/browser";
+import { buzzerTones } from "./buzzerAudio.js";
 import type { LiveSimInput, LiveSimOutput } from "./liveSimProtocol.js";
 
 /**
@@ -29,7 +30,7 @@ function snapshot(): void {
       parts[part.id] = 0;
     }
   }
-  post({ type: "state", timeMs: session.timeMs, parts });
+  post({ type: "state", timeMs: session.timeMs, parts, tones: buzzerTones(circuit.parts, session) });
 }
 
 function stop(): void {
