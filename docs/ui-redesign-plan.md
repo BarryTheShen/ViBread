@@ -1,285 +1,369 @@
-# ViBread redesign plan — v2 (after plan critique)
+# ViBread redesign plan — v3
 
-Status: **for your review** (Sat Sep 26, ≈15:00 CT). Nothing is built yet. v1 was reviewed by a plan critic; all 18 of its
-points are folded in below. Decisions you need to make are in §8.
+Status: **for your review** (Sat Sep 26, ≈15:45 CT). Nothing is built yet. v2 was checked by a plan critic (all 18 points
+folded in). v3 adds what you asked for: how the pieces connect (§2), how the inventory shows up in the UI (§3.3, §5.4),
+the build and test part after GO (§4), phone and camera (§6), and a bigger catalog of part "objects" you can extend
+yourself (§5.1–5.3). Decisions for you: §11.
 
 ## 1. Summary
 
-**What changes**
-1. **Works like Claude desktop.** Missions are listed in a left sidebar like Claude's sessions. A new mission starts in a
-   chat box, not a form. The mission is one conversation: Claude's replies, one-line collapsible rows for each check
-   ("Electrical checks · GO"), approval cards, and a slim status bar with the five checks and **GO for build**.
-2. **Results in a side panel** (like Claude's artifacts): schematic, build steps, code, tests, Try it, replay, telemetry.
-3. **Camera-first parts inventory.** Take photos of your parts → Claude identifies them → ViBread converts what it saw
-   into standard catalog entries → you confirm → saved to your inventory. New missions use the inventory automatically.
-   Typing parts ("3 red LEDs, 5x 220 ohm") works too and needs no Claude key.
-4. **Claude-desktop look**: warm ivory (or warm dark gray) background, terracotta accent, sans-serif interface with a
-   serif font for Claude's replies, thin borders instead of shadows.
+1. **Works like Claude desktop.** Missions are listed in a sidebar like Claude's sessions. Each mission is one chat:
+   Claude's replies, short rows for checks, approvals and progress, and a side panel for results (schematic, parts,
+   build steps, code, tests, simulation). One **next-step button** in the header walks you through the whole mission:
+   GO for build → build → test on the bench → done.
+2. **Inventory = your parts, mostly by camera.** Photograph your parts → Claude identifies them → ViBread turns that into
+   standard catalog entries → you confirm. Typing ("3 red LEDs, 5x 220 ohm") works too, without a Claude key.
+3. **A catalog of part types you can extend.** Each part type is an object with fields (LED → colour, size;
+   resistor → resistance). About 35 common starter-kit parts are built in, and you can make your own type in a minute:
+   from scratch, by copying one, or straight from an unknown part in a scan.
+4. **Build on the laptop or the phone.** After GO for build the steps appear in the side panel and on your phone. The
+   phone (paired once by QR) also scans parts and photo-checks steps.
+5. **Claude-desktop look**: warm ivory or warm dark gray, terracotta accent, sans-serif interface, serif for Claude's
+   replies.
 
-**What stays**: all features and rules — five checks, GO for build (incl. the "without review" dialog), build steps,
-phone Build Mode, bench self-test, simulation, approvals, permission modes, recorded-run labels, iMessage, Claude Code
-connection, phone pairing. The Apollo names stay as small labels.
+**Stays the same**: all rules and features — five checks, GO for build (with the "without review" dialog), build steps,
+bench self-test, simulation, approvals, permission modes, recorded-run labels, iMessage, Claude Code connection, phone
+pairing and its security. **Effort**: ≈5 h with 7 agents, then 1.5 h QA/audit, then re-recording the demo video.
 
-**Effort**: ≈5 h with 6 agents + 1.5 h QA/audit + 1 h re-recording the demo video. Needs a Claude credential for the
-scan (see §8).
+## 2. How it all fits together
 
-## 2. Screens
-
-### 2.1 Shell and new mission
-
-```
-┌─────────────────┬───────────────────────────────────────────────────────────────────┐
-│ ViBread       « │                 Good afternoon. What are we building?              │
-│ [+ New mission] │      ┌──────────────────────────────────────────────────────────┐  │
-│ ▤ Inventory  23 │      │ A lamp that fills like the moon when I press a button…   │  │
-│─────────────────│      │ [Parts: all inventory (23)]   [Review ▾]             (↑) │  │
-│ Today           │      └──────────────────────────────────────────────────────────┘  │
-│ ● Moon lamp     │        Night light · Traffic light · Reaction game · Doorbell      │
-│ ◐ Night light   │        Inventory empty? [Scan your parts]                          │
-│ Earlier         │                                                                    │
-│ ✓ Launch control│                                                                    │
-│─────────────────│                                                                    │
-│ ⚙ Settings      │                                                                    │
-│ ● Claude ready  │                                                                    │
-└─────────────────┴───────────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart LR
+  CAM[Phone camera] --> REV[Scan review]
+  UP[Upload photos / type parts] --> REV
+  TYPES[Catalog + your part types] --> REV
+  REV --> INV[(Inventory)]
+  INV -->|copy of usable parts| CHAT[Mission chat]
+  CHAT --> DES[Claude designs from your parts]
+  DES --> CHK[Five checks + simulation]
+  CHK --> GO{GO for build}
+  GO --> STEPS[Build steps: laptop panel + phone]
+  STEPS --> BENCH[Bench test: USB or virtual board]
+  BENCH -->|problem| DIAG[Diagnosis: highlighted holes] --> STEPS
+  BENCH -->|real board passed| DONE[Mission complete]
+  DONE -.->|parts in use| INV
 ```
 
-- Enter creates the mission with the inventory attached; the text becomes the first message. Cmd/Ctrl+N = new mission.
-- Status dot per mission (from the 9 mission phases):
+- **Inventory** belongs to you and is shared by all missions. A **mission** keeps its own copy of the parts it may use,
+  so editing the inventory later doesn't change old missions.
+- **One mission = one chat + one side panel + one next-step button.** Everything that happens (design versions, checks,
+  GO, build progress, photo checks, bench runs) appears in the chat in time order; details open in the panel.
 
-| Phases | Dot | Label |
+| Mission state | Next-step button (header) | What it opens |
 |---|---|---|
-| BRIEF, CLARIFY, DESIGN | ● accent | Designing |
-| GONOGO | ◐ amber | Ready for GO |
-| ASSEMBLE | ▲ blue | Building |
-| VERIFY, DEBUG | ◆ blue | Testing |
-| LAUNCH | ★ green | Launched |
-| DONE | ✓ green | Done |
+| Claude designing / checks running | *Claude is working… · Stop* | — |
+| Checks finished | **GO for build** | today's GO dialog (same rules) |
+| Building | **Build steps · 12/33** | Build steps view + phone QR |
+| All steps done | **Test on the bench** | Bench view |
+| Virtual board passed | **Test with your Arduino** | Bench view (as today: practice doesn't count) |
+| Real board passed | **Does it work?** | confirm card in the chat |
+| Done | **Done ✓** | mission summary |
 
-### 2.2 Mission conversation + panel
+## 3. Screens
+
+### 3.1 Shell and new mission
 
 ```
-┌────────┬─────────────────────────────────────────────┬──────────────────────────────┐
-│sidebar │ Moon lamp   ●●●●○ checks   [GO for build] ⋯ │ Schematic ▾   r2 ▾   ⤓   ✕  │
-│        │─────────────────────────────────────────────│──────────────────────────────│
-│        │                   ┌───────────────────────┐ │                              │
-│        │                   │ A lamp that fills …   │ │     (schematic drawing)      │
-│        │                   └───────────────────────┘ │                              │
-│        │ I'll use your 4 yellow LEDs and 220 Ω …     │                              │
-│        │ ▸ Design r1 proposed                        │                              │
-│        │ ▸ Electrical checks                  GO     │                              │
-│        │ ▸ Simulation tests            NO-GO 7/8     │                              │
-│        │ ▸ Design r2 proposed        all checks GO   │                              │
-│        │ ┌ Release r2 as the build target? ───────┐  │                              │
-│        │ │ [Allow once] [Allow for mission] [Deny]│  │                              │
-│        │ └────────────────────────────────────────┘  │                              │
-│        │ ┌─────────────────────────────────────────┐ │                              │
-│        │ │ Reply…                 [Review ▾]   (↑) │ │                              │
-│        │ └─────────────────────────────────────────┘ │                              │
-└────────┴─────────────────────────────────────────────┴──────────────────────────────┘
+┌─────────────────┬──────────────────────────────────────────────────────────────────┐
+│ ViBread       « │                Good afternoon. What are we building?              │
+│ [+ New mission] │     ┌───────────────────────────────────────────────────────────┐ │
+│ ▤ Inventory  23 │     │ A lamp that fills like the moon when I press a button…    │ │
+│─────────────────│     │ [Parts: all inventory (23)]   [Review ▾]              (↑) │ │
+│ Today           │     └───────────────────────────────────────────────────────────┘ │
+│ ● Moon lamp     │       Night light · Traffic light · Reaction game · Doorbell      │
+│ ▲ Night light   │       Inventory empty? [Scan your parts]                          │
+│ Earlier         │                                                                   │
+│ ✓ Launch control│                                                                   │
+│ ⚙ Settings      │                                                                   │
+└─────────────────┴──────────────────────────────────────────────────────────────────┘
 ```
 
-- **Where rows come from**: the check/release/bench/phase rows are timeline events (console reports, releases, bench
-  runs, phase changes), not chat messages. The chat merges them in time order as MUI X Chat custom `data-*` parts
-  ([MUI docs](https://mui.com/x/react-chat/display/message-parts/custom-parts/)). This is what makes the 3 example
-  missions (which have no chat history) show their story: design r1 → checks → release.
-- Every existing feature gets a home:
+- Enter creates the mission with your inventory attached; the text becomes the first message. Cmd/Ctrl+N = new mission.
+- The **Parts** chip shows how many parts Claude may use and opens the inventory (choosing a subset per mission: SHOULD).
+- Mission dots: ● designing (BRIEF/CLARIFY/DESIGN) · ◐ ready for GO (GONOGO) · ▲ building (ASSEMBLE) · ◆ testing
+  (VERIFY/DEBUG) · ★ launched (LAUNCH) · ✓ done (DONE).
 
-| Feature | New home |
+### 3.2 Mission chat and side panel
+
+```
+┌────────┬──────────────────────────────────────────────┬───────────────────────────────┐
+│sidebar │ Moon lamp  ●●●●○  [Build steps · 12/33]    ⋯ │ Build steps ▾   r2 ▾   ⤓   ✕ │
+│        │──────────────────────────────────────────────│───────────────────────────────│
+│        │                   ┌────────────────────────┐ │ Step 12 of 33 · USB unplugged │
+│        │                   │ A lamp that fills …    │ │  (step picture)               │
+│        │                   └────────────────────────┘ │ Put LED4 in e24 (+) and e25   │
+│        │ I'll use 4 of your yellow LEDs and 220 Ω …   │ Parts: 1× yellow LED          │
+│        │ ▸ Design r2 · uses 9 of your 23 parts   ✓    │ [I did this]  [◀ ▶]           │
+│        │ ▸ Five checks                      all GO    │ Phone: [QR]                   │
+│        │ ▸ GO for build · by you                      │                               │
+│        │ ▸ Steps 1–11 done (phone)                    │                               │
+│        │ ▸ Photo check step 11 · LED3 correct         │                               │
+│        │ ┌──────────────────────────────────────────┐ │                               │
+│        │ │ Reply…                  [Review ▾]   (↑) │ │                               │
+│        │ └──────────────────────────────────────────┘ │                               │
+└────────┴──────────────────────────────────────────────┴───────────────────────────────┘
+```
+
+- **Panel views** (switcher + design-version picker): **Parts** (new: what the design uses vs what you have) ·
+  Schematic · Build steps · Code · Tests · Try it · Replay · Checks (findings of all five) · Telemetry · Diagnosis ·
+  Photo checks. The panel opens by itself on the first design (Schematic), after GO (Build steps) and after a bench
+  problem (Diagnosis).
+- **Where the rows come from**: check, GO, build, photo-check and bench rows are timeline events merged into the chat
+  in time order as MUI X Chat custom parts ([MUI docs](https://mui.com/x/react-chat/display/message-parts/custom-parts/)).
+  That is also what makes the example missions (which have no chat history) show their story.
+- **Other homes**: approvals from the agent → inline card; approvals from iMessage/Claude Code → pinned above the chat
+  box; permission mode (+ "board actions always wait for you") → mode picker in the chat box; agent working / Claude not
+  connected → header chip; recorded run → banner + chips (as today); bench, rename, delete, phone link → ⋯ menu;
+  Settings → dialog (`/settings` still works); `/login`, `/consent`, phone pages → outside the shell.
+- *Inspiration, not a copy*: Claude's Chat tab opens artifacts in a window to the right; the Code tab has panes and a
+  mode picker next to send [1][2][3].
+
+### 3.3 Inventory page
+
+```
+ Inventory · 23 parts     [📷 Scan parts]  [Type parts]  [+ Add part]  [+ New part type]
+ Search…     All · Ready · Needs a look · In use · Not usable in designs
+ LIGHTS     Red LED · 5 mm              6   ready                       used in: Moon lamp
+            Yellow LED · 5 mm           4   ready
+ RESISTORS  220 Ω                       10  ready
+            10 kΩ                       5   needs a look (10 kΩ or 1 kΩ?)
+ SWITCHES   Push button                 2   ready
+            Tilt switch                 1   basic (your pins)
+ SENSORS    Thermistor (NTC)            1   modelled as light sensor
+ MOTORS     SG90 servo                  1   list only — can't design with it yet
+ BOARD      Arduino Uno R3              1   board for new missions
+```
+
+Each row: quantity stepper, status, **used in** (links to missions), ⋯ (edit fields, change type, delete). Statuses:
+**ready** · **needs a look** (unsure reading, fix before use) · **modelled as …** / **basic** (usable with limits, see
+§5.2) · **list only**.
+
+### 3.4 New part type (the "object" editor)
+
+```
+ New part type                                              Start from: [blank ▾ / copy LED / scan crop]
+ Name        [IR obstacle sensor        ]  Category [Sensors ▾]   Picture [from scan ✓]
+ Fields      Name       Kind            Values                   Different value = different part
+             [Range  ]  [choice ▾]      [short, long]            [✓]              [+ add field]
+ Treat as    ○ Works like a built-in part  [light sensor ▾]   (only parts with the same pins are offered)
+             ● My pins   [3-pin module: VCC · GND · OUT ▾]    OUT is a [digital output ▾]
+             ○ Just keep it in my list
+ Also called [IR sensor, obstacle module]                                      [Cancel]  [Save]
+```
+
+## 4. Build and test after GO (assembly)
+
+1. **GO for build** → the panel switches to **Build steps**, the header button becomes **Build steps · 0/33**, and the
+   chat says "Build started — scan the QR to follow on your phone".
+2. **Step 1 "Gather your parts"** (the existing inventory step): the design's parts list checked against your inventory
+   ("need 4 · have 6 ✓", "need 1 · missing" → *Ask Claude to redesign without it*). SHOULD: your own part photos from
+   the scan next to each part.
+3. **Every step** (today's content): picture (focused or whole board), exact holes, parts for this step, USB plugged or
+   unplugged, **I did this** (now on the laptop too, not only the phone), **Check with camera** on the phone (advisory
+   photo check against the step picture).
+4. **Laptop and phone stay in sync** (both poll every 1–2 s). The chat gets one row per group of steps and one per photo
+   check.
+5. **After the last step** → **Test on the bench** → Bench view inside the shell (← back to chat), same 7 bench steps,
+   USB or virtual board. The result comes back as a chat row; a problem opens **Diagnosis** in the panel (highlighted
+   holes + fix), and *Fix and retest* returns to the bench.
+6. **Real board passed** → **Does it work?** card → Done. SHOULD: "Keep it built (parts marked in use)" or "Taking it
+   apart (parts back in the inventory)".
+
+## 5. Inventory system
+
+### 5.1 Part types and fields (the standardized database)
+
+- A **part type** is an object with **fields**. Examples: LED → colour (choice), size (choice); Resistor → resistance
+  (number, Ω), bands (4 or 5); Knob → resistance (number, Ω).
+- Each field says whether it **changes the electronics** (LED colour, resistance — the checks and simulation use these)
+  or not (size, package, brand).
+- Each type also has: name, category, also-called names (used for typing and scanning), a short "how to recognise it in
+  a photo", its **support level** (§5.2) and how it maps into a design.
+- An **inventory item** = part type + field values + quantity + photo + status. Same type + same identity values (e.g.
+  `resistor 220 Ω`) = one item; quantities add up.
+- Built-in types live in code (versioned); your own types are stored per user.
+
+### 5.2 Default catalog (≈35 types)
+
+| Support level | What ViBread can do with it | Built-in part types |
+|---|---|---|
+| **Full** | design, checks, simulation, breadboard steps, bench self-test | LED (colour: red, yellow, green, blue, white; size 3/5/10 mm) · resistor (E24/E96) · push button (4-pin) · light sensor (LDR) · knob (rotary, 3-pin) · buzzer (active / passive) |
+| **Modelled as** | uses a Full part's simulation and checks, labelled "modelled as …"; the bench calibrates the real part | trimmer potentiometer (inline pins) → knob · NTC thermistor, force sensor (FSR), flex sensor → light sensor · piezo disc → passive buzzer |
+| **Basic** | uses its pins; basic on/off or analog simulation; always marked unverified; no bench self-test; pins pre-filled | tilt switch · reed switch · slide switch · PIR motion module · sound module (digital out) · IR obstacle module · soil-moisture module (analog out) |
+| **List only** | kept in your inventory; Claude is told you own it but doesn't design with it | RGB LED · capacitors · diodes · transistors · 7-segment display · LCD 16×2 · 74HC595 · DHT11 · HC-SR04 · IR receiver + remote · keypad · joystick · servo · DC and stepper motors · relay module · battery holders |
+| **Board and supplies** | used by the mission and the build steps | Arduino (Uno R3 / Nano) · breadboard (400 / 830) · jumper wires (M-M, M-F, F-F) · USB cable |
+
+Motors, servos, relays and mains stay out of designs (PLAN scope; the design prompt already refuses them).
+
+### 5.3 Your own part types
+
+- **Start from**: blank · a copy of a built-in type ("Copy LED" → change fields) · an unknown part in a scan (name,
+  description and photo pre-filled).
+- **Fields**: add or remove; kinds: choice list, number + unit, yes/no, text; tick *different value = different part*
+  for identity fields like colour.
+- **New values for built-in fields**: fields that don't change the electronics (size, package) take new values right
+  away. A new LED colour needs its forward voltage; if you don't know it, checks use the widest safe range
+  (1.8–3.4 V) and say "assumed" (SHOULD — needs a core change).
+- **Treat as**:
+  - *Works like a built-in part* → **modelled as** (offered only when pins and shape match, e.g. a 2-lead sensor →
+    light sensor);
+  - *My pins* → **basic** (templates: "2-pin switch", "3-pin module VCC/GND/OUT", "2-lead part", or list pins with
+    their type);
+  - *Just keep it in my list* → **list only**.
+- Renaming or editing a type never breaks existing items. SHOULD: export/import types as a file to share with the team.
+
+### 5.4 From inventory to a mission
+
+- When a mission starts, ViBread copies your usable items into it. This happens in the mission service, so web,
+  iMessage, Claude Code (MCP) and A2A missions all get it.
+
+| Support level | Goes into the mission as |
 |---|---|
-| Five checks + findings | Header dots (tooltip = Apollo name); click → "Checks" view in the panel |
-| GO for build + "without review" dialog | Header button, same rules and dialog |
-| Approvals from the agent | Inline card in the chat |
-| Approvals from iMessage / Claude Code | Pinned cards above the composer |
-| Permission mode + "board actions always wait for you" note | Mode picker in the composer; the note is its help text |
-| Agent working / offline / Claude not connected | Small chip in the header |
-| Recorded run banner + models | Banner under the header; chips on messages (unchanged) |
-| Schematic, steps, code, tests, Try it, replay, telemetry, photo check | Panel views with revision picker |
-| Bench | ⋯ menu → Bench (full screen inside the shell, restyled only) |
-| Phone link / QR | Build steps view + ⋯ menu |
-| Mission complete | Inline card in the chat |
-| Settings | Dialog; `/settings` still works as a link and opens it |
-| Claude Code sign-in (`/login`, `/consent`) and phone pages (`/b`, `/scan`) | Stay outside the shell |
+| Full | the library part with its values (e.g. `led` red) |
+| Modelled as | the base library part, labelled with your type's name ("Thermistor (modelled as light sensor)") |
+| Basic | a generic part with its role, description and your pins |
+| List only | a text line for Claude: "also owns 1 SG90 servo — ViBread can't design with it" |
+| Board / breadboard | mission settings (SHOULD) |
 
-*Inspiration, not a copy*: Claude desktop's Chat tab opens artifacts in a right-side window; the Code tab uses
-arrangeable panes; "Allow once / Always allow / Deny" is Claude Code's site-permission card. [1][3]
+- Contract change (Step 0): a mission part gains an optional `label` and `pinout`, which Claude copies into the design.
+- When Claude wants a part you don't have (its *add part* request), the approval card says "not in your inventory";
+  approving asks "Do you have it? → add to inventory".
+- The **Parts** view shows, per design version, need vs have; inventory rows show **used in**.
 
-### 2.3 Inventory
+### 5.5 Merge rules
 
-```
-┌────────┬──────────────────────────────────────────────────────────────────────────┐
-│sidebar │ Inventory · 23 parts          [📷 Scan parts]  [Type parts]  [+ Add]     │
-│        │ LEDs          Red LED            [− 6 +]   ready                    ⋯   │
-│        │               Yellow LED         [− 4 +]   ready                    ⋯   │
-│        │ Resistors     220 Ω              [− 10 +]  ready                    ⋯   │
-│        │               10 kΩ              [− 5 +]   needs a look (10k or 1k?) ⋯   │
-│        │ Inputs        Push button        [− 2 +]   ready                    ⋯   │
-│        │ Board         Arduino Uno R3     [− 1 +]   ready                    ⋯   │
-│        │ Other         Blue 4-pin module  [− 1 +]   not in library           ⋯   │
-└────────┴──────────────────────────────────────────────────────────────────────────┘
-```
+- Review rows show **have 10 → will be 19** with an **Add / Replace** switch; Replace is the default when the part is
+  already in the inventory, so scanning the same kit twice doesn't double the counts (the design agent never uses more
+  than the listed count).
+- Editing a part so it matches another item merges them.
 
-Status words: **ready** (catalog part, used by missions) · **needs a look** (unsure reading, fix before use) ·
-**not in library** (kept for reference; used only after you give its pins and role).
+### 5.6 Camera scan
 
-## 3. Inventory system
+- **Session**: the laptop creates a scan and shows a QR code; photos arrive from the phone (or an upload); the laptop
+  shows *Waiting for photos… → Reading… → review*. Scans still running at a server restart are marked failed.
+- **Identify**: Claude Sonnet 5 with a fixed output format, effort low/medium. It gets the catalog (built-in and your
+  own types: names, also-called names, how they look), so it recognises your types too. It reports only what it sees:
+  type or "unknown", lens colour, band colours, printed code, pin count, count, confidence. Photos use the
+  high-resolution tier (long edge ≤ 2576 px); crops are cut from exactly that image [5].
+- **Normalize** (our code, tested): resistor bands decoded both ways and kept only if they're a standard value; **ready**
+  only if exactly one value remains, it's 4-band with a gold/silver end and Claude was confident — otherwise **needs a
+  look** with the candidates. Printed values on tape win. Knob codes ("103" = 10 kΩ) and text ("4k7") → values.
+- **Review**: crop + matched type + editable fields + count ("may be off" [5]) + Add/Replace. An unknown part → *pick a
+  type*, *create a new type from it*, or remove.
+- **Tips before capture**: white paper, one kind per group, ≤ 10 per group, spaced apart, good light, each pile once.
+- **No Claude key**: the Scan button says so and opens Type parts. Scans are rate-limited (≈1–3 ¢ per photo).
 
-### 3.1 The catalog (the standardized database)
+### 5.7 Storage and API
 
-A versioned catalog in code (`packages/core/src/catalog.ts`). Each inventory entry = catalog kind + normalized
-parameters. How it maps into a mission (missions keep today's `InventoryItem`, so agents and checks don't change):
+- Tables: `part_types` (your types), `inventory_items`, `inventory_scans`.
+- Routes: `GET /api/catalog` (built-in + your types) · `POST/PATCH/DELETE /api/catalog/types[/:id]` ·
+  `GET /api/inventory` · `POST /api/inventory/items` (batch add/replace) · `PATCH/DELETE /api/inventory/items/:id` ·
+  `POST /api/inventory/parse` (typed text → preview, no AI) · scans: `POST /scans`, `POST /scans/:id/photos`,
+  `POST /scans/:id/analyze`, `GET /scans/:id`, `GET /scans/:id/crops/:n`, `POST /scans/:id/accept`.
+- New read-only MCP tool `vibread_get_inventory` for Claude Code.
 
-| Catalog kind | Parameters | Into a mission as |
+## 6. Phone and camera
+
+- **One phone app.** Open the QR once (Settings → Phones, the Scan dialog, or the Build steps view) → the phone is
+  paired → *Add to Home Screen*. Its home (`/b`, today's build picker) gets three buttons:
+  1. **Continue building** — steps, *I did this*;
+  2. **Scan parts** — photos go to a scan you review on the laptop or the phone;
+  3. **Check this step** — photo check, inside a build.
+- **Camera**: the button opens the phone's own camera app (file input with `capture=environment`). This works over the
+  laptop's plain http Wi-Fi address and is already used by Build Mode today. A live viewfinder inside the page would
+  need HTTPS, so we don't use one.
+- **Photos**: uploaded to the laptop (iPhone HEIC converted), kept in ViBread's data folder, sent to Claude only for
+  the scan or the photo check.
+- **Sync**: the scan id is in the QR code; phone and laptop both poll every 1–2 s.
+- **Requirements**: the phone on the same Wi-Fi as the laptop, or the laptop on the phone's hotspot (venue Wi-Fi often
+  blocks devices from reaching each other); allow the firewall prompt once on the laptop.
+- **Security (unchanged)**: a paired phone can only use Build Mode, scanning and photo checks; Settings → Phones →
+  *Unpair all*.
+- **Without a phone**: drag photos onto the laptop; laptop webcam in the desktop app (SHOULD).
+- **Not on the phone**: the design chat, GO for build, bench/USB, Settings.
+- SHOULD: text a parts photo to CAPCOM (iMessage) → it arrives as a scan to review.
+
+## 7. Theme
+
+- **Fonts** (bundled, offline, open licenses): Inter (interface and headings), Lora (Claude's replies), JetBrains Mono
+  (code, telemetry). **No Anthropic logos, spark/asterisk or names**; About says "Not affiliated with Anthropic".
+- **Tokens** (WCAG contrast measured: text ≥ 4.5:1, UI parts ≥ 3:1):
+
+| Token | Light | Dark |
 |---|---|---|
-| LED | color: red, yellow, green, blue, white (same list as the module library) | `led {color}` |
-| Resistor | ohms (4-band: E24 · 5-band: E96/E24) | `resistor {ohms}` |
-| Push button | — | `button` |
-| Light sensor | — | `photoresistor` |
-| Knob | ohms (printed code "103" = 10 kΩ, "B10K") | `potentiometer {ohms}` |
-| Buzzer | active / passive | `buzzer-active` / `buzzer-passive` |
-| Arduino | Uno R3 / Nano | mission board setting (SHOULD); not a part |
-| Breadboard | 400 / 830 holes | mission breadboard setting (SHOULD); not a part |
-| Jumper wires | type | never copied (assumed available) |
-| Other | description + photo crop | `generic` only after you enter role + pinout |
+| main / sidebar / cards | `#FAF9F5` / `#F0EEE6` / `#FFFFFF` | `#262624` / `#1F1E1D` / `#30302E` |
+| text / secondary text | `#141413` (17.5) / `#6B6A63` (4.7+) | `#FAF9F5` (12.6+) / `#B0AEA5` (6.0+) |
+| primary: buttons, links, focus ring | `#AD4F2D`, white text (4.6+ / 5.3) | links `#E3896A` (5.1+); buttons `#D97757` with `#141413` text (5.9) |
+| accent: send button, icons only | `#D97757` | `#D97757` |
+| success / info / warning / error | `#5E7046` / `#3B6A99` / `#8A5A0B` / `#B3432F` (all ≥ 4.7, white text ≥ 5.4) | `#9DB47F` / `#8DB6DD` / `#E0B04A` / `#E4806A` (all ≥ 4.8) |
+| input borders / dividers | `#8F8D85` (3.2+) / `#E8E6DC` (decorative) | `#7A7973` (3.0+) / `#3D3D3A` |
 
-**Identity** = kind + normalized parameters (e.g. `resistor/220`). Unknown LED lens color → "needs a look".
+- MUI: `contrastThreshold: 4.5`, dark `primary.contrastText: #141413`, radius 8/12/18 (inputs/cards/chat box), borders
+  instead of shadows, no uppercase buttons, System/Light/Dark switch. ≈25 hard-coded dark colours get theme values;
+  breadboard drawings stay as dark canvas frames.
 
-### 3.2 Merge rules
+## 8. Build plan
 
-- Review rows show **have 10 → will be 19** with an **Add / Replace** switch per row. Replace is the default when that
-  part is already in the inventory (so scanning the same kit twice doesn't double counts — this matters because the
-  design agent never uses more than the listed count).
-- Editing a part so it matches another existing entry merges them.
-
-### 3.3 Camera scan
-
-**Handoff (laptop ↔ phone)**
-1. Laptop: **Scan parts** creates an empty scan (`POST /api/inventory/scans` → id) and shows a QR code to
-   `/scan/<id>?pair=…`. Alternatives in the same dialog: **Upload photos** (laptop), **Laptop camera** (SHOULD).
-2. Phone: opens the scan page, takes photos with its camera (file input `capture=environment`, already proven in Build
-   Mode over the LAN address), each uploaded with `POST …/scans/<id>/photos` (12 MB limit, like the photo check).
-3. Phone: **Done** → `POST …/scans/<id>/analyze`.
-4. Laptop polls `GET …/scans/<id>`: "Waiting for photos…" → "Reading 2 photos…" → review list. Review also works on
-   the phone.
-5. Scans still running when the server restarts are marked failed ("Try again").
-
-**Identify** (Claude Sonnet 5, structured output, effort low/medium to keep it fast)
-- Photos resized for the high-resolution tier: long edge ≤ 2576 px, ≤ 4784 visual tokens [5]. Crop thumbnails are cut
-  from exactly the image Claude saw, with a margin (Claude's boxes are approximate [5]).
-- Per group Claude reports only what it sees: kind or "unknown", lens color, band colors left→right, printed code, pin
-  count, count, confidence. It never guesses a value.
-- Counts are approximate for many small objects [5]: count fields are editable and hinted "may be off". Tips before
-  capture: white paper, one kind per group, ≤ 10 per group, spaced apart, good light, photograph each pile once.
-
-**Normalize** (our code, no AI, unit-tested)
-- Resistors: decode the bands in both directions; keep values in E24 (4-band) or E96/E24 (5-band). Mark **ready** only
-  if exactly one value remains, it's 4-band with a gold/silver end, and Claude was confident; otherwise **needs a look**
-  with the candidates in a dropdown. Printed values on tape/bags win. Test: every E24 value round-trips through the
-  existing `resistorBands()`.
-- Knob codes, color words and text ("220R", "4k7") → catalog values.
-
-**Review** → **Add N parts**. Without a Claude key the Scan button says so and opens **Type parts** instead. Scans are
-rate-limited (they spend the owner's key; ≈1–3 ¢ per photo). Photos stay in ViBread's data folder.
-
-### 3.4 Storage and API
-
-- Tables: `inventory_items` (user, identity, kind, params, quantity, source scan/typed/manual) and `inventory_scans`
-  (user, photos, status, detections, created).
-- Routes: `GET /api/inventory` · `POST /api/inventory/items` (batch add/replace) · `PATCH`/`DELETE
-  /api/inventory/items/:id` · `POST /api/inventory/parse` (typed text → preview, no AI) · scans: `POST /scans`,
-  `POST /scans/:id/photos`, `POST /scans/:id/analyze`, `GET /scans/:id`, `GET /scans/:id/crops/:n`,
-  `POST /scans/:id/accept`.
-- Paired phones may use exactly: the `/scan/*` page and the scan routes above (plus what Build Mode already uses). The
-  scan route tells the phone when Claude isn't connected.
-- **Every channel uses the inventory**: the copy into the mission happens in the mission service (`create`) whenever no
-  parts are given — so web, iMessage, Claude Code (MCP) and A2A missions all get it. New read-only MCP tool
-  `vibread_get_inventory`.
-
-## 4. Theme
-
-- **Fonts** (bundled, offline, open licenses): **Inter** for the interface and headings (600), **Lora** for Claude's
-  replies, **JetBrains Mono** for code/telemetry.
-- **No Anthropic logos, spark/asterisk or names**; About says "Not affiliated with Anthropic". Our rocket icon stays.
-- **Tokens** (WCAG contrast measured; text ≥ 4.5:1, UI parts ≥ 3:1):
-
-| Token | Light | Contrast | Dark | Contrast |
-|---|---|---|---|---|
-| main background | `#FAF9F5` | — | `#262624` | — |
-| sidebar | `#F0EEE6` | — | `#1F1E1D` | — |
-| cards / composer | `#FFFFFF` | — | `#30302E` | — |
-| text | `#141413` | 17.5 | `#FAF9F5` | 12.6+ |
-| secondary text | `#6B6A63` | 4.7+ | `#B0AEA5` | 6.0+ |
-| primary (buttons, links, focus ring) | `#AD4F2D`, white text | 4.6+ / white 5.3 | `#E3896A` links/focus; buttons `#D97757` + `#141413` text | 5.1+ / 5.9 |
-| accent (send button, icons only) | `#D97757` | 3.1 on white (graphic) | `#D97757` | 4.2+ |
-| success / GO | `#5E7046` | 4.7+ / white 5.4 | `#9DB47F` | 5.8+ |
-| info | `#3B6A99` | 4.9+ / white 5.7 | `#8DB6DD` | 6.2+ |
-| warning | `#8A5A0B` | 5.1+ / white 5.9 | `#E0B04A` | 6.6+ |
-| error / NO-GO | `#B3432F` | 4.8+ / white 5.6 | `#E4806A` | 4.8+ |
-| input borders | `#8F8D85` | 3.2+ | `#7A7973` | 3.0+ |
-| dividers (decorative) | `#E8E6DC` | — | `#3D3D3A` | — |
-
-- MUI settings: `contrastThreshold: 4.5`; dark `primary.contrastText: #141413`; radius 8 (buttons/inputs), 12 (cards),
-  18 (composer); borders instead of shadows; no uppercase buttons; System/Light/Dark switch in Settings.
-- **Hard-coded dark colors**: ≈25 places outside `theme.ts` (workspace, chat, tabs, bench, Build Mode, components) get
-  theme values. The breadboard/step/Try-it drawings stay as dark "canvas" frames (no re-render, no re-seed).
-
-## 5. Build plan
-
-**Step 0 — contracts (integrator, 30 min)**: catalog + mapping table, inventory/scan types, `CreateMissionRequest`,
-routes, component props (`StatusStrip`, `ArtifactPanel`, `Composer`, `ToolRow`, `TimelineRow`), theme tokens.
-Shared files (`api/hooks.ts`, `api/client.ts`, `packages/core/src/api.ts`) are integrator-owned.
-
-**Step 0.5 — scan reality check (20 min, needs a Claude credential)**: throwaway script sends 3 real photos of the
-team's kit through the scan schema + normalizer. Decides whether scanning is demo-ready.
+- **Step 0 — contracts (integrator, 30 min)**: part-type schema + catalog skeleton, inventory/scan types, mission part
+  `label`/`pinout`, next-step states, routes, component props. Shared files (`api/hooks.ts`, `api/client.ts`,
+  `packages/core/src/api.ts`) stay integrator-owned.
+- **Step 0.5 — scan reality check (20 min, needs a Claude credential)**: 3 real photos of the team's kit through the scan
+  format + normalizer.
 
 | Slice | Owns | Work | Est. |
 |---|---|---|---|
-| S1 Shell + theme | `theme.ts`, `main.tsx`, `shell/*`, `components/*`, Settings dialog | theme + fonts, sidebar, settings dialog, `/settings` route, replace hard-coded colors | 2 h |
-| S2 Conversation | new-mission page, `pages/MissionPage.tsx` (mounts S3 parts), `chat/*`, `Composer` | empty state, composer, messages, tool rows, **timeline → chat merge**, approval cards, pinned outside approvals | 2.5 h |
-| S3 Panel + status | `workspace/*` | artifact panel + revision picker, status strip, GO button + dialog, checks view, inline mission complete | 2 h |
-| S4 Inventory UI | `inventory/*`, phone `/scan` page | inventory table, type/add/edit, scan dialog (QR + upload), review with have→will be | 2.5 h |
-| S5 Inventory server | `catalog.ts`, normalizer, server routes/tables, vision scan, phone scope, mission-service snapshot, MCP tool | as in §3 | 2.5 h |
-| S6 Restyle | `bench/*`, `build/*` | new theme only, no logic changes | 1 h |
-| S7 Desktop (SHOULD) | `apps/desktop` | camera permission for our window only, macOS camera description | 0.5 h |
+| S1 Shell + theme | `theme.ts`, `main.tsx`, `shell/*`, `components/*`, Settings dialog | theme, fonts, sidebar, settings dialog, replace hard-coded colours | 2 h |
+| S2 Chat | new-mission page, `pages/MissionPage.tsx`, `chat/*`, chat box | empty state, chat box, messages, timeline rows (design, checks, GO, build, photo check, bench), approval cards | 2.5 h |
+| S3 Panel + header | `workspace/*` | panel views incl. Parts, Build steps (laptop *I did this*, QR), Checks, Diagnosis; next-step button; GO dialog; done card | 2.5 h |
+| S4 Inventory UI | `inventory/*`, phone scan page | inventory page, Parts chip, type/add/edit, scan dialog + review | 2.5 h |
+| S5 Inventory server | server routes/tables, vision scan, normalizer, phone scope, mission-service copy, MCP tool | as in §5.4–5.7 | 2.5 h |
+| S6 Restyle | `bench/*`, `build/*` | new theme; phone home with Scan and Check; no logic changes | 1.5 h |
+| S7 Catalog + part types | `packages/core/src/catalog.ts`, part-type editor + API | the ≈35 built-in types (fields, also-called names, photo hints, pins), editor, mapping rules, typed-parser names, tests | 2.5 h |
+| S8 Desktop (SHOULD) | `apps/desktop` | camera permission for our window, macOS camera text | 0.5 h |
 
-**Schedule** (if approved at ≈15:30): Step 0 → 16:00 · slices 16:00–20:30 · **gate at 19:00**: if phone → review
-doesn't work end to end, ship laptop upload + typed entry and drop phone scanning to SHOULD · QA + audit 20:30–22:00 ·
-re-record demo video Sun morning (1 h) · submit by 11:00.
+- **Timeline from your approval**: +0:30 contracts · slices until +5:30 · **gate at +3:30** — if phone → review doesn't
+  work end to end, ship upload + typing and make phone scanning a SHOULD · QA + audit until +7:00 · then re-record the
+  demo video. Example: approved at 16:30 → built ≈22:00, checked ≈23:30, video Sunday morning, deadline 12:00.
+- **MUST**: S1–S7. **SHOULD**: laptop webcam, per-mission part subset, board/breadboard from inventory, part photos in
+  steps, new LED colours with forward voltage, parts in use after a build, export/import part types, iMessage photo
+  scan, photo attachments in chat, sidebar search, resizable panel. **Cut**: merging duplicates across photos, barcodes,
+  online part databases, draggable panes.
 
-**MUST**: everything in the table except S7. **SHOULD**: laptop live camera, per-mission part subset, board/breadboard
-from inventory, photo attachments in the composer, sidebar search, drag-resize panel, starter-kit presets.
-**Cut**: merging duplicates across photos, barcode, online part databases, drag-and-drop panes.
+## 9. Done when (measurable)
 
-## 6. Done when (measurable)
+1. New mission → chat opens with the brief as the first message and the inventory as parts.
+2. Each example mission shows its rows (design → checks → release) and a Parts view with need vs have.
+3. The next-step button walks an example mission: GO → steps (*I did this* on the laptop) → virtual bench → "Test with
+   your Arduino"; a real-board pass → *Does it work?* → Done.
+4. Typed "2 tilt switches, 1 thermistor, 3 red LEDs" → the right types and support levels.
+5. A custom type from the "3-pin module" template takes ≤ 1 min, shows in the inventory and is placed by the build steps
+   when a design uses it.
+6. Kit photo: ≥ 80 % of groups get the right type; every resistor is either correct or "needs a look".
+7. Phone: pair → home → Scan parts → review on the laptop in ≤ 60 s; Check this step still works.
+8. No key: Scan explains itself, Type parts works; iMessage/MCP missions get the inventory.
+9. Contrast test passes; no hard-coded colours outside the theme except the drawing canvases.
+10. `npm test` + `npm run typecheck` green; one clean audit round.
 
-1. Empty state → Enter → conversation opens with the brief as the first message and the inventory as parts.
-2. Each example mission shows its timeline rows (design r1 → checks → release) in the chat.
-3. Approval cards (3 choices) and GO for build work exactly as today; bench virtual self-test and phone Build Mode pass.
-4. Kit photo: ≥ 80 % of groups get the right kind, and every resistor is either correct or "needs a look".
-5. Phone: pair → `/scan` → 2 photos → review on the laptop in ≤ 60 s.
-6. No key: phone `/scan` explains it; Type parts works; iMessage/MCP missions get the inventory.
-7. Contrast unit test over the token pairs passes; a search for hex colors outside `theme.ts` finds only the approved
-   drawing canvases.
-8. `npm test` + `npm run typecheck` green; one clean audit round.
-
-## 7. Risks
+## 10. Risks
 
 | Risk | Plan |
 |---|---|
-| Time; the demo video must be re-recorded | MUST list ≈5 h; 19:00 gate; SHOULDs dropped first |
+| Time; the demo video must be re-recorded | MUST list ≈5 h; gate at +3:30; SHOULDs dropped first |
 | Resistor bands from photos are unreliable | strict "ready" rule; mandatory review; printed labels preferred |
-| No working Claude credential yet (omp login lost at 12:31) | Step 0.5 blocked until you log in or give an API key |
-| MUI X Chat (alpha) styling limits | composer is our own MUI component; custom parts for rows |
-| Regressions in bench / Build Mode | restyle only; existing tests + QA |
+| "Modelled as" parts simulate with the base part's curve (e.g. thermistor as light sensor) | labelled everywhere; the bench calibration uses the real readings |
+| Basic (generic) parts haven't been exercised end to end yet | QA runs one through design → steps; they stay marked unverified |
+| No working Claude credential yet (omp login lost at 12:31) | Step 0.5 and scanning wait until you log in or give an API key |
+| Regressions in bench or Build Mode | restyle only, no logic edits; existing tests + QA |
 
-## 8. Decisions for you
+## 11. Decisions for you
 
-1. **Go ahead now?** (The redesign replaces today's screens; the demo video must be re-recorded after it.)
-2. **Claude credential**: run `omp login anthropic` in the container or give an Anthropic API key — needed for scanning
-   and Step 0.5.
+1. **Go ahead?** This replaces today's screens; the demo video must be re-recorded afterwards.
+2. **Claude credential**: run `omp login anthropic` in the container or give an Anthropic API key (scanning needs it).
 3. **Theme default**: follow the computer's light/dark setting (like Claude desktop) or always light?
-4. **Scan priority**: phone + upload MUST, laptop live camera SHOULD — OK?
-5. **Board and breadboard from the inventory** (Uno/Nano, 400/830): SHOULD — OK?
+4. **Scanning**: phone camera + upload as MUST, laptop webcam as SHOULD — OK?
+5. **Catalog**: is the list in §5.2 right for your kit? Tell me (or scan) what's in the team's kit and those parts get
+   first-class types.
+6. **New LED colours with forward voltage** and **board/breadboard from the inventory** as SHOULD — OK?
 
 ## Sources
 
