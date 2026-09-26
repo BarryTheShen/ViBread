@@ -159,8 +159,8 @@ export function useImessageCode() {
 export function usePhoneOrigin(): string {
   const connections = useConnections();
   const here = window.location.origin;
-  const data: unknown = connections.data;
-  const phoneUrl = typeof data === "object" && data !== null && "phoneUrl" in data && typeof data.phoneUrl === "string" ? data.phoneUrl : undefined;
+  // `phoneUrl` may be absent on servers older than the field.
+  const phoneUrl: string | undefined = connections.data?.phoneUrl;
   const local = /^(localhost|127\.|\[::1\])/.test(window.location.hostname);
   for (const candidate of [phoneUrl, local ? connections.data?.mcpUrl : undefined]) {
     if (!candidate) continue;
