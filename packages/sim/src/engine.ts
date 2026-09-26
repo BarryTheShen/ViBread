@@ -20,6 +20,7 @@ import { parseIntelHex } from "webserial-flasher";
 import {
   BOARD_PROFILES,
   MODULES,
+  ledVf,
   photoresistorOhms,
   type BoardPin,
   type Circuit,
@@ -627,8 +628,7 @@ export class SimMachine {
         const ohms = typeof params.ohms === "number" ? params.ohms : 10_000;
         addBranch(`${part.id}.1`, `${part.id}.2`, ohms);
       } else if (part.module === "led") {
-        const color = typeof params.color === "string" && params.color in (MODULES.led.electrical.vf ?? {}) ? params.color as keyof NonNullable<typeof MODULES.led.electrical.vf> : "red";
-        const vf = MODULES.led.electrical.vf?.[color]?.typ ?? 2;
+        const vf = ledVf(params).typ;
         const a = this.pinToNode.get(`${part.id}.A`);
         const b = this.pinToNode.get(`${part.id}.K`);
         if (a && b) {
@@ -722,8 +722,7 @@ export class SimMachine {
       if (part.module === "led") {
         const a = this.pinToNode.get(`${part.id}.A`);
         const k = this.pinToNode.get(`${part.id}.K`);
-        const color = typeof part.params.color === "string" && part.params.color in (MODULES.led.electrical.vf ?? {}) ? part.params.color as keyof NonNullable<typeof MODULES.led.electrical.vf> : "red";
-        const vf = MODULES.led.electrical.vf?.[color]?.typ ?? 2;
+        const vf = ledVf(part.params).typ;
         const voltage = (a ? values.get(a) ?? 0 : 0) - (k ? values.get(k) ?? 0 : 0);
         const current = Math.max(0, (voltage - vf) / 0.5);
         value = clamp(current / 0.02, 0, 1);

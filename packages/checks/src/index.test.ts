@@ -55,6 +55,23 @@ describe("EECOM electrical checks", () => {
     const red = launchEvidence.ledBranches.find((branch) => branch.part === "LED1");
     expect(red?.maxMa).toBeCloseTo((5.25 - 1.8) / (220 * 0.95) * 1_000, 2);
   });
+  it("accepts custom LED Vf data and explains the conservative fallback", async () => {
+    const custom = structuredClone(GOLDEN[2].circuit);
+    const customLed = custom.parts.find((part) => part.id === "LED1");
+    if (!customLed) throw new Error("fixture LED1 missing");
+    customLed.params = { color: "infrared", vf: { min: 1.6, typ: 1.9, max: 2.2 } };
+    const customReport = await reportFor(custom);
+    expect(customReport.verdict).toBe("GO");
+    expect(customReport.findings.some((finding) => finding.ruleId === "LED-VF-ASSUMED")).toBe(false);
+
+    const assumed = structuredClone(GOLDEN[2].circuit);
+    const assumedLed = assumed.parts.find((part) => part.id === "LED1");
+    if (!assumedLed) throw new Error("fixture LED1 missing");
+    assumedLed.params = { color: "infrared" };
+    const assumedReport = await reportFor(assumed);
+    expect(assumedReport.verdict).toBe("GO");
+    expect(assumedReport.findings.some((finding) => finding.ruleId === "LED-VF-ASSUMED")).toBe(true);
+  });
 });
 
 describe("GUIDO firmware checks", () => {
@@ -104,7 +121,7 @@ describe("SPICE cross-check", () => {
     const result = await spiceCrossCheck(GOLDEN[2].circuit);
     const red = result.rows.find((row) => row.part === "LED1");
     expect(result.ok).toBe(true);
-    expect(red?.analyticMa).toBeCloseTo(13.4, 1);
+    expect(red?.analyticMa).toBeCloseTo(13.636, 2);
     expect(red?.spiceMa).toBeCloseTo(14.0, 1);
     expect(red?.spiceMaxMa).toBeCloseTo(16.7, 1);
     expect(red?.spiceMinMa).toBeCloseTo(9.7, 1);

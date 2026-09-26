@@ -13,8 +13,29 @@ export const MODULE_KEYS = [
 ] as const;
 export type ModuleKey = (typeof MODULE_KEYS)[number];
 
-export const LED_COLORS = ["red", "yellow", "green", "blue", "white"] as const;
+export const LED_COLORS = ["red", "yellow", "green", "blue", "white", "orange", "pink", "purple", "warm-white"] as const;
 export type LedColor = (typeof LED_COLORS)[number];
+
+export interface LedVf {
+  min: number;
+  typ: number;
+  max: number;
+}
+
+/** Conservative fallback when a user names an LED colour without Vf data. */
+export const DEFAULT_LED_VF: LedVf = { min: 1.8, typ: 2.6, max: 3.4 };
+
+const LED_VF_TABLE: Record<LedColor, LedVf> = {
+  red: { min: 1.8, typ: 2.0, max: 2.2 },
+  yellow: { min: 1.9, typ: 2.1, max: 2.4 },
+  green: { min: 1.9, typ: 2.2, max: 3.2 },
+  blue: { min: 2.8, typ: 3.1, max: 3.4 },
+  white: { min: 2.8, typ: 3.1, max: 3.4 },
+  orange: { min: 1.8, typ: 2.0, max: 2.2 },
+  pink: { min: 1.8, typ: 2.2, max: 2.6 },
+  purple: { min: 2.4, typ: 3.0, max: 3.4 },
+  "warm-white": { min: 2.8, typ: 3.1, max: 3.4 },
+};
 
 export interface ModulePin {
   id: string;
@@ -43,7 +64,7 @@ export type SelfTestKind = "led" | "button" | "light" | "pot" | "buzzer" | "digi
 
 export interface ModuleElectrical {
   /** LED forward voltage corners by color (V). */
-  vf?: Record<LedColor, { min: number; typ: number; max: number }>;
+  vf?: Record<string, LedVf>;
   ifDesignMa?: number;
   ifAbsMa?: number;
   defaultTolerancePct?: number;
@@ -79,7 +100,18 @@ export interface ModuleDef {
   evidence: string[];
 }
 
-const ledParams = z.object({ color: z.enum(LED_COLORS).default("red") });
+const ledParams = z.object({
+  color: z.string().trim().min(1).max(32).default("red"),
+  vf: z.object({
+    min: z.number().positive(),
+    typ: z.number().positive(),
+    max: z.number().positive(),
+  }).superRefine((value, context) => {
+    if (!(value.min <= value.typ && value.typ <= value.max)) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "LED Vf must satisfy min ≤ typ ≤ max." });
+    }
+  }).optional(),
+});
 const resistorParams = z.object({ ohms: z.number().positive(), tolerancePct: z.number().positive().default(5) });
 const potParams = z.object({ ohms: z.number().positive().default(10_000) });
 const emptyParams = z.object({});
@@ -100,20 +132,18 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
     ],
     params: ledParams,
     electrical: {
-      vf: {
-        red: { min: 1.8, typ: 2.0, max: 2.2 },
-        yellow: { min: 1.9, typ: 2.1, max: 2.4 },
-        green: { min: 1.9, typ: 2.2, max: 3.2 },
-        blue: { min: 2.8, typ: 3.1, max: 3.4 },
-        white: { min: 2.8, typ: 3.1, max: 3.4 },
-      },
+      vf: LED_VF_TABLE,
       ifDesignMa: 20,
       ifAbsMa: 30,
     },
     sim: "led",
     footprint: { kind: "two-lead", pins: ["A", "K"], minSpan: 1, maxSpan: 1, preferredSpan: 1, polarized: true },
     selftest: "led",
-    evidence: ["Typical 5 mm indicator LED datasheet ranges (research/03); green covers both GaP (~2.2 V) and InGaN (~3.2 V) parts"],
+    evidence: [
+      "Red/yellow/green/blue/white 5 mm indicator LED datasheet-typical ranges (research/03; green covers both GaP and InGaN families).",
+      "Orange/pink/purple/warm-white 5 mm indicator LED datasheet-typical ranges (research/03; vendor-family ranges).",
+      "A user colour may supply Vf corners; otherwise checks conservatively assume 1.8/2.6/3.4 V.",
+    ],
   },
   resistor: {
     key: "resistor",
@@ -232,6 +262,31 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
     evidence: ["User-supplied pinout"],
   },
 };
+function isLedVf(value: unknown): value is LedVf {
+  if (typeof value !== "object" || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  const min = candidate.min;
+  const typ = candidate.typ;
+  const max = candidate.max;
+  return typeof min === "number" && Number.isFinite(min)
+    && typeof typ === "number" && Number.isFinite(typ)
+    && typeof max === "number" && Number.isFinite(max)
+    && min > 0 && min <= typ && typ <= max;
+}
+
+/** True when the colour is user-defined without a valid Vf override. */
+export function ledVfAssumed(params: Readonly<Record<string, unknown>>): boolean {
+  const color = typeof params.color === "string" ? params.color : "red";
+  return !Object.hasOwn(LED_VF_TABLE, color) && !isLedVf(params.vf);
+}
+
+/** Resolve a built-in or user-defined LED colour to one Vf corner triple. */
+export function ledVf(params: Readonly<Record<string, unknown>>): LedVf {
+  if (isLedVf(params.vf)) return { ...params.vf };
+  const color = typeof params.color === "string" ? params.color : "red";
+  return Object.hasOwn(LED_VF_TABLE, color) ? LED_VF_TABLE[color as LedColor] : DEFAULT_LED_VF;
+}
+
 
 /**
  * Simulation light model shared by the simulator, the test author, and fixtures:

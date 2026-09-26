@@ -32,6 +32,7 @@ const COLORS: Record<string, string> = {
   blue: "#3d8bfd",
   orange: "#f08c2e",
   white: "#f4f6f8",
+  "warm-white": "#fff1d6",
   purple: "#9b6bdb",
   cyan: "#27c2d1",
   magenta: "#d653a8",
@@ -76,7 +77,12 @@ function escapeSvg(value: string): string {
 }
 
 function cssColor(name: string): string {
-  return COLORS[name] ?? name;
+  const mapped = COLORS[name];
+  if (mapped) return mapped;
+  if (/^#[0-9a-f]{3,8}$/i.test(name)) return name;
+  let hash = 0;
+  for (const character of name) hash = (hash * 31 + character.codePointAt(0)!) | 0;
+  return `hsl(${Math.abs(hash) % 360} 62% 58%)`;
 }
 function classes(...names: (string | false | undefined)[]): string {
   return names.filter(Boolean).join(" ");
