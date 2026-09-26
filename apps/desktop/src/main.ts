@@ -177,7 +177,8 @@ function registerIpc(): void {
     // Asked over loopback, the server includes the LAN pairing token: unpaired devices on the Wi-Fi get a 403.
     const connections = (await (await fetch(`${info.localUrl}/api/connections`)).json()) as { phoneUrl?: string; phonePairQuery?: string };
     const origin = (connections.phoneUrl ?? info.publicUrl).replace(/\/$/, "");
-    const url = `${origin}/${connections.phonePairQuery ? `?${connections.phonePairQuery}` : ""}`;
+    // Paired phones only get Build Mode; the server redirects /b?pair=… to the phone mission chooser.
+    const url = `${origin}/b${connections.phonePairQuery ? `?${connections.phonePairQuery}` : ""}`;
     return { url, qr: await QRCode.toDataURL(url, { margin: 1, width: 440 }), lan: !/^http:\/\/(localhost|127\.)/.test(origin) };
   });
 }
