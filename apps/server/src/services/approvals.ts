@@ -10,6 +10,7 @@ import type {
 import { hashJson, policyFor } from "@vibread/core";
 import type { Database as SqliteDatabase } from "better-sqlite3";
 import type { MissionStore } from "@vibread/core";
+import type { DB } from "../db/schema.js";
 
 interface ApprovalRow {
   id: string;
@@ -132,15 +133,11 @@ export class SqlApprovalBroker implements ApprovalBroker {
     }
     if (row.status !== "pending") return this.toRequest(row);
     const decidedBy = JSON.stringify(decider);
-    if (row.actionClass === "physical") {
-      this.deps.sqlite
-        .prepare('UPDATE "approvals" SET "status" = ?, "decision" = ?, "decidedBy" = ?, "preApprovedBy" = ? WHERE "id" = ? AND "status" = ?')
-        .run("approved", decision, decidedBy, decidedBy, approvalId, "pending");
-    } else {
-      this.deps.sqlite
-        .prepare('UPDATE "approvals" SET "status" = ?, "decision" = ?, "decidedBy" = ? WHERE "id" = ? AND "status" = ?')
-        .run(decision === "deny" ? "denied" : "approved", decision, decidedBy, approvalId, "pending");
-    }
+    const approved = decision !== "deny";
+    const preApprovedBy = row.actionClass === "physical" && decider.channel === "imessage" && approved ? decidedBy : null;
+    this.deps.sqlite
+      .prepare('UPDATE "approvals" SET "status" = ?, "decision" = ?, "decidedBy" = ?, "preApprovedBy" = ? WHERE "id" = ? AND "status" = ?')
+      .run(approved ? "approved" : "denied", decision, decidedBy, preApprovedBy, approvalId, "pending");
     const updated = this.deps.sqlite.prepare('SELECT * FROM "approvals" WHERE "id" = ?').get(approvalId) as ApprovalRow;
     return this.toRequest(updated);
   }

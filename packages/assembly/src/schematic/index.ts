@@ -64,6 +64,7 @@ function attachOutput(processChild: ChildProcessWithoutNullStreams): void {
         clearTimeout(request.timer);
         if (response.svg !== undefined) request.resolve(response.svg);
         else request.reject(new Error(response.error ?? "schematic worker failed"));
+        if (pending.size === 0 && child === processChild) processChild.unref();
       } catch {
         // Keep the protocol stream alive if a child-side diagnostic is malformed.
       }
@@ -105,6 +106,7 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
 
 function sendRender(circuit: Circuit): Promise<string> {
   const processChild = ensureWorker();
+  processChild.ref();
   const id = `schematic-${requestNumber++}`;
   return new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => {

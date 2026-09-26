@@ -1,4 +1,4 @@
-import { cpus } from "node:os";
+import { availableParallelism } from "node:os";
 import { Worker } from "node:worker_threads";
 import type { Circuit, ConsoleReport, Coverage, PinModeObservation, SimRunResult, TestSuite, Trace } from "@vibread/core";
 import { coverageOf } from "./coverage.js";
@@ -61,7 +61,11 @@ function runLocally(input: { circuit: Circuit; hex: string; suite: TestSuite }):
 
 async function runWorker(request: WorkerRequest): Promise<ScenarioExecution> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./worker-entry.ts", import.meta.url));
+    const sourceEntry = new URL("./worker-entry.ts", import.meta.url);
+    const sourceMode = sourceEntry.pathname.endsWith(".ts");
+    const entry = sourceMode ? new URL("./worker-loader.mjs", import.meta.url) : new URL("./worker-entry.js", import.meta.url);
+    const options = sourceMode ? { execArgv: ["--import", import.meta.resolve("tsx/esm")] } : {};
+    const worker = new Worker(entry, options);
     const finish = (error?: Error, result?: ScenarioExecution) => {
       void worker.terminate();
       if (error) reject(error);
@@ -75,7 +79,7 @@ async function runWorker(request: WorkerRequest): Promise<ScenarioExecution> {
 }
 
 async function runPool(input: { circuit: Circuit; hex: string; suite: TestSuite }): Promise<ScenarioExecution[]> {
-  const count = Math.min(input.suite.scenarios.length, Math.max(1, Math.min(4, cpus().length)));
+  const count = Math.min(input.suite.scenarios.length, Math.max(1, Math.min(8, availableParallelism() - 2)));
   const results: Array<ScenarioExecution | undefined> = new Array(input.suite.scenarios.length);
   let cursor = 0;
   const workerTask = async (): Promise<void> => {
@@ -93,17 +97,10 @@ async function runPool(input: { circuit: Circuit; hex: string; suite: TestSuite 
 export async function runSuiteWithWorkers(input: { circuit: Circuit; hex: string; suite: TestSuite; revisionHash: string; recordTraces?: boolean }): Promise<SimRunResult> {
   const started = performance.now();
   let outputs: ScenarioExecution[];
-  // The workspace exports TypeScript directly. Node's worker loader cannot execute a .ts
-  // entry without a project loader, so source-mode tests use the same deterministic
-  // worker task function inline; published JS runs the real worker pool below.
-  if (import.meta.url.endsWith(".ts")) {
+  try {
+    outputs = await runPool(input);
+  } catch {
     outputs = runLocally(input);
-  } else {
-    try {
-      outputs = await runPool(input);
-    } catch {
-      outputs = runLocally(input);
-    }
   }
   const scenarios = outputs.map((output) => output.result);
   const traces: Trace[] = input.recordTraces === false ? [] : outputs.map((output) => output.trace);

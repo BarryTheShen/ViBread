@@ -34,6 +34,15 @@ export function memoryStore(): MissionStore {
     async createMission(input) {
       const mission: Mission = { id: randomUUID(), ...input, phase: "BRIEF", createdAt: now(), updatedAt: now() };
       missions.set(mission.id, mission);
+      events.push({
+        id: String(events.length + 1).padStart(8, "0"),
+        at: now(),
+        missionId: mission.id,
+        channel: "system",
+        actor: { kind: "system", id: "server", channel: "system" },
+        kind: "mission.created",
+        text: `Mission created: ${mission.title}`,
+      });
       return structuredClone(mission);
     },
     async getMission(id) {

@@ -7,12 +7,17 @@ describe("schematic renderer", () => {
     const started = performance.now();
     const svg = await renderSchematicSvg(fixture.circuit);
     const elapsedMs = performance.now() - started;
+    const repeatStarted = performance.now();
+    const repeat = await renderSchematicSvg(fixture.circuit);
+    const repeatElapsedMs = performance.now() - repeatStarted;
 
     expect(svg.startsWith("<svg ")).toBe(true);
     for (const part of fixture.circuit.parts) expect(svg).toContain(part.id);
     expect(svg).toContain(">5V<");
     expect(svg).toContain(">GND<");
     expect(elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(repeat).toBe(svg);
+    if (fixture.circuit.title === "Moon-Phase Lamp") expect(repeatElapsedMs).toBeLessThan(elapsedMs);
   });
 
   it("is deterministic for identical input", async () => {
@@ -26,7 +31,7 @@ describe("schematic renderer", () => {
   it("provides a plain-language netlist fallback", () => {
     const summary = schematicSummary(GOLDEN[0].circuit);
     expect(summary).toContain("| GND | ground |");
-    expect(summary).toContain("LED1.K");
+    expect(summary).toContain("LED1 (Moon light 1 (leftmost))");
     expect(summary).toContain("Arduino D3");
   });
 });

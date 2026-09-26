@@ -129,7 +129,7 @@ export function createMissionService(
         inventory: input.inventory,
         mode: input.mode ?? "review",
       });
-      await store.appendEvent({ missionId: mission.id, channel: input.owner.channel, actor: input.owner, kind: "mission.created", text: `Mission created: ${mission.title}`, data: { brief: mission.brief } });
+      // store.createMission records the "mission.created" timeline event itself (ServerCore's SQL store).
       await deps.sendMachine(mission.id, { type: "BRIEF_RECEIVED" });
       return (await store.getMission(mission.id)) ?? mission;
     },

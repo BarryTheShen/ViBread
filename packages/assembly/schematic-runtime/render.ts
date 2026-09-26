@@ -101,7 +101,7 @@ function partLabel(part: Part): string {
 function drawingLabel(part: Part): string {
   switch (part.module) {
     case "led":
-      return `${part.id} ${isLedColor(part.params.color) ? part.params.color : "LED"}`;
+      return part.id;
     case "resistor":
       return `${part.id} ${formatOhms(numericParam(part, "ohms", 220))}`;
     case "photoresistor":
@@ -259,8 +259,8 @@ function partPositions(circuit: Circuit): Map<string, Point> {
   const outputs = pins.filter((pin) => roleOf(pin)?.mode === "OUTPUT" || roleOf(pin)?.mode === "PWM_OUT");
   const inputs = pins.filter((pin) => !outputs.includes(pin));
   const yByPin = new Map<string, number>();
-  outputs.forEach((pin, index) => yByPin.set(pin, centeredSlot(index, outputs.length, 3.8)));
-  inputs.forEach((pin, index) => yByPin.set(pin, centeredSlot(index, inputs.length, 3.8)));
+  outputs.forEach((pin, index) => yByPin.set(pin, -centeredSlot(index, outputs.length, 3.8)));
+  inputs.forEach((pin, index) => yByPin.set(pin, -centeredSlot(index, inputs.length, 3.8)));
 
   for (const part of circuit.parts) {
     const boardPin = boardSignalForPart(circuit, part.id);
@@ -368,7 +368,9 @@ function cropSvg(svg: string): string {
   const maxY = Math.min(SVG_HEIGHT, Math.max(...yValues) + 28);
   const viewBox = `${minX} ${minY} ${Math.max(1, maxX - minX)} ${Math.max(1, maxY - minY)}`;
   const withViewBox = svg.replace(/<svg ([^>]+)>/, `<svg $1 viewBox="${viewBox}">`);
-  return withViewBox.replace('<rect class="boundary" x="0" y="0" width="1800" height="1100"/>', `<rect class="boundary" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}"/>`);
+  const croppedHeight = Math.max(1, Math.round((maxY - minY) * SVG_WIDTH / Math.max(1, maxX - minX)));
+  const withCroppedHeight = withViewBox.replace(/(<svg [^>]*?)height="1100"/, `$1height="${croppedHeight}"`);
+  return withCroppedHeight.replace('<rect class="boundary" x="0" y="0" width="1800" height="1100"/>', `<rect class="boundary" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}"/>`);
 }
 
 async function renderCircuit(circuit: Circuit): Promise<string> {
@@ -389,7 +391,7 @@ async function renderCircuit(circuit: Circuit): Promise<string> {
   addSyntheticPowerLabels(circuit, board, tscircuitBoard);
   tscircuit.add(tscircuitBoard);
   const circuitJson = tscircuit.getCircuitJson();
-  const svg = convertCircuitJsonToSchematicSvg(circuitJson, { width: SVG_WIDTH, height: SVG_HEIGHT, includeVersion: true, colorOverrides: { schematic: SCHEMATIC_COLORS }, css: "text { font-size: 14px !important; }" });
+  const svg = convertCircuitJsonToSchematicSvg(circuitJson, { width: SVG_WIDTH, height: SVG_HEIGHT, includeVersion: true, colorOverrides: { schematic: SCHEMATIC_COLORS }, css: "text { font-size: 24px !important; }" });
   return cropSvg(svg.replace(/>V5</g, ">5V<"));
 }
 
@@ -406,12 +408,14 @@ function writeResponse(response: WorkerResponse): void {
 const input = createInterface({ input: process.stdin, crlfDelay: Infinity });
 for await (const line of input) {
   if (!line.trim()) continue;
+  let requestId = "unknown";
   try {
     const parsed: unknown = JSON.parse(line);
     if (!isWorkerRequest(parsed)) throw new Error("invalid schematic worker request");
+    requestId = parsed.id;
     const svg = await renderCircuit(parsed.circuit);
-    writeResponse({ id: parsed.id, svg });
+    writeResponse({ id: requestId, svg });
   } catch (error) {
-    writeResponse({ id: isWorkerRequest(JSON.parse(line)) ? JSON.parse(line).id : "unknown", error: error instanceof Error ? error.message : String(error) });
+    writeResponse({ id: requestId, error: error instanceof Error ? error.message : String(error) });
   }
 }

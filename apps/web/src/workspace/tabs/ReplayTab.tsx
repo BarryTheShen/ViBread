@@ -44,6 +44,7 @@ export function ReplayTab({ revision }: { revision: RevisionDetail }) {
   const frames = useMemo(() => trace.data?.frames ?? [], [trace.data]);
   const endT = frames.length ? frames[frames.length - 1].t : 0;
   const frame = frames.length ? frames[frameIndexAt(frames, t)] : undefined;
+  const passive = useMemo(() => new Set(revision.circuit.parts.filter((p) => p.module === "resistor").map((p) => p.id)), [revision.circuit]);
 
   useEffect(() => {
     setT(0);
@@ -138,6 +139,7 @@ export function ReplayTab({ revision }: { revision: RevisionDetail }) {
       {frame && (
         <Typography variant="body2" aria-live="off">
           {Object.entries(frame.parts)
+            .filter(([part]) => !passive.has(part))
             .map(([part, value]) => describePartState(part, value))
             .join(" · ")}
         </Typography>

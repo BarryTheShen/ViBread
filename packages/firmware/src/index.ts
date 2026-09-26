@@ -59,12 +59,8 @@ function enqueueCompile(run: () => Promise<CompileResult>): Promise<CompileResul
   });
 }
 
-function repoRoot(): string {
-  return resolve(fileURLToPath(new URL("../../../", import.meta.url)));
-}
-
 export function defaultToolchain(): ToolchainPaths {
-  const root = repoRoot();
+  const root = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
   return {
     cli: process.env.VIBREAD_ARDUINO_CLI ?? join(root, ".toolchain", "bin", "arduino-cli"),
     config: process.env.VIBREAD_ARDUINO_CONFIG ?? join(root, ".toolchain", "arduino", "arduino-cli.yaml"),
@@ -466,9 +462,6 @@ function cppString(value: string): string {
   return value.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\r/g, "\\r").replace(/\n/g, "\\n");
 }
 
-function flash(value: string): string {
-  return `PSTR("${cppString(value)}")`;
-}
 
 function pinIdentifier(pin: string): string {
   return pin.replace(/[^A-Za-z0-9_]/g, "_");
@@ -581,7 +574,8 @@ function makeButton(plan: SelfTestPlan, profile: BoardProfile): string {
   buttons.forEach((subject, index) => {
     const id = pinIdentifier(subject.pin);
     const pull = subject.pull === "internal-up" ? 1 : 0;
-    lines.push(`if (vbStuck_${id}) { buttonOk = false; } else { vbInput_${id}(${pull}); const char* answerPress = vbAsk(PSTR("btn${index}p"), PSTR("button.interactive"), PSTR("press-hold"), PSTR("${cppString(subject.part)}"), "", VB_PROMPT_TIMEOUT); uint32_t pressedOnes = 0; for (uint32_t i = 0; i < VB_SAMPLES; ++i) pressedOnes += vbRead_${id}(); vbEmitObsNum(PSTR("button.interactive"), PSTR("${cppString(subject.part)}"), PSTR("pressedOnes"), pressedOnes); if (answerPress == nullptr || strcmp(answerPress, "timeout") == 0) buttonOk = false; const char* answerRelease = vbAsk(PSTR("btn${index}r"), PSTR("button.interactive"), PSTR("release"), PSTR("${cppString(subject.part)}"), "", VB_PROMPT_TIMEOUT); if (answerRelease == nullptr || strcmp(answerRelease, "timeout") == 0) buttonOk = false; }`);
+    const choices = "\\\"done\\\"";
+    lines.push(`if (vbStuck_${id}) { buttonOk = false; } else { vbInput_${id}(${pull}); const char* answerPress = vbAsk(PSTR("btn${index}-press"), PSTR("button.interactive"), PSTR("press-hold"), PSTR("${cppString(subject.part)}"), "${choices}", VB_PROMPT_TIMEOUT); uint32_t pressedOnes = 0; for (uint32_t i = 0; i < VB_SAMPLES; ++i) pressedOnes += vbRead_${id}(); vbEmitObsStable(PSTR("button.interactive"), PSTR("${cppString(subject.part)}"), PSTR("pressed"), pressedOnes, VB_SAMPLES); if (answerPress == nullptr || strcmp(answerPress, "timeout") == 0) buttonOk = false; const char* answerRelease = vbAsk(PSTR("btn${index}-release"), PSTR("button.interactive"), PSTR("release"), PSTR("${cppString(subject.part)}"), "${choices}", VB_PROMPT_TIMEOUT); uint32_t releasedOnes = 0; for (uint32_t i = 0; i < VB_SAMPLES; ++i) releasedOnes += vbRead_${id}(); vbEmitObsStable(PSTR("button.interactive"), PSTR("${cppString(subject.part)}"), PSTR("released"), releasedOnes, VB_SAMPLES); if (answerRelease == nullptr || strcmp(answerRelease, "timeout") == 0) buttonOk = false; }`);
   });
   lines.push('vbEmitEnd(PSTR("button.interactive"), buttonOk ? PSTR("pass") : PSTR("unknown"), buttonOk ? nullptr : PSTR("timeout or stuck"));');
   return lines.join("\n  ");
@@ -598,11 +592,10 @@ function makeLight(plan: SelfTestPlan, profile: BoardProfile): string {
   if (lights.length === 0) return 'vbEmitBegin(PSTR("light.relative")); vbEmitEnd(PSTR("light.relative"), PSTR("skipped"), PSTR("no light subjects"));';
   const lines: string[] = ['vbEmitBegin(PSTR("light.relative"));', "bool lightOk = true;"];
   lights.forEach((subject, index) => {
-    const answer = `light${index}`;
     lines.push(makeAdcStats(subject, profile, "ambient"));
-    lines.push(`const char* cover = vbAsk(PSTR("${answer}c"), PSTR("light.relative"), PSTR("cover"), PSTR("${cppString(subject.part)}"), "", VB_PROMPT_TIMEOUT);`);
+    lines.push(`const char* cover = vbAsk(PSTR("light${index}-cover"), PSTR("light.relative"), PSTR("cover"), PSTR("${cppString(subject.part)}"), "\\\"done\\\"", VB_PROMPT_TIMEOUT);`);
     lines.push(makeAdcStats(subject, profile, "covered"));
-    lines.push(`const char* uncover = vbAsk(PSTR("${answer}u"), PSTR("light.relative"), PSTR("uncover"), PSTR("${cppString(subject.part)}"), "", VB_PROMPT_TIMEOUT); if (cover == nullptr || uncover == nullptr) lightOk = false;`);
+    lines.push(`const char* uncover = vbAsk(PSTR("light${index}-uncover"), PSTR("light.relative"), PSTR("uncover"), PSTR("${cppString(subject.part)}"), "\\\"done\\\"", VB_PROMPT_TIMEOUT); if (cover == nullptr || uncover == nullptr || strcmp(cover, "timeout") == 0 || strcmp(uncover, "timeout") == 0) lightOk = false;`);
   });
   lines.push('vbEmitEnd(PSTR("light.relative"), lightOk ? PSTR("pass") : PSTR("unknown"), lightOk ? nullptr : PSTR("timeout"));');
   return lines.join("\n  ");
@@ -613,9 +606,9 @@ function makePot(plan: SelfTestPlan, profile: BoardProfile): string {
   if (pots.length === 0) return 'vbEmitBegin(PSTR("pot.sweep")); vbEmitEnd(PSTR("pot.sweep"), PSTR("skipped"), PSTR("no potentiometer subjects"));';
   const lines: string[] = ['vbEmitBegin(PSTR("pot.sweep"));', "bool potOk = true;"];
   pots.forEach((subject, index) => {
-    const minAnswer = `const char* potMin${index} = vbAsk(PSTR("pot${index}min"), PSTR("pot.sweep"), PSTR("knob-min"), PSTR("${cppString(subject.part)}"), "", VB_PROMPT_TIMEOUT);`;
-    const maxAnswer = `const char* potMax${index} = vbAsk(PSTR("pot${index}max"), PSTR("pot.sweep"), PSTR("knob-max"), PSTR("${cppString(subject.part)}"), "", VB_PROMPT_TIMEOUT);`;
-    lines.push(minAnswer, makeAdcStats(subject, profile, "min"), maxAnswer, makeAdcStats(subject, profile, "max"), `if (potMin${index} == nullptr || potMax${index} == nullptr) potOk = false;`);
+    const minAnswer = `const char* potMin${index} = vbAsk(PSTR("pot${index}-min"), PSTR("pot.sweep"), PSTR("knob-min"), PSTR("${cppString(subject.part)}"), "\\\"done\\\"", VB_PROMPT_TIMEOUT);`;
+    const maxAnswer = `const char* potMax${index} = vbAsk(PSTR("pot${index}-max"), PSTR("pot.sweep"), PSTR("knob-max"), PSTR("${cppString(subject.part)}"), "\\\"done\\\"", VB_PROMPT_TIMEOUT);`;
+    lines.push(minAnswer, makeAdcStats(subject, profile, "min"), maxAnswer, makeAdcStats(subject, profile, "max"), `if (potMin${index} == nullptr || potMax${index} == nullptr || strcmp(potMin${index}, "timeout") == 0 || strcmp(potMax${index}, "timeout") == 0) potOk = false;`);
   });
   lines.push('vbEmitEnd(PSTR("pot.sweep"), potOk ? PSTR("pass") : PSTR("unknown"), potOk ? nullptr : PSTR("timeout"));');
   return lines.join("\n  ");
@@ -625,15 +618,14 @@ function makeLed(plan: SelfTestPlan, profile: BoardProfile): string {
   const leds = subjectByKind(plan, "led").sort((a, b) => a.order - b.order);
   if (leds.length === 0) return 'vbEmitBegin(PSTR("led.sequence")); vbEmitEnd(PSTR("led.sequence"), PSTR("skipped"), PSTR("no LED subjects"));';
   const lines: string[] = ['vbEmitBegin(PSTR("led.sequence"));', "bool ledOk = true;"];
+  const choices = [...leds.map((_subject, index) => `"${index + 1}"`), '"none"'].join(",");
   leds.forEach((subject) => {
     const id = pinIdentifier(subject.pin);
-    const pin = subjectPin(subject, profile);
     const active = subject.activeHigh ? 1 : 0;
-    lines.push(`if (!vbStuck_${id}) { for (uint16_t pulse = 0; pulse < VB_LED_PULSES; ++pulse) { vbPulse_${id}(${active}, VB_LED_ON_MS); if (VB_LED_PERIOD_MS > VB_LED_ON_MS) delay(VB_LED_PERIOD_MS - VB_LED_ON_MS); } } else { ledOk = false; }`);
+    const order = subject.order;
+    lines.push(`if (vbStuck_${id}) { ledOk = false; } else { const char* which${order} = vbAskWhilePulsing(PSTR("led${order}"), PSTR("led.sequence"), PSTR("which-led"), PSTR("${cppString(subject.part)}"), "${choices.replace(/"/g, '\\"')}", VB_PROMPT_TIMEOUT, vbPulse_${id}, ${active}); if (which${order} == nullptr || strcmp(which${order}, "timeout") == 0) ledOk = false; if (which${order} != nullptr) vbEmitObsStr(PSTR("led.sequence"), PSTR("${cppString(subject.part)}"), PSTR("which"), which${order}); }`);
   });
-  const choices = [...leds.map((_subject, index) => `"${index + 1}"`), '"none"'].join(",");
-  lines.push(`const char* which = vbAsk(PSTR("ledwhich"), PSTR("led.sequence"), PSTR("which-led"), nullptr, "${choices.replace(/"/g, '\\"')}", VB_PROMPT_TIMEOUT); if (which == nullptr || strcmp(which, "timeout") == 0 || strcmp(which, "none") == 0) ledOk = false; if (which != nullptr) vbEmitObsStr(PSTR("led.sequence"), nullptr, PSTR("which"), which);`);
-  lines.push('vbEmitEnd(PSTR("led.sequence"), ledOk ? PSTR("pass") : PSTR("unknown"), ledOk ? nullptr : PSTR("stuck or no LED confirmation"));');
+  lines.push('vbEmitEnd(PSTR("led.sequence"), ledOk ? PSTR("pass") : PSTR("unknown"), ledOk ? nullptr : PSTR("stuck or timeout"));');
   return lines.join("\n  ");
 }
 
@@ -643,17 +635,11 @@ function makeBuzzer(plan: SelfTestPlan, profile: BoardProfile): string {
   const lines: string[] = ['vbEmitBegin(PSTR("buzzer.confirm"));', "bool buzzerOk = true;"];
   buzzers.forEach((subject, index) => {
     const id = pinIdentifier(subject.pin);
+    const pin = subjectPin(subject, profile);
     const active = subject.active ? 1 : 0;
-    if (subject.active) {
-      lines.push(`if (!vbStuck_${id}) { vbPulse_${id}(1, 20); delay(30); } else buzzerOk = false;`);
-    } else {
-      lines.push(`if (!vbStuck_${id}) { pinMode(${subjectPin(subject, profile).arduino}, OUTPUT); tone(${subjectPin(subject, profile).arduino}, 2400, 35); delay(45); noTone(${subjectPin(subject, profile).arduino}); vbInput_${id}(0); } else buzzerOk = false;`);
-    }
-    void active;
-    void index;
+    lines.push(`if (vbStuck_${id}) { buzzerOk = false; } else { const char* heard${index} = vbAskWhileBuzzer(PSTR("buzzer${index}"), PSTR("buzzer.confirm"), PSTR("heard-beep"), PSTR("${cppString(subject.part)}"), "\\\"yes\\\",\\\"no\\\"", VB_PROMPT_TIMEOUT, ${pin.arduino}, ${active}, vbStuck_${id}); if (heard${index} == nullptr || strcmp(heard${index}, "timeout") == 0) buzzerOk = false; }`);
   });
-  lines.push('const char* heard = vbAsk(PSTR("heard"), PSTR("buzzer.confirm"), PSTR("heard-beep"), nullptr, "\\\"yes\\\",\\\"no\\\"", VB_PROMPT_TIMEOUT); if (heard == nullptr || strcmp(heard, "yes") != 0) buzzerOk = false;');
-  lines.push('vbEmitEnd(PSTR("buzzer.confirm"), buzzerOk ? PSTR("pass") : PSTR("unknown"), buzzerOk ? nullptr : PSTR("no confirmation or stuck"));');
+  lines.push('vbEmitEnd(PSTR("buzzer.confirm"), buzzerOk ? PSTR("pass") : PSTR("unknown"), buzzerOk ? nullptr : PSTR("timeout or stuck"));');
   return lines.join("\n  ");
 }
 

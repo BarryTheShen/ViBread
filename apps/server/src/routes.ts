@@ -119,7 +119,10 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const missionId = String(req.params.id);
     const body = req.body as { kind?: unknown };
     if (body.kind !== "bench" && body.kind !== "app") throw httpError(400, "INVALID_KIND", "kind must be bench or app");
-    const revision = await ctx.store.getRevision(missionId);
+    const mission = await ctx.store.getMission(missionId);
+    if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
+    const revisionNumber = mission.releasedRevision ?? mission.currentRevision;
+    const revision = revisionNumber === undefined ? null : await ctx.store.getRevision(missionId, revisionNumber);
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
     const key = body.kind === "bench" ? "bench.hex" : "app.hex";
     const cachedHash = revision.results.artifacts[key];

@@ -124,14 +124,6 @@ export const imessageLinks = sqliteTable("imessage_links", {
   redeemedAt: timestamp("redeemedAt"),
 });
 
-export const buildProgress = sqliteTable("build_progress", {
-  missionId: text("missionId").primaryKey(),
-  revision: integer("revision"),
-  current: integer("current").notNull(),
-  plug: text("plug").notNull(),
-  headline: text("headline"),
-  updatedAt: timestamp("updatedAt").notNull(),
-});
 
 // Better Auth's Drizzle adapter requires these exact model keys.
 export const user = sqliteTable("user", {
@@ -190,7 +182,6 @@ export const dbSchema = {
   events,
   apiTokens,
   imessageLinks,
-  buildProgress,
   user,
   session,
   account,

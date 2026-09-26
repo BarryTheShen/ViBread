@@ -279,72 +279,55 @@ function answerMissing(raw: string | undefined): boolean {
   return value === undefined || value.length === 0 || value === "timeout" || value === "timed out" || value === "unknown";
 }
 
-function valueLevel(value: boolean | number | string): 0 | 1 | undefined {
-  if (typeof value === "boolean") return value ? 1 : 0;
-  if (typeof value === "number") return value === 0 ? 0 : value === 1 ? 1 : undefined;
-  const normalized = value.trim().toLowerCase();
-  if (normalized === "pressed" || normalized === "press" || normalized === "low" || normalized === "0") return 0;
-  if (normalized === "released" || normalized === "release" || normalized === "high" || normalized === "1") return 1;
+type StableObservation = 0 | 1 | "mixed";
+
+function stableObservation(value: boolean | number | string): StableObservation | undefined {
+  if (value === 0 || value === 1 || value === "mixed") return value;
   return undefined;
 }
 
+function askForPart(
+  lines: DeviceLine[],
+  test: Extract<DeviceLine, { t: "ask" }>["test"],
+  id: string,
+  part: string,
+): Extract<DeviceLine, { t: "ask" }> | undefined {
+  return lines.find((line): line is Extract<DeviceLine, { t: "ask" }> => line.t === "ask" && line.test === test && line.id === id && line.part === part);
+}
+
+function observationForPart(
+  lines: DeviceLine[],
+  test: Extract<DeviceLine, { t: "obs" }>["test"],
+  part: string,
+  key: string,
+): Extract<DeviceLine, { t: "obs" }> | undefined {
+  return lines.find((line): line is Extract<DeviceLine, { t: "obs" }> => line.t === "obs" && line.test === test && line.part === part && line.key === key);
+}
+
 function evaluateButton(context: EvaluationContext, subject: Extract<SelfTestSubject, { kind: "button" }>): SubjectResult {
-  const segment = linesForTest(context.lines, "button.interactive");
-  const asks = asksFor(context.lines, "button.interactive").filter((ask) => ask.part === undefined || ask.part === subject.part);
-  const missingAnswer = asks.some((ask) => answerMissing(context.answers[ask.id]));
-  const observations = segment.filter(
-    (line): line is Extract<DeviceLine, { t: "obs" }> => line.t === "obs" && (line.part === undefined || line.part === subject.part),
-  );
-  const reads = segment.filter(
-    (line): line is Extract<DeviceLine, { t: "read" }> => line.t === "read" && line.pin === subject.pin,
-  );
+  const buttonSubjects = context.subjects.filter((candidate): candidate is Extract<SelfTestSubject, { kind: "button" }> => candidate.kind === "button");
+  const index = buttonSubjects.findIndex((candidate) => candidate.part === subject.part);
+  const pressAsk = askForPart(context.lines, "button.interactive", `btn${index}-press`, subject.part);
+  const releaseAsk = askForPart(context.lines, "button.interactive", `btn${index}-release`, subject.part);
+  const missingAnswer = pressAsk === undefined || releaseAsk === undefined || answerMissing(context.answers[pressAsk.id]) || answerMissing(context.answers[releaseAsk.id]);
+  const pressed = observationForPart(context.lines, "button.interactive", subject.part, "pressed");
+  const released = observationForPart(context.lines, "button.interactive", subject.part, "released");
+  const pressedLevel = pressed === undefined ? undefined : stableObservation(pressed.v);
+  const releasedLevel = released === undefined ? undefined : stableObservation(released.v);
   const expectedPressed = subject.pressedLevel;
   const expectedReleased = expectedPressed === 0 ? 1 : 0;
-  let sawPressed = false;
-  let sawReleased = false;
-  let wrongLevel = false;
-  for (const observation of observations) {
-    const key = observation.key.toLowerCase();
-    if (key.includes("press")) {
-      if (typeof observation.v === "boolean") {
-        if (observation.v) sawPressed = true;
-      } else {
-        const level = valueLevel(observation.v);
-        if (level === expectedPressed) sawPressed = true;
-        else if (level !== undefined) wrongLevel = true;
-      }
-    }
-    if (key.includes("release")) {
-      if (typeof observation.v === "boolean") {
-        if (observation.v) sawReleased = true;
-      } else {
-        const level = valueLevel(observation.v);
-        if (level === expectedReleased) sawReleased = true;
-        else if (level !== undefined) wrongLevel = true;
-      }
-    }
-  }
-  for (const read of reads) {
-    const level = stableLevel(read);
-    if (level === expectedPressed) sawPressed = true;
-    if (level === expectedReleased) sawReleased = true;
-    if (level !== undefined && level !== expectedPressed && level !== expectedReleased) wrongLevel = true;
-  }
-  const needsRelease = asks.some((ask) => ask.kind === "release");
-  let status: TestStatus;
-  let observed: string;
-  if (wrongLevel) {
-    status = "fail";
-    observed = "button transition had the wrong level";
-  } else if (sawPressed && (!needsRelease || sawReleased)) {
-    status = missingAnswer ? "unknown" : "pass";
-    observed = sawReleased ? "pressed and released" : "pressed";
-  } else if (statusForEnd(context.lines, "button.interactive") === "fail") {
+  let status: TestStatus = "unknown";
+  let observed = "button transition telemetry is missing";
+  if (!missingAnswer && pressedLevel !== undefined && releasedLevel !== undefined && pressedLevel !== "mixed" && releasedLevel !== "mixed") {
+    status = pressedLevel === expectedPressed && releasedLevel === expectedReleased ? "pass" : "fail";
+    observed = `pressed ${pressedLevel}, released ${releasedLevel}`;
+  } else if (statusForEnd(context.lines, "button.interactive") === "fail" && !missingAnswer) {
     status = "fail";
     observed = "device reported a failed button test";
-  } else {
-    status = "unknown";
-    observed = missingAnswer ? "human answer or transition timed out" : "no button transition telemetry";
+  } else if (missingAnswer) {
+    observed = "button answer timed out or its exact prompt is missing";
+  } else if (pressedLevel === "mixed" || releasedLevel === "mixed") {
+    observed = "button reading was mixed";
   }
   return { part: subject.part, pin: subject.pin, status, observed, expected: `press ${expectedPressed === 1 ? "HIGH" : "LOW"}, release ${expectedReleased === 1 ? "HIGH" : "LOW"}` };
 }
@@ -387,8 +370,11 @@ function evaluateLight(context: EvaluationContext, subject: Extract<SelfTestSubj
   const ambient = firstPhase(readings, "ambient");
   const covered = firstPhase(readings, "covered");
   if (ambient !== undefined && covered !== undefined) context.calibrations.push(calibrationFor(subject.part, ambient, covered));
-  const asks = asksFor(context.lines, "light.relative").filter((ask) => ask.part === undefined || ask.part === subject.part);
-  const missingAnswer = asks.some((ask) => answerMissing(context.answers[ask.id]));
+  const lightSubjects = context.subjects.filter((candidate): candidate is Extract<SelfTestSubject, { kind: "light" }> => candidate.kind === "light");
+  const index = lightSubjects.findIndex((candidate) => candidate.part === subject.part);
+  const coverAsk = askForPart(context.lines, "light.relative", `light${index}-cover`, subject.part);
+  const uncoverAsk = askForPart(context.lines, "light.relative", `light${index}-uncover`, subject.part);
+  const missingAnswer = coverAsk === undefined || uncoverAsk === undefined || answerMissing(context.answers[coverAsk.id]) || answerMissing(context.answers[uncoverAsk.id]);
   if (ambient === undefined || covered === undefined) {
     const status = statusForEnd(context.lines, "light.relative") === "fail" ? "fail" : "unknown";
     return { part: subject.part, pin: subject.pin, status, observed: status === "fail" ? "device reported a failed light test without ADC data" : "ambient or covered ADC reading is missing", expected: "at least 15% ADC change when covered" };
@@ -423,8 +409,11 @@ function evaluatePot(context: EvaluationContext, subject: Extract<SelfTestSubjec
   const readings = adcReadings(context, subject);
   const min = firstPhase(readings, "min");
   const max = firstPhase(readings, "max");
-  const asks = asksFor(context.lines, "pot.sweep").filter((ask) => ask.part === undefined || ask.part === subject.part);
-  const missingAnswer = asks.some((ask) => answerMissing(context.answers[ask.id]));
+  const potSubjects = context.subjects.filter((candidate): candidate is Extract<SelfTestSubject, { kind: "pot" }> => candidate.kind === "pot");
+  const index = potSubjects.findIndex((candidate) => candidate.part === subject.part);
+  const minAsk = askForPart(context.lines, "pot.sweep", `pot${index}-min`, subject.part);
+  const maxAsk = askForPart(context.lines, "pot.sweep", `pot${index}-max`, subject.part);
+  const missingAnswer = minAsk === undefined || maxAsk === undefined || answerMissing(context.answers[minAsk.id]) || answerMissing(context.answers[maxAsk.id]);
   if (min === undefined || max === undefined) {
     const status = statusForEnd(context.lines, "pot.sweep") === "fail" ? "fail" : "unknown";
     return { part: subject.part, pin: subject.pin, status, observed: status === "fail" ? "device reported a failed pot test without ADC data" : "minimum or maximum ADC reading is missing", expected: "pot span ≥ 50% of full scale" };
@@ -440,59 +429,47 @@ function evaluatePots(context: EvaluationContext): BenchTestResult {
   return testResult("pot.sweep", results, aggregate(results.map((result) => result.status)) === "pass" ? "The knob swept across its usable range." : "The knob did not show a half-scale sweep.");
 }
 
-function ledOrderForValue(value: string, plan: SelfTestPlan): number | undefined {
-  const normalized = value.trim().toLowerCase();
-  const numeric = /^\d+$/.test(normalized) ? Number(normalized) : undefined;
-  if (numeric !== undefined && plan.subjects.some((subject) => subject.kind === "led" && subject.order === numeric)) return numeric;
-  const byPart = plan.subjects.find((subject): subject is Extract<SelfTestSubject, { kind: "led" }> => subject.kind === "led" && normalized.includes(subject.part.toLowerCase()));
-  if (byPart !== undefined) return byPart.order;
-  const byLabel = plan.subjects.find((subject): subject is Extract<SelfTestSubject, { kind: "led" }> => subject.kind === "led" && normalized.includes(subject.label.toLowerCase()));
-  return byLabel?.order;
-}
-
 function evaluateLeds(context: EvaluationContext): BenchTestResult {
   const leds = context.subjects.filter((subject): subject is Extract<SelfTestSubject, { kind: "led" }> => subject.kind === "led");
   const asks = asksFor(context.lines, "led.sequence", "which-led");
-  const subjectResults: SubjectResult[] = [];
-  if (asks.length === 0) {
-    const status: TestStatus = statusForEnd(context.lines, "led.sequence") === "fail" ? "fail" : "unknown";
-    return testResult(
-      "led.sequence",
-      leds.map((led) => ({ part: led.part, pin: led.pin, status, observed: status === "fail" ? "device reported a failed LED test without an answer" : "no which-light prompt", expected: `light ${led.order}` })),
-      status === "fail" ? "The device reported an LED sequence failure." : "Waiting for the person to identify each blinking light.",
-    );
-  }
-  for (const [index, ask] of asks.entries()) {
-    const expected = ask.part === undefined ? leds[index] : leds.find((led) => led.part === ask.part);
-    if (expected === undefined) continue;
-    const raw = context.answers[ask.id];
-    const observedOrder = answerMissing(raw) ? undefined : ledOrderForValue(raw ?? "", context.plan);
+  const subjectResults = leds.map((led) => {
+    const ask = asks.find((candidate) => candidate.id === `led${led.order}` && candidate.part === led.part);
+    const raw = ask === undefined ? undefined : context.answers[ask.id];
+    const observation = observationForPart(context.lines, "led.sequence", led.part, "which");
+    const telemetryAnswer = observation === undefined ? undefined : String(observation.v);
+    const missing = ask === undefined || answerMissing(raw);
     let status: TestStatus = "unknown";
-    let observed = raw === undefined ? "no answer" : raw;
-    if (observedOrder !== undefined) {
-      status = observedOrder === expected.order ? "pass" : "fail";
-      observed = `light ${observedOrder}`;
-      if (status === "fail" && !context.signatures.ledMismatch) {
-        context.signatures.ledMismatch = true;
-        context.signatures.ledExpectedPart = expected.part;
-        context.signatures.ledExpectedOrder = expected.order;
-        context.signatures.ledObservedOrder = observedOrder;
+    let observed = missing ? "LED answer timed out or its exact prompt is missing" : raw ?? "no answer";
+    if (!missing && raw === String(led.order)) {
+      if (telemetryAnswer === undefined || telemetryAnswer === raw) {
+        status = "pass";
+        observed = `light ${raw}`;
+      } else {
+        status = "fail";
+        observed = `answer ${raw}, device observed ${telemetryAnswer}`;
       }
-    } else if (!answerMissing(raw)) {
+    } else if (!missing) {
       status = "fail";
       observed = raw ?? "unrecognized answer";
-      if (!context.signatures.ledMismatch) {
-        context.signatures.ledMismatch = true;
-        context.signatures.ledExpectedPart = expected.part;
-        context.signatures.ledExpectedOrder = expected.order;
-      }
     }
-    subjectResults.push({ part: expected.part, pin: expected.pin, status, observed, expected: `light ${expected.order} (${expected.label})` });
+    if (status === "fail" && !context.signatures.ledMismatch) {
+      context.signatures.ledMismatch = true;
+      context.signatures.ledExpectedPart = led.part;
+      context.signatures.ledExpectedOrder = led.order;
+      const observedOrder = raw === undefined ? undefined : Number(raw);
+      context.signatures.ledObservedOrder = Number.isInteger(observedOrder) ? observedOrder : undefined;
+    }
+    return { part: led.part, pin: led.pin, status, observed, expected: `light ${led.order} (${led.label})` };
+  });
+  const status = aggregate(subjectResults.map((result) => result.status));
+  if (subjectResults.length === 0 || asks.length === 0) {
+    const ended = statusForEnd(context.lines, "led.sequence");
+    if (ended === "fail") return testResult("led.sequence", subjectResults, "The device reported an LED sequence failure.");
   }
   return testResult(
     "led.sequence",
-    subjectResults.length > 0 ? subjectResults : leds.map((led) => ({ part: led.part, pin: led.pin, status: "unknown", observed: "no matching prompt", expected: `light ${led.order}` })),
-    aggregate(subjectResults.map((result) => result.status)) === "pass" ? "The person identified each LED in the expected order." : "The blinking LED answers did not match the physical order.",
+    subjectResults,
+    status === "pass" ? "The person identified each LED in the expected order." : "The blinking LED answers did not match the physical order.",
   );
 }
 

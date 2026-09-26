@@ -43,7 +43,7 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
   const log = input.log ?? pino({ level: process.env.LOG_LEVEL ?? "info" });
   const opened: OpenDatabase = openDatabase(config.dataDir);
   const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: config.dataDir });
-  const broker = createApprovalBroker({ db: opened.db, sqlite: opened.sqlite, approvalSecret: config.approvalSecret });
+  const broker = createApprovalBroker({ db: opened.db, sqlite: opened.sqlite, approvalSecret: config.approvalSecret, store });
   const machine = createMissionMachine({ db: opened.db, sqlite: opened.sqlite, store });
   const tokens = createTokenService({ db: opened.db, sqlite: opened.sqlite });
   const links = createLinkService({ db: opened.db, sqlite: opened.sqlite });
