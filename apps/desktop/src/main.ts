@@ -188,7 +188,7 @@ async function resetExamples(): Promise<void> {
     type: "question",
     buttons: ["Add fresh examples", "Cancel"],
     cancelId: 1,
-    message: "Add fresh copies of the three example missions?",
+    message: "Add fresh copies of the example missions?",
     detail: "The ViBread server restarts while they are built (about a minute). Your own missions and the current examples are kept.",
   });
   if (response !== 0) return;
