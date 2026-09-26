@@ -126,6 +126,19 @@ export function createHumanRelease(deps: {
     if (result.status === "denied") throw conflict("release_denied", result.reason);
     if (result.status !== "executed") throw new Error(`Unexpected release outcome: ${result.status}`);
 
+    const recordedVote = (retro?.evidence as { recorded?: { label?: string } } | undefined)?.recorded;
+    if (!reviewMissing && recordedVote?.label) {
+      // A recorded RETRO vote (recorded.ts) reviewed exactly this revision; it counts, and the release says so.
+      await store.appendEvent({
+        missionId,
+        channel: actor.channel,
+        actor,
+        kind: "release.review-recorded",
+        text: `Released by ${actor.name ?? actor.id} with a recorded independent review (${recordedVote.label}).`,
+        revision: n,
+        data: { recorded: recordedVote },
+      });
+    }
     if (reviewMissing) {
       await store.appendEvent({
         missionId,
