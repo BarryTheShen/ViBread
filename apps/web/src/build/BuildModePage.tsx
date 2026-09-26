@@ -1,40 +1,36 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BuildState, PhotoCheckResult } from "@vibread/core";
-import {
-  Alert,
-  AlertTitle,
-  Box,
-  Button,
-  Card,
-  CardContent,
-  CardMedia,
-  Chip,
-  CircularProgress,
-  Divider,
-  MobileStepper,
-  Paper,
-  Skeleton,
-  Stack,
-  ToggleButton,
-  ToggleButtonGroup,
-  Typography,
-  useMediaQuery,
-} from "@mui/material";
-import {
-  CameraAltOutlined,
-  CheckCircleOutlined,
-  CloudOffOutlined,
-  ErrorOutlined,
-  FactCheckOutlined,
-  HelpOutlineOutlined,
-  ImageNotSupportedOutlined,
-  KeyboardArrowLeft,
-  KeyboardArrowRight,
-  Usb,
-  UsbOff,
-  WifiOff,
-} from "@mui/icons-material";
+import Alert from "@mui/material/Alert";
+import AlertTitle from "@mui/material/AlertTitle";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import Card from "@mui/material/Card";
+import CardContent from "@mui/material/CardContent";
+import CardMedia from "@mui/material/CardMedia";
+import Chip from "@mui/material/Chip";
+import CircularProgress from "@mui/material/CircularProgress";
+import Divider from "@mui/material/Divider";
+import MobileStepper from "@mui/material/MobileStepper";
+import Paper from "@mui/material/Paper";
+import Skeleton from "@mui/material/Skeleton";
+import Stack from "@mui/material/Stack";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Typography from "@mui/material/Typography";
+import useMediaQuery from "@mui/material/useMediaQuery";
+import CameraAltOutlined from "@mui/icons-material/CameraAltOutlined";
+import CheckCircleOutlined from "@mui/icons-material/CheckCircleOutlined";
+import CloudOffOutlined from "@mui/icons-material/CloudOffOutlined";
+import ErrorOutlined from "@mui/icons-material/ErrorOutlined";
+import FactCheckOutlined from "@mui/icons-material/FactCheckOutlined";
+import HelpOutlineOutlined from "@mui/icons-material/HelpOutlineOutlined";
+import ImageNotSupportedOutlined from "@mui/icons-material/ImageNotSupportedOutlined";
+import KeyboardArrowLeft from "@mui/icons-material/KeyboardArrowLeft";
+import KeyboardArrowRight from "@mui/icons-material/KeyboardArrowRight";
+import Usb from "@mui/icons-material/Usb";
+import UsbOff from "@mui/icons-material/UsbOff";
+import WifiOff from "@mui/icons-material/WifiOff";
 import { useNavigate, useParams } from "react-router";
 import {
   BuildApiError,

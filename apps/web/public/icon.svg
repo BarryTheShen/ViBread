@@ -1,15 +1,15 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
   <title id="title">ViBread Mission Control</title>
   <desc id="desc">A small rocket rising over a crescent moon</desc>
-  <rect width="512" height="512" rx="96" fill="#001B29"/>
+  <rect width="512" height="512" rx="96" fill="#1F2133"/>
   <path d="M145 349a104 104 0 1 0 121-165 91 91 0 1 1-121 165Z" fill="#FCBF49"/>
   <path d="M129 397h94" stroke="#FCBF49" stroke-width="14" stroke-linecap="round" opacity=".45"/>
   <path d="M129 425h55" stroke="#FCBF49" stroke-width="10" stroke-linecap="round" opacity=".25"/>
   <path d="M275 299c-7-49 4-113 66-175 29 20 52 48 64 82-38 82-88 111-130 93Z" fill="#EAE2B7"/>
-  <path d="M341 124c30 20 52 48 64 82l-37 26c-21-20-47-34-75-39 13-28 29-51 48-69Z" fill="#F77F00"/>
-  <circle cx="349" cy="176" r="13" fill="#001B29"/>
-  <path d="M278 299c-24-4-45 0-61 10l36 36c13-8 27-17 42-27Z" fill="#D62828"/>
-  <path d="M251 329c-18-2-35 2-50 12l29 29c12-7 25-14 39-19Z" fill="#F77F00"/>
-  <path d="M350 376c-20 11-36 26-46 46l44 8c12-13 26-23 43-29Z" fill="#D62828"/>
-  <path d="M328 409c-17 5-31 14-43 27l35 15c10-9 21-15 34-18Z" fill="#F77F00"/>
+  <path d="M341 124c30 20 52 48 64 82l-37 26c-21-20-47-34-75-39 13-28 29-51 48-69Z" fill="#D80032"/>
+  <circle cx="349" cy="176" r="13" fill="#1F2133"/>
+  <path d="M278 299c-24-4-45 0-61 10l36-36c13 8 27 17 42 27Z" fill="#D80032"/>
+  <path d="M251 329c-18-2-35 2-50-12l29-29c12 7 25 14 39 19Z" fill="#FCBF49"/>
+  <path d="M350 376c-20-11-36-26-46-46l44-8c12 13 26 23 43 29Z" fill="#D80032"/>
+  <path d="M328 409c-17-5-31-14-43-27l35-15c10 9 21 15 34 18Z" fill="#FCBF49"/>
 </svg>
