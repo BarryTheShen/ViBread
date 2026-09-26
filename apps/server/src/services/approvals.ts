@@ -255,7 +255,7 @@ export class SqlApprovalBroker implements ApprovalBroker {
         channel: input.actor.channel,
         actor: input.actor,
         kind: "bench.request.started",
-        text: `Started ${started.action}`,
+        text: `${input.actor.name ?? input.actor.id ?? "Someone"} clicked Run it now: ${started.action}`,
         revision: input.revision ?? undefined,
         data: { approvalId: started.id, action: started.action, revision: started.revision, clickedBy: input.actor, preApprovedBy: started.preApprovedBy ? (JSON.parse(started.preApprovedBy) as Actor) : undefined },
       });

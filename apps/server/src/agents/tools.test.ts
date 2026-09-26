@@ -91,10 +91,10 @@ describe("tool registry policy (MCP/A2A path)", () => {
   it("physical actions only become bench-click requests", async () => {
     const { call, store, mission } = await setup("autopilot");
     const revision = await store.createRevision(mission.id, { circuit: golden.circuit, author: HUMAN });
-    await store.updateMission(mission.id, { currentRevision: revision.n });
+    await store.updateMission(mission.id, { currentRevision: revision.n, releasedRevision: revision.n });
     const result = await call("request_bench_action", { action: "flash-app" });
     expect(result.status).toBe("bench-click");
-    // The broker's action is the bench action itself (what the bench lists), bound to the current revision.
+    // The broker's action is the bench action itself (what the bench lists), bound to the released revision.
     expect(result.status === "bench-click" && [result.approval?.action, result.approval?.revisionHash]).toEqual(["flash-app", revision.hash]);
   });
 
