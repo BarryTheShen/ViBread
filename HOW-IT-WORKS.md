@@ -8,7 +8,7 @@ real wiring — and if something is wrong, it tells you which hole to fix.
 
 | Thing | Why | Notes |
 |---|---|---|
-| **The ViBread desktop app** | Everything runs inside it: the screens, the server, the Arduino compiler, the simulator and the USB connection | Linux x64 now ([download](https://github.com/BarryTheShen/ViBread/releases/tag/desktop-v0.1.0-linux)); Windows x64 next. Developers can run it from source instead ([README](README.md)) |
+| **The ViBread desktop app** | Everything runs inside it: the screens, the server, the Arduino compiler, the simulator and the USB connection | [Download](https://github.com/BarryTheShen/ViBread/releases/tag/desktop-v0.1.0): Linux x64 (AppImage or .deb), Windows 10/11 x64 (.exe), macOS Apple silicon or Intel (.dmg). First launch takes 3–6 minutes (it downloads the Arduino compiler and prepares the examples). Developers can run it from source instead ([README](README.md)) |
 | **Arduino Uno R3 or Nano** (ATmega328P, 5 V) + a USB **data** cable | The board ViBread programs and tests | Charge-only cables don't work. Linux: `sudo usermod -aG dialout $USER`, then log out and in once |
 | **A breadboard + parts** | LEDs, resistors, push buttons, light sensor (photoresistor), knob (potentiometer), buzzers | Anything else can be added as a "generic part" (not checked as deeply) |
 | **A Claude key** (optional) | Designing *new* circuits, writing the independent tests, the reviewer's vote, the photo check | Desktop app: menu **ViBread → Set Anthropic API key…**, or **Settings → Connect your Claude account** |

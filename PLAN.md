@@ -27,7 +27,7 @@ hardware, a Claude credential, and accounts (Google/GitHub/Photon) — see "Need
 | 11 | Claude Code MCP + A2A | Built | `claude mcp list` → Connected; A2A ask-back → completed artifact |
 | 13 | SPICE cross-check | Built | Part of EECOM's evidence: fixed per-color diode models at three corners; red LED 13.99 mA SPICE vs 13.41 mA analytic; goldens show no deviation, a wrong Vf assumption is flagged |
 | 16 | Connect your Claude account | Built | oh-my-pi `login anthropic` + auth-broker (random loopback port) + per-user auth-gateway; real claude.ai sign-in page reached from Settings; with the real omp a stale code fails in 0.17 s and a wrong code in ~1 s; fallback to server key tested with a protocol fake. **Real sign-in needs you** |
-| — | Desktop app (Electron) | Built (Linux) | **Linux x64 AppImage** released as `desktop-v0.1.0-linux` (.deb built and install-tested with apt); packaged app smoke-tested on CI for Linux and macOS arm64/x64 (Arduino compiler download + seed + screenshots; first run 153–247 s). Windows x64 CI in progress. Real Arduino over USB untested |
+| — | Desktop app (Electron) | Built | Release `desktop-v0.1.0`: Linux x64 AppImage + .deb, Windows x64 installer, macOS arm64/x64 dmg. Each packaged app smoke-tested on its own OS on GitHub Actions (Arduino compiler download + seed + compile + screenshots; first run 161 s Linux, 177 s Windows, 232–386 s macOS); .deb install-tested with apt. Real Arduino over USB untested |
 | — | Phone as a home-screen web app | Built | Manifest + icons; iPhone "Add to Home Screen" tip in Build Mode |
 
 Also added while integrating: human **GO for build** (Flight Director) when the agent isn't the one releasing; mission
