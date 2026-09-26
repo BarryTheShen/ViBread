@@ -79,7 +79,9 @@ build list (§4); the cut order is its reverse.
   unverified · no motors/relays/mains in the MVP.
 - **Successful build (brief p.5, sharpened):**
   - **GO for build** = no ERC errors · electrical limits within spec · sketch compiles · the independent test suite passes with
-    full coverage · reviewer agent votes GO (the brief's "overall agent saying yes") · human GO.
+    full coverage · reviewer agent votes GO (the brief's "overall agent saying yes") · human GO. The human (Flight Director)
+    presses **GO for build**; if no Claude credential exists, the independent tests can't be written (FIDO stays PENDING and GO
+    is blocked), and the reviewer vote can be waived only through an explicit confirmation that is recorded on the timeline.
   - **Mission success** = staged power-up clean · self-test telemetry matches expectation · user confirms the behavior.
 
 ## 2. Theme fit — "Fly Me to the Moon"
@@ -253,7 +255,7 @@ flowchart LR
 | `checks` | `run_erc` (ro), `electrical_limits` (ro), `spice_crosscheck` (ro, item 13), `explain_finding` (ro) | json-rules-engine, ngspice CLI |
 | `firmware` | `compile` (ro), `pin_mode_check` (ro), `generate_selftest` | arduino-cli, Eta + ArduinoJson, avr8js |
 | `sim` | `run_scenarios` (ro), `coverage_report` (ro), `sim_trace` (ro) | avr8js, yaml, worker_threads |
-| `assembly` | `layout_board`, `lvs_check` (ro), `build_steps`, `render_step_png` (ro) | @wokwi/elements glyphs, @resvg/resvg-js |
+| `assembly` | `layout_board`, `lvs_check` (ro), `build_steps`, `render_step_png` (ro) | our SVG glyphs, @resvg/resvg-js |
 | `bench` | `diagnose` (ro), `inspect_photo` (ro), `explain_telemetry` (ro) | json-rules-engine, sharp + heif2jpeg, Claude vision |
 
 Flashing and self-tests are machine-driven bench actions executed by the browser after a human click — never agent tools.
@@ -268,8 +270,8 @@ Flashing and self-tests are machine-driven bench actions executed by the browser
   breadboard, USB power-path protection) · `parts` (id, ref, `moduleKey`, variant, value + tolerance) · `pins` with KiCad-style
   electrical types · `nets` · `sketch` · `tests` · `provenance` (intent clauses, assumptions). Every artifact carries the revision
   hash.
-- **Module library** = data files (facts + links, no copied art): pins, limits, sim model id, footprint, glyph id (`@wokwi/elements`
-  names), self-test strategy, evidence URLs. MVP set (~10, frozen from parts in hand at the gate): LED by color, resistor, 4-pin
+- **Module library** = data files (facts + links, no copied art): pins, limits, sim model id, footprint, self-test strategy,
+  evidence URLs. MVP set (~10, frozen from parts in hand at the gate): LED by color, resistor, 4-pin
   tactile button, photoresistor, potentiometer, passive + active buzzer; stretch: SG90 servo, HC-SR04. Parts outside the library
   enter as *generic digital/analog modules* from a user-supplied pinout: basic logic simulation, always labeled unverified.
 
@@ -336,7 +338,8 @@ persisted snapshots in SQLite, so human waits survive restarts.
   (a Node ESM directory-import issue was found). PNG via resvg for iMessage.
 - **Breadboard — custom glue (no library exists):** audits found no MIT/Apache breadboard component or solderless placer (Wokwi
   Elements has part glyphs but no breadboard; Fritzing is GPL/CC-BY-SA; other repos are apps, not libraries). We draw the board
-  grid in SVG and place `@wokwi/elements` part glyphs (MIT; via `React.createElement` because their JSX types fail under React 19).
+  grid **and** the part glyphs as plain SVG: the same drawing must render in the browser and in resvg (step PNGs for the phone and
+  iMessage), and Wokwi's web components can't render server-side, so `@wokwi/elements` was dropped.
   Board profiles: 0.1" grid, A–E / F–J groups split by the channel, rails as explicit segments; **Uno** off-board via flexible
   jumpers, **Nano** as an on-board anchor straddling the channel.
 - **Layout — deterministic net-to-row allocator:** 5 V/GND on the top rails; each branch placed left-to-right with a spacer row;
@@ -356,8 +359,8 @@ persisted snapshots in SQLite, so human waits survive restarts.
 A Claude-Code-like agent workspace, made friendly for non-technical users, composed from MUI components:
 
 - **Libraries:** `@mui/material` 9.4.0 + Emotion, `@mui/icons-material` 9.4.0, **`@mui/x-chat` 9.0.0-alpha.18** (MIT; ChatBox with
-  streaming, tool-call parts, approval states, stop, accessible message list), MUI X Community `x-charts`/`x-data-grid` 9.14.0
-  (lazy-loaded; no Pro/Premium), `react-markdown` + `react-syntax-highlighter`, React 19.3 + Vite 8.3.1, React Router 8, TanStack
+  streaming, tool-call parts, approval states, stop, accessible message list), `react-markdown` + `react-syntax-highlighter`,
+  `qrcode.react`, React 19.3 + Vite 8.3.1, React Router 8, TanStack
   Query 5 (polling). MUI v9 needs `sx` for spacing props.
 - **Stream glue:** MUI X Chat's `createAiSdkAdapter` parses the AI SDK UI message stream (verified with a mock model, including
   `tool-approval-request`). We wrap it to add `addToolApprovalResponse` (POSTs `{approvalId, decision}` to the broker), `stop`, and
@@ -528,8 +531,8 @@ channel can resume a mission.
 | Firmware | arduino-cli 1.5.1 + `arduino:avr@1.8.8` (external tool, GPL-3); eta 4.6.0 (MIT); ArduinoJson 7.4.2 (MIT, in sketches) |
 | Simulation | avr8js 0.21.1 (MIT), yaml 2.9.1 (ISC) |
 | Bench | webserial-flasher 1.0.1 (MIT), `@types/w3c-web-serial` |
-| Rendering | `@wokwi/elements` 1.9.2 (MIT), `@resvg/resvg-js` 2.6.2 (MPL-2.0), sharp 0.35.4 (Apache-2.0) |
-| UI | `@mui/material` / `@mui/icons-material` 9.4.0, `@mui/x-chat` 9.0.0-alpha.18, `@mui/x-charts` / `x-data-grid` 9.14.0 (MIT, Community), React 19.3, Vite 8.3.1, react-router 8, `@tanstack/react-query` 5, react-markdown 10.1, react-syntax-highlighter 16.1 |
+| Rendering | `@resvg/resvg-js` 2.6.2 (MPL-2.0), sharp 0.35.4 (Apache-2.0); breadboard/part drawings are our own SVG |
+| UI | `@mui/material` / `@mui/icons-material` 9.4.0, `@mui/x-chat` 9.0.0-alpha.18 (MIT), React 19.3, Vite 8.3.1, react-router 8, `@tanstack/react-query` 5, react-markdown 10.1, react-syntax-highlighter 16.1, qrcode.react 4.2 |
 | Claude account (item 16) | `omp` 18.3.2 CLI (MIT): `login anthropic`, `auth-broker serve`, `auth-gateway serve` |
 | Network | the chosen stable tunnel (cloudflared 2026.9.3 via Cloudflare's `any` apt repo, ngrok, or Tailscale) |
 

@@ -72,8 +72,6 @@ export interface ModuleDef {
   electrical: ModuleElectrical;
   sim: SimModelId;
   footprint: Footprint;
-  /** `@wokwi/elements` tag used for the part glyph in the browser. */
-  glyph: string;
   selftest: SelfTestKind | null;
   /** Pin groups joined inside the part at all times (button pairs). */
   internallyConnected?: string[][];
@@ -114,7 +112,6 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
     },
     sim: "led",
     footprint: { kind: "two-lead", pins: ["A", "K"], minSpan: 1, maxSpan: 1, preferredSpan: 1, polarized: true },
-    glyph: "wokwi-led",
     selftest: "led",
     evidence: ["Typical 5 mm indicator LED datasheet ranges (research/03); green covers both GaP (~2.2 V) and InGaN (~3.2 V) parts"],
   },
@@ -131,7 +128,6 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
     electrical: { defaultTolerancePct: 5, powerW: 0.25 },
     sim: "resistor",
     footprint: { kind: "two-lead", pins: ["1", "2"], minSpan: 3, maxSpan: 6, preferredSpan: 4, polarized: false },
-    glyph: "wokwi-resistor",
     selftest: null,
     evidence: ["1/4 W carbon-film resistor, 0.4 in lead bend; E12/E24 values"],
   },
@@ -150,7 +146,6 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
     electrical: { bounceMs: 5 },
     sim: "button",
     footprint: { kind: "button4" },
-    glyph: "wokwi-pushbutton",
     selftest: "button",
     internallyConnected: [
       ["1", "2"],
@@ -171,7 +166,6 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
     electrical: { darkOhmsMin: 1_000_000, lux10Ohms: { min: 8_000, max: 20_000 } },
     sim: "photoresistor",
     footprint: { kind: "two-lead", pins: ["1", "2"], minSpan: 1, maxSpan: 3, preferredSpan: 2, polarized: false },
-    glyph: "wokwi-photoresistor-sensor",
     selftest: "light",
     evidence: ["GL5528-class CdS cell: 8–20 kΩ at 10 lux, ≥ 1 MΩ dark (research/03 §light sensors)"],
   },
@@ -189,7 +183,6 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
     electrical: { defaultTolerancePct: 20 },
     sim: "potentiometer",
     footprint: { kind: "inline3", pins: ["A", "W", "B"] },
-    glyph: "wokwi-potentiometer",
     selftest: "pot",
     evidence: ["Breadboard trimmer/rotary pot, 0.1 in pin pitch, ±20 % track tolerance"],
   },
@@ -206,7 +199,6 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
     electrical: { currentMa: 30 },
     sim: "buzzer-active",
     footprint: { kind: "two-lead", pins: ["P", "N"], minSpan: 3, maxSpan: 3, preferredSpan: 3, polarized: true },
-    glyph: "wokwi-buzzer",
     selftest: "buzzer",
     evidence: ["12 mm 5 V active magnetic buzzer: ~30 mA typical at 5 V, 7.6 mm lead pitch"],
   },
@@ -223,7 +215,6 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
     electrical: { coilOhms: 16, minSeriesOhms: 100 },
     sim: "buzzer-passive",
     footprint: { kind: "two-lead", pins: ["P", "N"], minSpan: 3, maxSpan: 3, preferredSpan: 3, polarized: true },
-    glyph: "wokwi-buzzer",
     selftest: "buzzer",
     evidence: ["12 mm passive magnetic transducer: ~16 Ω coil; a series resistor keeps the pin current in limits"],
   },
@@ -237,7 +228,6 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
     electrical: {},
     sim: "generic",
     footprint: { kind: "generic-inline" },
-    glyph: "",
     selftest: null,
     evidence: ["User-supplied pinout"],
   },
