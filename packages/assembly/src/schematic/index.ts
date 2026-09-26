@@ -108,6 +108,12 @@ function startWorker(): ChildProcessWithoutNullStreams {
     if (child === processChild) child = undefined;
     rejectPending(errorFrom(error));
   });
+  // Writing to a worker that just died fails asynchronously (EPIPE) on stdin; unhandled, that 'error' event would crash
+  // the server. Drop the worker and fail the pending renders instead.
+  processChild.stdin.on("error", (error) => {
+    if (child === processChild) child = undefined;
+    rejectPending(errorFrom(error));
+  });
   processChild.once("exit", (code, signal) => {
     if (child === processChild) child = undefined;
     rejectPending(new Error(`schematic worker exited (${code ?? "signal"} ${signal ?? ""})`));
