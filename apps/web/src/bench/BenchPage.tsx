@@ -513,6 +513,8 @@ export default function BenchPage(): ReactElement {
       safeReady: activeStep >= 2,
       railsReady: Boolean(runner?.state.seenHello && runner.state.seenVcc),
       passed: run?.verdict === "pass",
+      loadedRevision: loaded?.revision.n ?? -1,
+      requestRevision: request.revision,
     });
     if (!gate.ok) {
       setError(gate.reason);
@@ -537,7 +539,7 @@ export default function BenchPage(): ReactElement {
     } finally {
       setBusy(undefined);
     }
-  }, [activeStep, flashApp, flashSafe, missionId, run, runner, startRail, startSelfTest]);
+  }, [activeStep, flashApp, flashSafe, loaded, missionId, run, runner, startRail, startSelfTest]);
 
   const denyApproval = useCallback(async (request: BenchApprovalRequest): Promise<void> => {
     setBusy(`deny:${request.id}`);
@@ -716,7 +718,7 @@ export default function BenchPage(): ReactElement {
 
         {error && <Alert severity="error" onClose={() => setError(undefined)} action={error === BOARD_LOST_POWER ? <Button color="inherit" size="small" onClick={() => { setError(undefined); void startRail(); }}>Retry rail checkpoint</Button> : undefined}>{error}</Alert>}
         {requests.map((request) => {
-          const gate = approvalGate(request.action, { connected: runner !== undefined, safeReady: activeStep >= 2, railsReady: Boolean(runner?.state.seenHello && runner.state.seenVcc), passed: run?.verdict === "pass" });
+          const gate = approvalGate(request.action, { connected: runner !== undefined, safeReady: activeStep >= 2, railsReady: Boolean(runner?.state.seenHello && runner.state.seenVcc), passed: run?.verdict === "pass", loadedRevision: loaded.revision.n, requestRevision: request.revision });
           return <Card key={request.id} variant="outlined">
             <CardContent>
               <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Claude Code asked: {request.summary} (r{request.revision})</Typography>

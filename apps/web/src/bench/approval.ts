@@ -5,6 +5,8 @@ export interface ApprovalGateContext {
   safeReady: boolean;
   railsReady: boolean;
   passed: boolean;
+  loadedRevision: number;
+  requestRevision: number;
 }
 
 export interface ApprovalGateResult {
@@ -14,6 +16,7 @@ export interface ApprovalGateResult {
 
 /** Physical approval requests never bypass the bench sequence. */
 export function approvalGate(action: BenchApprovalAction, context: ApprovalGateContext): ApprovalGateResult {
+  if (context.loadedRevision !== context.requestRevision) return { ok: false, reason: `This request is for revision ${context.requestRevision}; the bench has revision ${context.loadedRevision} loaded` };
   if (!context.connected) return { ok: false, reason: "Connect the board first" };
   if (action === "flash-bench") return { ok: true };
   if (!context.safeReady) return { ok: false, reason: "Make the board safe first" };
