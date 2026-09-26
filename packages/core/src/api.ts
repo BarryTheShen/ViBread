@@ -57,7 +57,8 @@ import type { DeviceLine } from "./telemetry.js";
  */
 
 export interface ApiError {
-  error: { code: string; message: string };
+  /** `retryAt` (ISO time) is set when the request can be retried later, e.g. Claude rate limits. */
+  error: { code: string; message: string; retryAt?: string };
 }
 
 export interface MeResponse {

@@ -189,6 +189,8 @@ export const inventoryScans = sqliteTable("inventory_scans", {
   observations: text("observations"),
   items: text("items"),
   error: text("error"),
+  errorCode: text("errorCode"),
+  retryAfter: timestamp("retryAfter"),
   createdAt: timestamp("createdAt").notNull(),
   updatedAt: timestamp("updatedAt").notNull(),
 });

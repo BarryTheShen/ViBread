@@ -220,6 +220,8 @@ export interface ScanView {
   photos: number;
   items: ScanItem[];
   error?: string;
+  errorCode?: string;
+  retryAfter?: string;
   /** Scanning needs a Claude credential for the scan's owner. */
   claude: "connected" | "missing";
   createdAt: string;

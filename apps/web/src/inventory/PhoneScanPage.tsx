@@ -10,8 +10,8 @@ import type { ScanItem } from "@vibread/core";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router";
 import { useAcceptScan, useAnalyzeScan, useCatalog, useScan, useUploadScanPhoto } from "../api/inventory.js";
+import { scanErrorMessage, scanViewErrorMessage } from "./scanErrors.js";
 import { ScanReview } from "./ScanReview.js";
-
 interface PhonePhoto {
   id: string;
   file: File;
@@ -29,6 +29,8 @@ export function PhoneScanPage() {
   const accept = useAcceptScan(scanId);
   const [photos, setPhotos] = useState<PhonePhoto[]>([]);
   const photosRef = useRef<PhonePhoto[]>([]);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+  const [analysisFailure, setAnalysisFailure] = useState(false);
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
@@ -37,6 +39,7 @@ export function PhoneScanPage() {
   useEffect(() => () => photosRef.current.forEach((photo) => URL.revokeObjectURL(photo.url)), []);
 
   const addPhotos = async (files: File[]) => {
+    setUploadError(null);
     for (const file of files) {
       const id = `${file.name}-${file.lastModified}-${Math.random()}`;
       const photo: PhonePhoto = { id, file, url: URL.createObjectURL(file), status: "uploading" };
@@ -44,13 +47,18 @@ export function PhoneScanPage() {
       try {
         await upload.mutateAsync(file);
         setPhotos((current) => current.map((candidate) => candidate.id === id ? { ...candidate, status: "uploaded" } : candidate));
-      } catch {
+      } catch (error) {
+        setUploadError(error instanceof Error ? error.message : "Photo upload failed. Try again.");
         setPhotos((current) => current.map((candidate) => candidate.id === id ? { ...candidate, status: "failed" } : candidate));
       }
     }
   };
 
-  const analyzeNow = () => analyze.mutate();
+  const analyzeNow = () => {
+    setAnalysisFailure(false);
+    analyze.reset();
+    analyze.mutate(undefined, { onSuccess: () => setAnalysisFailure(false), onError: () => setAnalysisFailure(true) });
+  };
   const onCreateType = (_item: ScanItem) => navigate("/inventory");
 
   if (!scanId) {
@@ -86,11 +94,16 @@ export function PhoneScanPage() {
         ) : null}
         {scan.isLoading ? <LinearProgress aria-label="Loading scan status" /> : null}
         {scan.error ? <Alert severity="error">{scan.error instanceof Error ? scan.error.message : "Could not load this scan yet."}</Alert> : null}
-        {current?.status === "waiting" ? <Alert severity="info">{current.photos > 0 ? `${current.photos} photo${current.photos === 1 ? "" : "s"} ready — when you're ready, read the list.` : "Take at least one photo to continue."}</Alert> : null}
-        {current?.status === "analyzing" ? <Alert severity="info">Reading your parts… keep this page open.</Alert> : null}
-        {current?.status === "failed" ? <Alert severity="error">{current.error || "The scan failed. Try another photo."}</Alert> : null}
+        {uploadError ? <Alert severity="error">{uploadError}</Alert> : null}
+        {!analysisFailure && current?.status === "waiting" ? <Alert severity="info">{current.photos > 0 ? `${current.photos} photo${current.photos === 1 ? "" : "s"} ready — when you're ready, read the list.` : "Take at least one photo to continue."}</Alert> : null}
+        {!analysisFailure && current?.status === "analyzing" ? <Alert severity="info">Reading your parts… keep this page open.</Alert> : null}
+        {analysisFailure || current?.status === "failed" ? (
+          <Alert severity="error" action={<Button onClick={analyzeNow} disabled={analyze.isPending}>Retry</Button>}>
+            {analysisFailure ? scanErrorMessage(analyze.error) : current ? scanViewErrorMessage(current) : "The scan could not be read."}
+          </Alert>
+        ) : null}
         {current?.claude === "missing" ? <Alert severity="warning">Claude is not connected for this scan. <Button onClick={() => navigate("/inventory")}>Type parts instead</Button></Alert> : null}
-        {current?.status === "waiting" ? <Button variant="contained" onClick={analyzeNow} disabled={current.photos === 0 || photos.some((photo) => photo.status === "uploading") || analyze.isPending}>{analyze.isPending ? "Reading…" : "Done — read my parts"}</Button> : null}
+        {!analysisFailure && current?.status === "waiting" ? <Button variant="contained" onClick={analyzeNow} disabled={current.photos === 0 || photos.some((photo) => photo.status === "uploading") || analyze.isPending || current.claude === "missing"}>{analyze.isPending ? "Reading…" : "Done — read my parts"}</Button> : null}
         {current?.status === "ready" ? (
           <>
             <Alert severity="success">Check the list on your laptop (or here).</Alert>

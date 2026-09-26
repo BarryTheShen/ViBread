@@ -33,7 +33,7 @@ export function createApiErrorHandler(log: Logger, debug?: DebugLog): ErrorReque
       const mission = /^\/api\/missions\/([^/]+)/.exec(req.path)?.[1] ?? null;
       debug.event(mission, status >= 500 ? "error" : "http", `${req.method} ${req.path} failed`, { status, code, durationMs: Date.now() - Number(res.locals.debugStartedAt ?? Date.now()) }, status >= 500 ? "error" : "warn");
     }
-    res.status(status).json({ error: { code, message } });
+    res.status(status).json({ error: { code, message, ...(typeof error?.retryAt === "string" ? { retryAt: error.retryAt } : {}) } });
   };
 }
 

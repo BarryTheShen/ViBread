@@ -140,29 +140,38 @@ export function mountApi(app: Express, ctx: AppContext): void {
   router.post("/inventory/scans/:id/analyze", async (req, res) => {
     const user = actorUser(res, ctx);
     const scanId = String(req.params.id);
-    const hashes = await ctx.scans.photoHashes(user.id, scanId);
-    const photos: Buffer[] = [];
-    for (const hash of hashes) {
-      const artifact = await ctx.store.getArtifact(hash);
-      if (!artifact) throw httpError(404, "PHOTO_NOT_FOUND", "scan photo not found");
-      photos.push(Buffer.from(artifact.data));
+    try {
+      const hashes = await ctx.scans.photoHashes(user.id, scanId);
+      const photos: Buffer[] = [];
+      for (const hash of hashes) {
+        const artifact = await ctx.store.getArtifact(hash);
+        if (!artifact) throw httpError(404, "PHOTO_NOT_FOUND", "scan photo not found");
+        photos.push(Buffer.from(artifact.data));
+      }
+      const types = await ctx.inventory.types(user.id);
+      const identified = await ctx.runtime.scan.identifyParts({ ownerId: user.id, photos, types });
+      const analyzed: Array<{ hash: string; width: number; height: number }> = [];
+      for (const image of identified.analyzed) {
+        const hash = await ctx.store.putArtifact(image.jpeg, "image/jpeg");
+        analyzed.push({ hash, width: image.width, height: image.height });
+      }
+      const inventory = await ctx.inventory.entries(user.id);
+      const items: ScanItem[] = identified.observations.map((observation, index) => {
+        const normalized = normalizeObservation(observation, types);
+        const existing = normalized.typeId ? inventory.find((entry) => entry.typeId === normalized.typeId) : undefined;
+        return { ...normalized, index, cropUrl: `/api/inventory/scans/${scanId}/crops/${index}`, ...(existing ? { existing: { entryId: existing.id, quantity: existing.quantity } } : {}) };
+      });
+      const view = await ctx.scans.analyze(user.id, scanId, { observations: identified.observations, analyzed, items }, types, inventory);
+      res.json(view);
+    } catch (error) {
+      if (typeof error === "object" && error !== null && typeof (error as { status?: unknown }).status === "number" && ((error as { status: number }).status < 500 && (error as { status: number }).status !== 429)) throw error;
+      const failure = scanFailure(error);
+      const retryAt = failure.retryAfter;
+      await ctx.scans.fail(user.id, scanId, failure);
+      ctx.debug.event(scanId, "scan", "scan analysis failed", { code: failure.code, retryAfter: retryAt }, "error");
+      const responseError = Object.assign(new Error(failure.message), { status: failure.status, code: failure.code, ...(retryAt ? { retryAt } : {}) });
+      throw responseError;
     }
-    const types = await ctx.inventory.types(user.id);
-    const identified = await ctx.runtime.scan.identifyParts({ ownerId: user.id, photos, types });
-    const analyzed: Array<{ hash: string; width: number; height: number }> = [];
-    for (const image of identified.analyzed) {
-      const hash = await ctx.store.putArtifact(image.jpeg, "image/jpeg");
-      analyzed.push({ hash, width: image.width, height: image.height });
-    }
-    const inventory = await ctx.inventory.entries(user.id);
-    const items: ScanItem[] = identified.observations.map((observation, index) => {
-      const normalized = normalizeObservation(observation, types);
-      const existing = normalized.typeId ? inventory.find((entry) => entry.typeId === normalized.typeId) : undefined;
-      return { ...normalized, index, cropUrl: `/api/inventory/scans/${scanId}/crops/${index}`, ...(existing ? { existing: { entryId: existing.id, quantity: existing.quantity } } : {}) };
-    });
-    const view = await ctx.scans.analyze(user.id, scanId, { observations: identified.observations, analyzed, items }, types, inventory);
-    ctx.debug.event(scanId, "scan", "scan analyzed", { observations: identified.observations.length, items: items.length });
-    res.json(view);
   });
   router.get("/inventory/scans/:id", async (req, res) => {
     const user = actorUser(res, ctx);
@@ -714,6 +723,27 @@ function parseNonNegativeInt(value: unknown): number {
   if (!Number.isInteger(n) || n < 0) throw httpError(400, "INVALID_NUMBER", "expected a non-negative integer");
   return n;
 }
+interface ScanFailure {
+  status: number;
+  code: string;
+  message: string;
+  retryAfter?: string;
+}
+
+function scanFailure(error: unknown): ScanFailure {
+  const value = typeof error === "object" && error !== null ? error as Record<string, unknown> : {};
+  const rawCode = typeof value.code === "string" ? value.code : "";
+  const rawStatus = typeof value.status === "number" ? value.status : typeof value.statusCode === "number" ? value.statusCode : 0;
+  const text = error instanceof Error ? error.message : String(error);
+  const rateLimited = rawStatus === 429 || /rate[_ -]?limit|too many requests/i.test(`${rawCode} ${text}`);
+  const notConnected = rawCode === "claude_not_connected" || rawStatus === 503;
+  const retryRaw = value.retryAfter ?? (typeof value.headers === "object" && value.headers !== null ? (value.headers as Record<string, unknown>)["retry-after"] : undefined);
+  const retryAfter = typeof retryRaw === "number" ? new Date(Date.now() + (retryRaw < 1_000_000_000 ? retryRaw * 1000 : retryRaw)).toISOString() : typeof retryRaw === "string" && !Number.isNaN(Date.parse(retryRaw)) ? new Date(retryRaw).toISOString() : undefined;
+  if (rateLimited) return { status: 429, code: "claude_rate_limited", message: "Claude is rate limited. Try again later.", ...(retryAfter ? { retryAfter } : {}) };
+  if (notConnected) return { status: 503, code: "claude_not_connected", message: "Claude is not connected. Connect Claude in Settings and try again." };
+  return { status: 502, code: "claude_error", message: "The scan service could not analyze the photos. Try again." };
+}
+
 interface HttpError extends Error {
   status: number;
   code: string;

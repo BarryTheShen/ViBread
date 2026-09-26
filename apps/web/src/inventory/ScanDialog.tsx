@@ -18,6 +18,7 @@ import type { CatalogView, ScanItem } from "@vibread/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConnections } from "../api/hooks.js";
 import { useAcceptScan, useAnalyzeScan, useCreateScan, useScan, useUploadScanPhoto } from "../api/inventory.js";
+import { cameraErrorMessage, scanErrorMessage, scanViewErrorMessage } from "./scanErrors.js";
 import { ScanReview } from "./ScanReview.js";
 
 export interface ScanDialogProps {
@@ -63,7 +64,9 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
+  const [analysisFailure, setAnalysisFailure] = useState(false);
   const [cameraOpen, setCameraOpen] = useState(false);
   const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -71,8 +74,11 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
   useEffect(() => {
     if (!open) {
       create.reset();
+      analyze.reset();
       setScanId("");
+      setUploadError(null);
       setUploadedFiles([]);
+      setAnalysisFailure(false);
       setCameraOpen(false);
       setCameraError(null);
     }
@@ -96,7 +102,7 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
       setCameraReady(true);
-    }).catch(() => setCameraError("Camera access was blocked. You can upload a photo instead."));
+    }).catch((error: unknown) => setCameraError(cameraErrorMessage(error, window.isSecureContext || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")));
     return () => {
       disposed = true;
       streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -113,10 +119,16 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
   const scanLink = scanId ? phoneLink(connections.data?.phoneUrl, scanId, pairing) : "";
   const cameraAvailable = isCameraContextAvailable();
   const claudeUnavailable = Boolean(connections.data?.claude && connections.data.claude.using === "none" && !connections.data.claude.connected);
+  const cameraSecure = window.isSecureContext || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 
   const ensureScan = () => {
     if (scanId) return;
     create.mutate(undefined, { onSuccess: (result) => setScanId(result.id) });
+  };
+  const startAnalysis = () => {
+    setAnalysisFailure(false);
+    analyze.reset();
+    analyze.mutate(undefined, { onSuccess: () => setAnalysisFailure(false), onError: () => setAnalysisFailure(true) });
   };
 
   const uploadFiles = async (files: File[]) => {
@@ -124,11 +136,16 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
     ensureScan();
     // A newly-created scan resolves asynchronously; the file picker is disabled until the QR/upload controls render.
     if (!scanId) return;
+    setUploadError(null);
     setUploading(true);
     try {
       for (const file of files) {
-        await upload.mutateAsync(file);
-        setUploadedFiles((current) => [...current, file.name || "photo"]);
+        try {
+          await upload.mutateAsync(file);
+          setUploadedFiles((current) => [...current, file.name || "photo"]);
+        } catch (error) {
+          setUploadError(error instanceof Error ? error.message : "Photo upload failed. Try again.");
+        }
       }
     } finally {
       setUploading(false);
@@ -149,7 +166,9 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
 
   const reset = () => {
     setScanId("");
+    setUploadError(null);
     setUploadedFiles([]);
+    setAnalysisFailure(false);
     setCameraOpen(false);
   };
 
@@ -186,6 +205,7 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
               <input ref={inputRef} hidden type="file" accept="image/*" multiple onChange={(event) => void uploadFiles(Array.from(event.target.files ?? []))} />
               {cameraAvailable ? <Button variant="outlined" startIcon={<CameraAltOutlinedIcon />} onClick={() => setCameraOpen((value) => !value)}>{cameraOpen ? "Hide camera" : "Use this computer's camera"}</Button> : null}
             </Stack>
+            {!cameraAvailable ? <Alert severity="info">{cameraErrorMessage({ name: "NotFoundError" }, cameraSecure)}</Alert> : null}
             {cameraOpen && cameraReady ? (
               <Stack spacing={1}>
                 <Box component="video" ref={videoRef} autoPlay muted playsInline sx={{ width: "100%", maxHeight: 360, objectFit: "cover", bgcolor: "background.paper", borderRadius: 1 }} />
@@ -194,16 +214,20 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
               </Stack>
             ) : cameraOpen && cameraError ? <Alert severity="warning">{cameraError}</Alert> : null}
             {uploading ? <LinearProgress aria-label="Uploading photos" /> : null}
+            {uploadError ? <Alert severity="error" action={<Button onClick={() => inputRef.current?.click()}>Upload again</Button>}>{uploadError}</Alert> : null}
             {uploadedFiles.length > 0 ? <Typography variant="body2" color="text.secondary">Uploaded: {uploadedFiles.join(", ")}</Typography> : null}
             {scan.error ? <Alert severity="error" action={<Button onClick={() => void scan.refetch()}>Retry</Button>}>{scan.error instanceof Error ? scan.error.message : "Could not refresh this scan."}</Alert> : null}
-            {scan.data?.status === "waiting" ? <Alert severity="info">{scan.data.photos > 0 ? `${scan.data.photos} photo${scan.data.photos === 1 ? "" : "s"} ready` : "Waiting for photos…"}</Alert> : null}
-            {scan.data?.status === "analyzing" ? <Alert severity="info">Reading your parts…</Alert> : null}
-            {scan.data?.status === "failed" ? <Alert severity="error">{scan.data.error || "The scan failed."}</Alert> : null}
-            {scan.data?.claude === "missing" ? <Alert severity="warning">Claude is not connected, so camera scans cannot be read yet. <Button onClick={onTypeParts}>Type parts instead</Button></Alert> : null}
-            {scan.data?.status === "waiting" ? (
-              <Button variant="contained" onClick={() => analyze.mutate()} disabled={(scan.data.photos ?? 0) === 0 || analyze.isPending || scan.data.claude === "missing"}>{analyze.isPending ? "Reading…" : "Read my parts"}</Button>
+            {!analysisFailure && scan.data?.status === "waiting" ? <Alert severity="info">{scan.data.photos > 0 ? `${scan.data.photos} photo${scan.data.photos === 1 ? "" : "s"} ready` : "Waiting for photos…"}</Alert> : null}
+            {!analysisFailure && scan.data?.status === "analyzing" ? <Alert severity="info">Reading your parts…</Alert> : null}
+            {analysisFailure || scan.data?.status === "failed" ? (
+              <Alert severity="error" action={<Button onClick={startAnalysis} disabled={analyze.isPending}>Retry</Button>}>
+                {analysisFailure ? scanErrorMessage(analyze.error) : scan.data ? scanViewErrorMessage(scan.data) : "The scan could not be read."}
+              </Alert>
             ) : null}
-            {analyze.error ? <Alert severity="error">{analyze.error instanceof Error ? analyze.error.message : "Could not read this scan."}</Alert> : null}
+            {scan.data?.claude === "missing" ? <Alert severity="warning">Claude is not connected, so camera scans cannot be read yet. <Button onClick={onTypeParts}>Type parts instead</Button></Alert> : null}
+            {!analysisFailure && scan.data?.status === "waiting" ? (
+              <Button variant="contained" onClick={startAnalysis} disabled={(scan.data.photos ?? 0) === 0 || analyze.isPending || scan.data.claude === "missing"}>{analyze.isPending ? "Reading…" : "Read my parts"}</Button>
+            ) : null}
             {scan.data?.status === "ready" ? <ScanReview scan={scan.data} catalog={catalog} onAccept={(request) => accept.mutate(request, { onSuccess: onClose })} onCreateType={onCreateType} /> : null}
             {accept.error ? <Alert severity="error">{accept.error instanceof Error ? accept.error.message : "Could not save this scan."}</Alert> : null}
             <Button color="inherit" onClick={reset}>Start another scan</Button>
