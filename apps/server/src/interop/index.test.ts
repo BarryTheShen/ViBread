@@ -54,6 +54,7 @@ function testContext() {
       async verify(token: string) {
         if (token === "read") return { id: "tok-read", userId: "u1", scopes: ["circuits:read"], expiresAt: expiry };
         if (token === "write") return { id: "tok-write", userId: "u1", scopes: ["circuits:write"], expiresAt: expiry };
+        if (token === "other") return { id: "tok-other", userId: "u2", scopes: ["circuits:read"], expiresAt: expiry };
         return null;
       },
     },
@@ -142,6 +143,22 @@ describe("MCP and A2A mounts", () => {
     await writeClient.close();
   });
 
+  it("does not let another bearer user reuse an MCP session", async () => {
+    const { baseUrl } = await openServer();
+    const firstTransport = new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), { requestInit: { headers: { authorization: "Bearer read" } } });
+    const first = new McpClient({ name: "owner", version: "1" });
+    await first.connect(firstTransport);
+    const sessionId = firstTransport.sessionId;
+    expect(sessionId).toBeTruthy();
+    const sessionResponse = await fetch(`${baseUrl}/mcp`, {
+      method: "POST",
+      headers: { authorization: "Bearer other", "content-type": "application/json", "mcp-session-id": sessionId ?? "" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping", params: {} }),
+    });
+    expect(sessionResponse.status).toBe(404);
+    await first.close();
+  });
+
   it("serves a bearer card and completes an A2A ask-back continuation with an artifact", async () => {
     const { baseUrl } = await openServer();
     const cardResponse = await fetch(`${baseUrl}/.well-known/agent-card.json`);
@@ -151,8 +168,9 @@ describe("MCP and A2A mounts", () => {
     };
     expect(cardJson.securitySchemes.Bearer.scheme.$case).toBe("httpAuthSecurityScheme");
     expect(cardJson.securitySchemes.Bearer.scheme.value.scheme).toBe("bearer");
-    const unauthorized = await fetch(`${baseUrl}/a2a`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
-    expect(unauthorized.status).toBe(401);
+    const readRejected = await fetch(`${baseUrl}/a2a`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer read" }, body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "message/send", params: {} }) });
+    expect(readRejected.status).toBe(403);
+    expect(await readRejected.json()).toMatchObject({ error: { message: "insufficient_scope" } });
 
     const card = AgentCard.fromJSON(cardJson);
     const factory = new ClientFactory(ClientFactoryOptions.createFrom(ClientFactoryOptions.default, {

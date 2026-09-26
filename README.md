@@ -102,7 +102,7 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 | `CAPCOM_PROVIDER` | `off` (default), `terminal` (local test chat), or `cloud` (iMessage) with `PHOTON_PROJECT_ID`, `PHOTON_PROJECT_SECRET`, `CAPCOM_NUMBER`; `CAPCOM_ALLOW_OFF_HOURS=1` disables the quiet-hours guard |
 | `VIBREAD_ARDUINO_CLI`, `VIBREAD_ARDUINO_CONFIG`, `VIBREAD_COMPILE_TIMEOUT_MS` | Override the toolchain location / compile timeout |
 | `VIBREAD_NO_STATIC=1` | Don't serve `apps/web/dist` |
-| `VIBREAD_OMP_BIN`, `VIBREAD_CLAUDE_BROKER_PORT` | oh-my-pi CLI used for "Connect your Claude account" (default `omp` on `PATH`) and its auth-broker port (default 18765, loopback only) |
+| `VIBREAD_OMP_BIN` | oh-my-pi CLI used for "Connect your Claude account" (default `omp` on `PATH`); ViBread starts its auth broker on a private random loopback port |
 
 ## Using it
 

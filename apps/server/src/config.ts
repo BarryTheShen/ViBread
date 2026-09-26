@@ -19,9 +19,8 @@ export interface ServerConfig {
   fastModel: string;
   approvalSecret: string;
   capcom: { provider: "cloud" | "terminal" | "off"; projectId?: string; projectSecret?: string; number?: string };
-  claudeAccounts: { ompBin: string; home: string; brokerPort: number };
+  claudeAccounts: { ompBin: string; home: string };
 }
-
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const port = parsePort(env.PORT);
   // Relative DATA_DIR values resolve against the repo root, so the server (cwd apps/server) and root scripts share one store.
@@ -59,7 +58,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     claudeAccounts: {
       ompBin: env.VIBREAD_OMP_BIN?.trim() || "omp",
       home: resolve(dataDir, "claude-accounts"),
-      brokerPort: parseBrokerPort(env.VIBREAD_CLAUDE_BROKER_PORT),
     },
   };
 }
@@ -70,11 +68,6 @@ function parsePort(raw: string | undefined): number {
   return port;
 }
 
-function parseBrokerPort(raw: string | undefined): number {
-  const port = raw === undefined ? 18765 : Number(raw);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`invalid VIBREAD_CLAUDE_BROKER_PORT: ${raw ?? ""}`);
-  return port;
-}
 
 function readOrCreateSecret(dataDir: string, name: string): string {
   const path = resolve(dataDir, `.${name}`);

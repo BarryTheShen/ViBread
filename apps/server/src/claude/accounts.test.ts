@@ -1,5 +1,6 @@
 import { chmodSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import pino from "pino";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -7,7 +8,7 @@ import { loadConfig } from "../config.js";
 import { openDatabase, type OpenDatabase } from "../db/index.js";
 import { createClaudeAccountService, ompEnvironment, pickLoginCredential, type ClaudeAccountService } from "./accounts.js";
 
-const fakeOmp = new URL("./fake-omp.mjs", import.meta.url).pathname;
+const fakeOmp = fileURLToPath(new URL("./fake-omp.mjs", import.meta.url));
 
 describe("Claude account connection (oh-my-pi broker + gateway)", () => {
   let dir: string;
@@ -18,7 +19,7 @@ describe("Claude account connection (oh-my-pi broker + gateway)", () => {
     chmodSync(fakeOmp, 0o755);
     dir = mkdtempSync(join(tmpdir(), "vb-claude-"));
     const config = loadConfig({ DATA_DIR: dir, PORT: "8999" });
-    config.claudeAccounts = { ompBin: fakeOmp, home: join(dir, "claude-accounts"), brokerPort: 20_000 + Math.floor(Math.random() * 20_000) };
+    config.claudeAccounts = { ompBin: fakeOmp, home: join(dir, "claude-accounts") };
     opened = openDatabase(config.dataDir);
     service = createClaudeAccountService({ config, db: opened.db, log: pino({ level: "silent" }) });
   });
@@ -32,9 +33,16 @@ describe("Claude account connection (oh-my-pi broker + gateway)", () => {
   it("connects with a pasted code, routes the user's agents to their own gateway, and disconnects", async () => {
     expect(await service.view("alice")).toMatchObject({ available: true, connected: false, using: "none" });
 
+    const mismatch = await service.start("alice");
+    const mismatchStarted = Date.now();
+    await expect(service.complete("alice", mismatch.loginId, "http://localhost:54545/?code=wrong#state=other")).rejects.toMatchObject({ code: "login_state_mismatch" });
+    expect(Date.now() - mismatchStarted).toBeLessThan(2_000);
+
     const bad = await service.start("alice");
     expect(bad.url).toMatch(/^https:\/\/claude\.ai\/oauth\/authorize\?/);
-    await expect(service.complete("alice", bad.loginId, "wrong")).rejects.toMatchObject({ code: "login_failed" });
+    const badStarted = Date.now();
+    await expect(service.complete("alice", bad.loginId, "http://localhost:54545/?code=wrong#state=abc")).rejects.toMatchObject({ code: "login_failed" });
+    expect(Date.now() - badStarted).toBeLessThan(2_000);
     expect((await service.view("alice")).connected).toBe(false);
 
     const good = await service.start("alice");
@@ -64,13 +72,49 @@ describe("pickLoginCredential", () => {
     expect(pickLoginCredential(entries, new Set([1, 2]), new Set([1]))?.id).toBe(3);
     expect(pickLoginCredential(entries, new Set([1, 2, 3]), new Set([1, 3]), 2)?.id).toBe(2);
     expect(pickLoginCredential(entries, new Set([1, 2, 3]), new Set([1]))).toBeUndefined();
-    expect(pickLoginCredential([entry(4, null)], new Set(), new Set())).toBeUndefined();
+    expect(pickLoginCredential([entry(4, "email:orphan")], new Set([4]), new Set())).toBeUndefined();
   });
 });
 
 describe("ompEnvironment", () => {
-  it("isolates oh-my-pi from the operator's own config and provider keys", () => {
-    const env = ompEnvironment({ PATH: "/bin", ANTHROPIC_API_KEY: "sk", OMP_AUTH_BROKER_URL: "x", PI_CODING_AGENT_DIR: "/root/.omp", HOME: "/home/op" }, "/data/claude");
-    expect(env).toEqual({ PATH: "/bin", HOME: "/data/claude" });
+  it("keeps only safe runtime settings and isolates the operator's own config and provider keys", () => {
+    const env = ompEnvironment(
+      {
+        PATH: "/bin",
+        HOME: "/home/op",
+        TMPDIR: "/tmp",
+        LANG: "C",
+        LC_ALL: "C",
+        TERM: "xterm",
+        SSL_CERT_FILE: "/etc/ssl/cert.pem",
+        HTTP_PROXY: "http://proxy",
+        https_proxy: "http://proxy-lower",
+        NO_PROXY: "localhost",
+        SYSTEMROOT: "C:\\Windows",
+        ANTHROPIC_API_KEY: "sk",
+        OMP_AUTH_BROKER_URL: "x",
+        PI_CODING_AGENT_DIR: "/root/.omp",
+        BETTER_AUTH_SECRET: "better",
+        VIBREAD_MODEL: "model",
+        VIBREAD_FOO: "secret",
+        PHOTON_PROJECT_SECRET: "photon",
+        GOOGLE_CLIENT_SECRET: "google",
+        GITHUB_CLIENT_SECRET: "github",
+      },
+      "/data/claude",
+    );
+    expect(env).toEqual({
+      PATH: "/bin",
+      HOME: "/data/claude",
+      TMPDIR: "/tmp",
+      LANG: "C",
+      LC_ALL: "C",
+      TERM: "xterm",
+      SSL_CERT_FILE: "/etc/ssl/cert.pem",
+      HTTP_PROXY: "http://proxy",
+      https_proxy: "http://proxy-lower",
+      NO_PROXY: "localhost",
+      SYSTEMROOT: "C:\\Windows",
+    });
   });
 });
