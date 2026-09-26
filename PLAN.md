@@ -1,27 +1,27 @@
 # ViBread — Build Plan (for review)
 
 > HackWashU Fall Build Challenge, Sep 25–27 2026 · Main track + Photon bonus track.
-> Hard deadline: **Sun Sep 27, 12:00 PM CT** (Devpost). Plan written Fri Sep 25, ≈23:30 CT → ~36 h of wall clock.
-> Evidence for every technology decision lives in [`research/`](research/) (8 reports, sources inline).
+> Hard deadline: **Sun Sep 27, 12:00 PM CT** (Devpost). Plan written Sat Sep 26, ≈00:30 CT → ~35 h of wall clock.
+> Evidence: [`research/`](research/) (technology research, sources inline) and [`research/audit/`](research/audit/)
+> (hands-on verification of every package and claim used below: installs, type checks, offline smokes).
 
 ## 0. TL;DR
 
 ViBread is **Mission Control for your breadboard**. A beginner describes what a circuit should do; ViBread's agent designs it
-(schematic + netlist + Arduino sketch) from parts the user already owns, runs a **Go/No-Go poll** of independent checkers
-(electrical rules and current limits, compile + code↔circuit check, simulation tests written by a *separate* test agent,
-layout-vs-schematic, and an independent reviewer agent), turns the design into **LEGO-style numbered assembly steps** on
-laptop and phone, then verifies the **real build**: safe firmware first, staged power-up, then a generated self-test that
-streams "telemetry" back over USB. When something is wrong it says *where* ("Houston, we have a problem: D2 reads LOW even
-with the button released — its leg shares row 17 with the GND jumper"), proposes the fix, and re-runs the checks. The same
-mission is reachable from iMessage (Photon Spectrum, "CAPCOM") and from other agents (A2A + a Claude Code bridge), under
-Claude-Code-style permission modes where physical actions always need an authenticated human.
+(schematic + netlist + Arduino sketch) from parts the user already owns, runs a **Go/No-Go poll** of independent checkers,
+turns the design into **LEGO-style numbered assembly steps** on laptop and phone, then verifies the **real build**: safe firmware
+first, staged power-up, then a generated self-test that streams "telemetry" back over USB. When something is wrong it says
+*where* ("Houston, we have a problem: D2 reads LOW even with the button released — its leg shares row 17 with the GND jumper"),
+proposes the fix, and re-runs the checks. The same mission is reachable from iMessage (Photon Spectrum, "CAPCOM") and from other
+agents (Claude Code over MCP with OAuth, A2A), under Claude-Code-style permission modes where physical actions always need an
+authenticated human.
+
+**Build philosophy: libraries first, our code is glue.** Every subsystem uses a maintained library where one exists
+(Vercel AI SDK, Material UI + MUI X Chat, Better Auth, tscircuit, avr8js, arduino-cli, XState, Drizzle, Spectrum, A2A/MCP SDKs).
+We write custom code only where no library fits — each such piece is listed with the reason in §6.2.
 
 **Delivery strategy:** a fixture-driven **Golden Path v0** (no LLM in the loop) runs end-to-end on the real board by
 **Sat 13:00**; the agent, channels, and richer analyses plug into that pipeline afterwards in strict priority order (§4).
-
-**Stack:** TypeScript on Node 22 · Claude Agent SDK (`claude-opus-5-5`) with ViBread tool groups as in-process MCP servers ·
-own JSON circuit IR · arduino-cli 1.5.1 · avr8js 0.21 · own layout/LVS/SVG + resvg PNG · Web Serial (`webserial-flasher`) ·
-`spectrum-ts` 12.10 · `@a2a-js/sdk` 1.2 · MCP SDK 1.30 Claude Code bridge · ngspice 45 (cross-check) · React + Vite · SQLite.
 
 ## 1. Problem, users, definition of success
 
@@ -30,18 +30,18 @@ own JSON circuit IR · arduino-cli 1.5.1 · avr8js 0.21 · own layout/LVS/SVG + 
   project, only 6 of 20 finished within the 45-minute session and circuit construction was the most common fatal failure
   (Booth et al., *Crossed Wires*; research/06 §2.7).
 - **What exists.** Commercial AI tools (Cirkit Designer, Schematik, Tinkered, Flux, Arduino AI Assistant) stop at design,
-  simulation, or upload. Research systems proved the pieces we build on: Trigger-Action-Circuits (UIST 2017) generated circuits,
+  simulation, or upload. Research systems proved pieces we build on: Trigger-Action-Circuits (UIST 2017) generated circuits,
   firmware, and assembly instructions from behavior descriptions (6/6 novices finished vs 0/6 with the Arduino IDE);
   ElectroTutor (UIST 2018) attached tests to tutorial steps and cut backtracking from 18.8 to 0.2 instances; SchemaBoard
   (UIST 2020) linked schematic and breadboard views. They relied on fixed component databases, hand-authored tutorials, or
   custom instrumented hardware.
 - **What ViBread adds:** LLM design from the user's own parts with ask-back · the same binary simulated and flashed ·
-  auto-generated self-test firmware with fault attribution on an unmodified Uno · a permissioned agent that lives in
-  iMessage and answers other agents.
-- **Users.** Beginners and intermediate makers who already own an Arduino kit (brief p.3). Controller family: Arduino only.
-- **Supported-circuit envelope (answers brief p.5 "how complicated"):** Uno R3 or Nano (ATmega328P) · 5 V logic, USB power ·
-  one breadboard (30- or 63-row) · ≤ 12 parts and ≤ 10 signal nets · planned external load ≤ 400 mA (per pin ≤ 20 mA, MCU
-  total ≤ 200 mA) · parts from the module library · no motors/relays/mains in the MVP.
+  auto-generated self-test firmware with fault attribution on an unmodified Uno · a permissioned agent that lives in iMessage and
+  answers other agents.
+- **Users.** Non-technical and intermediate makers who already own an Arduino kit (brief p.3). Controller family: Arduino only.
+- **Supported-circuit envelope (brief p.5 "how complicated"):** Uno R3 or Nano (ATmega328P) · 5 V logic, USB power · one
+  breadboard (30- or 63-row) · ≤ 12 parts and ≤ 10 signal nets · planned external load ≤ 400 mA (per pin ≤ 20 mA, MCU total
+  ≤ 200 mA) · parts from the module library · no motors/relays/mains in the MVP.
 - **Successful build (brief p.5, sharpened):**
   - **GO for build** = no ERC errors · electrical limits within spec · sketch compiles · the independent test suite passes with
     full coverage · reviewer agent votes GO (the brief's "overall agent saying yes") · human GO.
@@ -65,13 +65,13 @@ discipline for their own moonshot.
 | "Houston, we have a problem" | Closed-loop debugger localizes the fault and proposes the fix |
 | CAPCOM (the one voice talking to the crew) | iMessage agent (Photon Spectrum) talking to the builder at the bench |
 
-UI labels stay plain ("Electrical checks · EECOM"); console names are flavor, not jargon. Theme UI is built in P1/P2, not
-left for the end, because two of the three rubric criteria (Impact-vs-prompt, UX-supports-theme) reward it.
+UI labels stay plain ("Electrical checks · EECOM"); console names are flavor. The MUI dark "mission control" theme is built in
+P1/P2, not left for the end, because two of three rubric criteria (Impact-vs-prompt, UX-supports-theme) reward it.
 
 **Hero demo circuit: the Moon-Phase Lamp** (pending the kit inventory, §7 gate). Four LEDs show the lit fraction of the moon
-(8 phases), a button advances the day, and a photoresistor divider turns the lamp on only when the room is dark — with the
-dark threshold **calibrated on the user's bench** by the self-test (§5.8). Fallbacks if the kit differs: *Launch Control*
-(buttons + countdown LEDs + buzzer) or *Knob Night-Light* (potentiometer + PWM LED).
+(8 phases), a button advances the day, and a photoresistor divider turns the lamp on only when the room is dark — with the dark
+threshold **calibrated on the user's bench** by the self-test (§5.9). Fallbacks if the kit differs: *Launch Control* (buttons +
+countdown LEDs + buzzer) or *Knob Night-Light* (potentiometer + PWM LED).
 
 ## 3. Demo, pitch, and judging logistics
 
@@ -80,24 +80,22 @@ dark threshold **calibrated on the user's bench** by the self-test (§5.8). Fall
 
 | Format | Live | Recorded / pre-warmed |
 |---|---|---|
-| **Pitch (5 min, non-EE judges)** | (1) Brief on the phone loads a pre-warmed mission; GO poll voted on iMessage. (2) Real board with a deliberate fault: self-test → "Houston…" with rows highlighted → fix → GO → celebration effect → lamp works. | Full agent design run, simulation replay, Claude Code/A2A interop — in a 40-second video cut inside the pitch |
+| **Pitch (5 min, non-EE judges)** | (1) Brief on the phone loads a pre-warmed mission; GO poll voted on iMessage. (2) Real board with a deliberate fault: self-test → "Houston…" with rows highlighted → fix → GO → celebration effect → lamp works. | Full agent design run in the MUI workspace, simulation replay, Claude Code connecting over MCP — in a 40-second video cut inside the pitch |
 | **Table demo (2 min, Sun 12:00–16:00)** | Pre-flashed, powered kit with a deliberate fault: self-test → diagnosis → fix → GO; phone shows the steps; iMessage alert | Devpost video for everything else |
 | **Photon clip (60 s)** | — | CAPCOM flow on the phone: brief → poll → step image → fault alert → photo → celebration |
 
-**Pitch skeleton (5:00), story-first for judges who are not electronics people:** 0:00 hook — the *Crossed Wires* result (6/20)
-and Apollo's discipline · 0:40 one user's journey · 1:10–3:30 live beats above · 3:30 40-second video (agent design, simulation,
-Claude Code) · 4:10 why it's new (§1) · 4:40 impact + close. One technical slide, no jargon.
+**Pitch skeleton (5:00), story-first:** 0:00 hook — the *Crossed Wires* result (6/20) and Apollo's discipline · 0:40 one user's
+journey · 1:10–3:30 live beats · 3:30 40-second video · 4:10 why it's new (§1) · 4:40 impact + close. One technical slide.
 
-**Judging logistics:** one person stays at the table 12:00–16:00 with the kit powered and pre-flashed; spare board + cable on
-the table; ask Photon on Discord (Saturday office hours) how and when they judge; rough backup video recorded at Checkpoint B,
-refreshed at C.
+**Judging logistics:** one person stays at the table 12:00–16:00 with the kit powered and pre-flashed; spare board + cable on the
+table; ask Photon on Discord (Saturday office hours) how and when they judge; rough backup video at Checkpoint B, refreshed at C.
 
 ## 4. Scope: Golden Path v0, tiers, and cut order
 
 **Golden Path v0 — due Sat 13:00, fixture-driven, no LLM in the loop:** hand-written Moon-Phase-Lamp fixture (IR + sketch +
 intent tests) → schematic SVG → ERC + analytic limits + compile → headless tests + simulation replay on the breadboard view →
-layout + LVS → phone steps with staged power-up → safe firmware + self-test on the real board → one deliberate fault diagnosed
-→ one CAPCOM DM with a GO/NO-GO poll. Every later feature plugs into this pipeline; if later work fails, this still demos.
+layout + LVS → phone steps with staged power-up → safe firmware + self-test on the real board → one deliberate fault diagnosed →
+one CAPCOM DM with a GO/NO-GO poll. Every later feature plugs into this pipeline; if later work fails, this still demos.
 
 | Tier | Item | Track |
 |---|---|---|
@@ -108,21 +106,21 @@ layout + LVS → phone steps with staged power-up → safe firmware + self-test 
 | MUST | **M4** Deterministic layout + LVS + phone LEGO steps with staged power-up | Main |
 | MUST | **M5** Physical verification: safe firmware before wiring, rail-short detection at power-up, self-test telemetry diff, light-sensor calibration | Main |
 | MUST | **M6** Debug loop: rule-table diagnosis → attribution (design / code / wiring / component / unknown) → fix → re-test | Main |
-| MUST | **M7** Permission modes (Review default), web approval broker, human-only physical/BOM approvals, API auth | Main |
-| MUST | **M8** Thin CAPCOM: brief by DM, status replies, GO/NO-GO poll (Photon's hard requirement is Spectrum integration) | Photon |
-| SHOULD 1 | **S1** Full CAPCOM: step images, self-test prompts as polls, iMessage approvals (registered handle), inbound photo check, fault alerts, celebration | Photon |
+| MUST | **M7** MUI agent workspace (chat + tool cards + approvals + mode switcher + artifact tabs); Google sign-in; permission modes with human-only physical approvals | Main |
+| MUST | **M8** Thin CAPCOM: brief by DM, status replies, GO/NO-GO poll, iMessage-number linking (Photon requires Spectrum integration) | Photon |
+| SHOULD 1 | **S1** Full CAPCOM: step images, self-test prompts as polls, iMessage approvals, inbound photo check, fault alerts, celebration | Photon |
 | SHOULD 2 | **S2** Live interactive simulation (avr8js in a browser worker) | Main |
-| SHOULD 3 | **S3** A2A server with ask-back + Claude Code bridge (tools + Channel push) | Main + Photon |
+| SHOULD 3 | **S3** Agent interop: remote MCP for Claude Code with OAuth 2.1 (CIMD) + A2A server with OAuth security scheme; GitHub sign-in | Main + Photon |
 | SHOULD 4 | **S4** SPICE cross-check (ngspice) of the analytic limits | Main |
 | SHOULD 5 | **S5** Mutant-based fault ranking (fault dictionary) on top of the rule table | Main |
 | SHOULD 6 | **S6** Photo verification in the web app (same pipeline as S1's photo intake) | Main |
-| COULD | Skill-level exposition; parts inventory from a kit photo; public `/mcp`; Wokwi cross-check; ArUco rectification; KiCad export | Main |
-| WON'T | Uno R4/ESP32/Pico, PCB layout, arbitrary-part simulation, on-board A* router, AR overlay, mains/high voltage | — |
+| COULD | Claude Code Channel push bridge; skill-level exposition; inventory from a kit photo; Wokwi cross-check; ArUco rectification; KiCad export (tscircuit) | Main |
+| WON'T | Uno R4/ESP32/Pico, PCB layout, arbitrary-part simulation, AR overlay, mains/high voltage, "sign in with Claude" | — |
 
-**Degradation rules.** Behind at Checkpoint A → the demo runs on the golden fixture while M1 continues. Behind at Checkpoint B →
-M1 demos from pre-warmed (cached) agent runs; M6 stays rule-table. **Cut order** after that: COULD → S5 → S4 → S3's Channel push
-(keep A2A + bridge tools; if needed keep only the A2A server) → S6 → S1's photo intake → S2 (replay remains). The brief marks
-instruction adaptation to variants/skill levels "out of scope for MVP" (p.5), hence COULD.
+**Degradation rules.** Behind at Checkpoint A → demo runs on the golden fixture while M1 continues. Behind at Checkpoint B → M1
+demos from pre-warmed (cached) agent runs; M6 stays rule-table. **Cut order** after that: COULD → S5 → S4 → S3's A2A (keep remote
+MCP; if needed keep only the header-token path) → S6 → S1's photo intake → S2 (replay remains). The brief marks instruction
+adaptation to variants/skill levels "out of scope for MVP" (p.5), hence COULD.
 
 ## 5. Architecture
 
@@ -130,196 +128,228 @@ instruction adaptation to variants/skill levels "out of scope for MVP" (p.5), he
 
 ```mermaid
 flowchart LR
-  subgraph Laptop["Bench laptop — Chrome, http://localhost:8787 via SSH tunnel"]
-    WEB["Operator console<br/>Mission Control · approvals · bench"]
+  subgraph Laptop["Bench laptop — Chrome/Edge, http://localhost:8787 via SSH tunnel"]
+    WEB["MUI workspace<br/>MUI X Chat · approvals · artifacts · bench"]
     BENCH["Bench connector<br/>Web Serial: flash + self-test NDJSON"]
-    CC["Claude Code"] <-->|stdio MCP v1| CH["vibread-channel<br/>tools + channel push, A2A client"]
+    CC["Claude Code"]
     USB["Arduino + breadboard"]
   end
-  PHONE["Phone<br/>Build Mode over HTTPS (polling)<br/>+ iMessage"]
+  PHONE["Phone<br/>Build Mode (polling) + iMessage"]
   subgraph Server["ViBread server — Node 22 in hackwashu-ai container"]
-    API["HTTP API + SSE + built web app<br/>bearer-token auth"]
-    ORCH["Mission orchestrator<br/>state machine; runs VERIFY itself"]
-    AG["Design / test / review agents<br/>Claude Agent SDK · claude-opus-5-5"]
-    TOOLS["Tool groups as in-process MCP servers<br/>circuit · checks · firmware · sim · assembly · bench"]
-    SIMW["Simulation worker pool<br/>(worker_threads)"]
-    BRK["ApprovalBroker + TaskStore<br/>SQLite"]
-    A2A["A2A v1 server<br/>agent card · /a2a"]
+    API["Express 5<br/>UI message stream (SSE) · REST · static web"]
+    AUTH["Better Auth<br/>Google/GitHub login · OAuth 2.1 AS · MCP resource metadata"]
+    ORCH["Mission machine (XState)<br/>+ ApprovalBroker"]
+    AG["Agents (Vercel AI SDK)<br/>design · test author · RETRO · claude-opus-5-5"]
+    TOOLS["Tool registry<br/>circuit · checks · firmware · sim · assembly · bench"]
+    MCP["MCP server /mcp<br/>(MCP SDK, OAuth-protected)"]
+    A2A["A2A server /a2a<br/>(@a2a-js/sdk, OAuth-protected)"]
     CAP["CAPCOM<br/>spectrum-ts cloud iMessage"]
+    DB[("SQLite<br/>Drizzle")]
   end
   WEB <--> API
   BENCH <--> USB
   BENCH <--> API
-  CH <-->|A2A JSON-RPC + SSE, token| A2A
-  PHONE <-->|cloudflared quick tunnel| API
-  API --- ORCH --- AG --- TOOLS --- SIMW
-  ORCH --- BRK
+  CC <-->|Streamable HTTP + OAuth| MCP
+  PHONE <-->|stable HTTPS tunnel| API
+  API --- AUTH
+  API --- ORCH --- AG --- TOOLS
+  MCP --- TOOLS
   A2A --- ORCH
   CAP --- ORCH
+  ORCH --- DB
   CAP <-->|Photon cloud| PHONE
 ```
 
-- **Server** runs in the container on golf and serves the API, SSE, A2A, and the built web app from one port (`0.0.0.0:8787`).
-- **Laptop** reaches it with `ssh -L 8787:172.30.77.10:8787 <golf>` → `http://localhost:8787` — a secure context, which Web
-  Serial requires (the raw `172.30.77.10` URL is not). The Claude Code bridge also uses this tunnel.
-- **Phone** reaches Build Mode through a `cloudflared` quick tunnel (HTTPS). Quick tunnels don't carry SSE, so phone views
-  **poll** every 1–2 s; SSE and A2A streaming are used only over the SSH tunnel. Spike 12 verifies this on venue Wi-Fi.
-  In iMessage, CAPCOM sends a plain URL only after the user's first reply (Photon deliverability guidance); app cards are optional.
-- **Auth:** bearer token on the API and `/a2a`; mission links carry an unguessable token; the bench laptop holds an operator
-  session. Physical approvals come only from that session or a registered iMessage handle (§5.9).
+- **Server** runs in the container on golf: one Express 5 process on `0.0.0.0:8787` serving the API, the UI message stream,
+  `/mcp`, `/a2a`, Better Auth routes, and the built web app.
+- **Laptop (bench):** `ssh -L 8787:172.30.77.10:8787 <golf>` → `http://localhost:8787` — a secure context, which Web Serial
+  requires (the raw `172.30.77.10` URL is not). Google/GitHub OAuth callbacks work on `http://localhost:8787`.
+- **Stable public HTTPS hostname** for the phone, for Claude Code's OAuth (issuer, resource URI, and callbacks must not change
+  between runs), and for judges: a named Cloudflare Tunnel if the team has a domain on Cloudflare; otherwise another stable
+  tunnel (ngrok static domain or Tailscale Funnel) — chosen at the hardware gate and proven by spike 12. Cloudflare *quick*
+  tunnels are only a fallback: they don't carry SSE (verified live, research/audit/A3), cap in-flight requests at 200, and change
+  URL on every start. Phone views **poll** every 1–2 s regardless, so they work over any tunnel.
+- In iMessage, CAPCOM sends a plain URL only after the user's first reply (Photon deliverability guidance).
 - The browser owns the USB device; the server never touches the laptop's serial port.
 
-### 5.2 Circuit IR — the single source of truth (research/02)
+### 5.2 Agent harness — Vercel AI SDK over the Claude API (research/audit/A9, A1)
 
-Own versioned JSON IR (`vibread.circuit/0.1`), validated with zod, `additionalProperties: false` at the LLM boundary. Chosen over
-KiCad/SPICE/Circuit JSON/Wokwi because each omits something we need (board aliases, pin electrical types, module variants,
-evidence, breadboard hints). Field groups: `board` (profile `uno-r3-atmega328p-5v` or `nano-atmega328p-5v`: pin capabilities,
-limits, reserved pins, on-board vs off-board placement) · `parts` (id, ref, `moduleKey`, variant, value + tolerance) · `pins`
-with KiCad-style electrical types · `nets` (members, kind) · `sketch` · `tests` · `provenance` (intent clauses, assumptions).
-Every artifact (schematic, layout, steps, self-test, expected signature) is **derived** from an IR revision and carries its hash.
+- **Why not the Claude Agent SDK:** it runs the Claude Code binary, and Anthropic's terms for products that run Claude Code say
+  the company "may not pay for, resell, or intermediate Claude usage on their end users' behalf" — each end user would need their
+  own Anthropic credentials. That contradicts a product for non-technical users. Anthropic's Commercial Terms (§A.1) do allow
+  using the Claude API "to power products and services Customer makes available to its own customers and end users", billed to
+  our account. So ViBread calls the Messages API with its own server-side key; users never bring keys, and "sign in with your
+  Claude account" is not offered (Anthropic prohibits it for third-party apps).
+- **Library:** `ai` 7.0.116 + `@ai-sdk/anthropic` 4.0.65 (Apache-2.0), model `claude-opus-5-5`. `streamText`/`ToolLoopAgent`
+  with `stopWhen: isStepCount(20)`; per-call **`toolApproval`** callbacks implement the permission modes (§5.10); approval IDs are
+  bound server-side (`experimental_toolApprovalSecret` + ApprovalBroker). Output streams to the browser with
+  `pipeUIMessageStreamToResponse` on Express.
+- **Three agent roles, three separate calls/contexts:** *design agent* (IR + sketch), *test author* (sees brief + IR interface,
+  never the sketch), *RETRO reviewer* (sees everything, can only vote and explain). Vision (photo checks) uses the same provider
+  with image parts and a strict output schema.
+- **Tools are defined once** in `packages/tools` (zod schema + handler) and registered twice by thin adapters: as AI SDK tools for
+  our agents, and as MCP tools on `/mcp` for external clients. No internal MCP hop (avoids MCP protocol-version skew between the AI
+  SDK's MCP client and the server, research/audit/A9); `@ai-sdk/mcp` stays available to consume external MCP servers (e.g. Wokwi).
 
-**Module library** (curated data, facts + links, no copied graphics): pins + electrical types, limits, sim device model, footprint,
-glyph, self-test strategy, evidence URLs. MVP set (~10, frozen from the team's kit tonight): LED by color, resistor, 4-pin tactile
-button, photoresistor, potentiometer, passive + active buzzer; stretch: SG90 servo, HC-SR04. Adding a module = one data file +
-sim model + footprint (the whiteboard's "add new modules"). Parts outside the library can be entered as a *generic module* from a
-user-supplied pinout; they are flagged **unverified** and can never receive a simulation GO.
+| Tool group | Tools (abridged) | Libraries behind it |
+|---|---|---|
+| `circuit` | `list_modules`, `get_inventory`, `propose_design`, `validate_ir`, `render_schematic` | zod, tscircuit (`@tscircuit/core` → Circuit JSON → `circuit-to-svg`) |
+| `checks` | `run_erc`, `electrical_limits`, `spice_crosscheck` (S4), `explain_finding` | json-rules-engine, ngspice CLI |
+| `firmware` | `compile`, `pin_mode_check`, `generate_selftest` | arduino-cli, Eta + ArduinoJson, avr8js |
+| `sim` | `run_scenarios`, `coverage_report`, `sim_trace` | avr8js, yaml, worker_threads |
+| `assembly` | `layout_board`, `lvs_check`, `build_steps`, `render_step_png` | @wokwi/elements glyphs, @resvg/resvg-js |
+| `bench` | `diagnose`, `inspect_photo`, `explain_telemetry` | json-rules-engine, sharp + heif2jpeg, Claude vision |
 
-### 5.3 Mission lifecycle and gates
+Flashing and self-tests are orchestrator actions executed by the browser after human approval — never agent tools.
 
-`BRIEF → CLARIFY → DESIGN ⟲ → GO/NO-GO → ASSEMBLE (staged) → VERIFY → (DEBUG ⟲) → LAUNCH → DONE`
+### 5.3 Circuit IR and module library (research/02, audit/A8)
 
-- **DESIGN:** the design agent proposes IR + sketch via tools; deterministic checkers return findings; it repairs until every
-  checker is GO or 4 iterations elapse, then reports what blocks. The **test author** (separate context, §5.6) writes the intent
-  tests; **RETRO** reviews at the end.
-- **Revisions:** any change creates revision *n+1* and re-runs every checker. Approvals bind to a revision hash.
-- **VERIFY is orchestrator-driven**, not an LLM tool call: flashing, prompts that wait on a human, and telemetry collection are
-  state-machine steps (no tool-call timeouts); the LLM receives the final telemetry + diagnosis to explain.
-- **Go/No-Go poll** (deterministic evidence; LLMs explain and RETRO votes):
+- A small versioned **zod schema** (`vibread.circuit/0.1`) is the contract the agent writes and every tool reads. It is a data
+  definition, not an engine. It stays ours because tscircuit's Circuit JSON (checked hands-on) doesn't carry pin electrical types
+  and its IDs are generated; instead, an adapter emits Circuit JSON from the IR for schematic rendering and KiCad export.
+- Field groups: `board` (profile `uno-r3-atmega328p-5v` / `nano-atmega328p-5v`: pin capabilities, limits, reserved pins, on/off
+  breadboard) · `parts` (id, ref, `moduleKey`, variant, value + tolerance) · `pins` with KiCad-style electrical types · `nets` ·
+  `sketch` · `tests` · `provenance` (intent clauses, assumptions). Every artifact carries the revision hash.
+- **Module library** = data files (facts + links, no copied art): pins, limits, sim model id, footprint, glyph id (`@wokwi/elements`
+  names), self-test strategy, evidence URLs. MVP set (~10, frozen from the team's kit): LED by color, resistor, 4-pin tactile
+  button, photoresistor, potentiometer, passive + active buzzer; stretch: SG90 servo, HC-SR04. Parts outside the library can be
+  added as *generic modules* from a user-supplied pinout; they are flagged **unverified** and never receive a simulation GO.
+
+### 5.4 Mission lifecycle and gates
+
+`BRIEF → CLARIFY → DESIGN ⟲ → GO/NO-GO → ASSEMBLE (staged) → VERIFY → (DEBUG ⟲) → LAUNCH → DONE` — an **XState v5** machine
+(persisted snapshots in SQLite, so human waits survive restarts).
+
+- **DESIGN:** the design agent proposes IR + sketch; deterministic checkers return findings; it repairs until every checker is GO
+  or 4 iterations elapse, then reports what blocks. The test author writes intent tests; RETRO reviews at the end.
+- **Revisions:** any change creates revision *n+1* and re-runs every checker; approvals bind to a revision hash.
+- **VERIFY is machine-driven**, not an LLM tool call: flashing, prompts that wait on a human, and telemetry collection are states
+  with timeouts; the LLM receives the final telemetry + diagnosis to explain.
 
 | Console | Evidence | Source |
 |---|---|---|
-| EECOM (electrical) | Typed ERC + Uno rules + analytic limits at worst-case corners (SPICE cross-check when S4 lands) | research/03 |
+| EECOM (electrical) | Typed ERC + Uno rules (json-rules-engine data) + analytic limits at worst-case corners (SPICE cross-check with S4) | research/03 |
 | GUIDO (firmware) | arduino-cli compile (`--json --warnings all`), flash/RAM budget, pin modes observed in simulation vs IR roles | research/05, 04 |
 | FIDO (simulation) | Independent intent tests pass **and** coverage rules hold | research/04 |
 | FAO (assembly) | Layout fits the user's breadboard; LVS derived nets == IR nets | research/07 |
-| RETRO (review agent) | Independent agent compares brief, IR, sketch, and test results; votes GO/NO-GO with reasons | — |
+| RETRO (review agent) | Independent agent compares brief, IR, sketch, and results; votes GO/NO-GO with reasons | — |
 
-### 5.4 Agent and tool layer (research/01) — "Agent → MCP" from the whiteboard
+### 5.5 Electrical checks (research/03, audit/A5, A8)
 
-- **Harness: Claude Agent SDK `0.3.283` on Node 22**, model `claude-opus-5-5`. It natively provides what the brief asks for —
-  Claude-Code permission modes, `canUseTool`, `PreToolUse` hooks, sessions/resume, streaming — and in-process MCP servers.
-  **Fallback** (decided in spike P0-4 within 45 min): a manual Messages-API loop (`@anthropic-ai/sdk` 0.128) behind the same
-  tool registry.
-- **Hardening (mandatory, tested):** `tools: []` (no built-in Bash/Write/Edit/WebFetch) · `strictMcpConfig: true` ·
-  `settingSources: []` · empty per-mission working directory · deny-by-default `PreToolUse` hook that allows only
-  `mcp__vibread-*` tools · API keys only in the server environment · text from iMessage/A2A passed as quoted untrusted content.
-- **Three agent roles, separate contexts:** *design agent* (IR + sketch), *test author* (sees brief + IR interface, never the
-  sketch), *RETRO reviewer* (sees everything, can only vote and explain).
-- **Tools are defined once** (zod schema + handler) in `packages/tools`, grouped into six in-process MCP servers:
-
-| MCP server (ours) | Tools (abridged) | Backing |
-|---|---|---|
-| `vibread-circuit` | `list_modules`, `get_inventory`, `propose_design`, `validate_ir`, `render_schematic` | IR + library, elkjs SVG |
-| `vibread-checks` | `run_erc`, `electrical_limits`, `spice_crosscheck` (S4), `explain_finding` | TS rules, ngspice |
-| `vibread-firmware` | `compile`, `pin_mode_check`, `generate_selftest` | arduino-cli, avr8js |
-| `vibread-sim` | `run_scenarios`, `coverage_report`, `sim_trace` | avr8js worker pool + device models |
-| `vibread-assembly` | `layout_board`, `lvs_check`, `build_steps`, `render_step_png` | own kernel, resvg |
-| `vibread-bench` | `diagnose`, `inspect_photo`, `explain_telemetry` | rule table / fault dictionary, Claude vision |
-
-  Flashing and self-tests are orchestrator actions executed by the browser after approval, not agent tools.
-- Other agents see **task-level** tools (A2A skills / bridge tools, §5.10), never the raw domain tools.
-
-### 5.5 Electrical checks (research/03)
-
-- **ERC — BUILD in TypeScript.** No permissive headless ERC engine accepts our IR. Pin-type conflict semantics follow KiCad's
-  *documentation* (not its GPL source), plus a versioned Uno rule table: `CUR-PIN-DESIGN` ≤ 20 mA, `CUR-PIN-ABS` 40 mA,
-  `CUR-VCC-GND` ≤ 200 mA, `PWR-USB-FUSE` 500 mA path, `LED-RESISTOR`, `BTN-PULLUP` (internal 20–50 kΩ; no internal pull-down),
-  `ADC-RANGE`, `ADC-SOURCE-Z`, `PWM-PINS` {3,5,6,9,10,11}, `I2C-PINS` A4/A5, `SPI-PINS` 10–13, `SERIAL-USB` D0/D1, `SHORT-GRAPH`.
-  (Board-internal rules like AVCC/decoupling are already satisfied by the Uno/Nano board.)
-- **Analytic limits (MUST) at conservative corners:** maximum current uses near-zero driver resistance, minimum LED Vf, and
-  the resistor's minimum value within tolerance; brightness/voltage-drop checks use the ~45 Ω effective driver bound and maximum
-  Vf. Sums give per-pin, MCU-total, and 5 V-rail currents.
-- **SPICE cross-check (S4):** ngspice 45.2 (Ubuntu apt) batch mode in a temp dir with timeout; server-owned deck and `.control`
-  block (no `.include/.lib/.shell` from model output); DC operating points per output-state vector; results labeled "nominal
-  model check, not a physical wiring guarantee."
+- **ERC:** the Uno rule table is **data** evaluated by `json-rules-engine` 7.3.1 (ISC) — `CUR-PIN-DESIGN` ≤ 20 mA,
+  `CUR-PIN-ABS` 40 mA, `CUR-VCC-GND` ≤ 200 mA, `PWR-USB-FUSE` 500 mA path, `LED-RESISTOR`, `BTN-PULLUP` (internal 20–50 kΩ; no
+  internal pull-down), `ADC-RANGE`, `PWM-PINS` {3,5,6,9,10,11}, `I2C-PINS` A4/A5, `SPI-PINS` 10–13, `SERIAL-USB` D0/D1,
+  `SHORT-GRAPH`. A small pin-type conflict check follows KiCad's documented matrix (written from the docs, not KiCad's GPL source).
+- **Analytic limits (MUST) at conservative corners:** maximum current uses near-zero driver resistance, minimum LED Vf, and the
+  resistor's minimum value within tolerance; brightness/voltage-drop checks use the ~45 Ω effective driver bound and maximum Vf.
+- **SPICE cross-check (S4):** ngspice 45.2 (Ubuntu apt) in batch mode (`-b -r`), temp dir, timeout; server-owned deck and
+  `.control` block; source currents are sign-normalized (ngspice reports current out of the source as negative; verified in
+  research/audit/A5: 5 V → 220 Ω → red LED = 13.39 mA). Results are labeled "nominal model check."
 - **Light sensors are never judged on absolute values** (a GL5528-class photoresistor spans ~8–20 kΩ at 10 lux and ≥ 1 MΩ
-  dark). Checks use relative change; thresholds come from on-bench calibration (§5.8).
+  dark); checks use relative change, and thresholds come from on-bench calibration (§5.9).
 
-### 5.6 Firmware, tests, and simulation (research/04, 05)
+### 5.6 Firmware, tests, and simulation (research/04, 05, audit/A3, A5, A8)
 
-- **Compile — arduino-cli 1.5.1 + `arduino:avr@1.8.8`**: `compile --fqbn <uno|nano> --json --warnings all --output-dir <job>`
-  → ELF + HEX + structured diagnostics + flash/RAM sizes. Unique job dir per compile (shared output dirs were reproduced
-  failing under concurrency in research/05). Warm compile ≈ 0.3 s measured.
-- **Simulation — BUILD on avr8js 0.21.1 (MIT)**: ATmega328P CPU + GPIO/timers/USART/ADC come from avr8js; the outside world is
-  ours — device models for LED, button with deterministic bounce, potentiometer, photoresistor divider (driven by relative
-  light levels), passive/active buzzer; stretch: servo, HC-SR04. Headless runs execute in a `worker_threads` pool so the server
-  loop never blocks; spike 2 measures virtual-seconds per wall-second.
-- **Independent intent tests (answers "who tests the tester"):** the test author turns each intent clause into scenario steps
-  (`set-digital`, `bounce`, `set-light`, `wait`, `expect-pin`, `expect-pwm`, `expect-serial`) and a plain-language line
-  ("In the dark, pressing the button 3 times lights 3 LEDs"). **Coverage rules (deterministic):** every output net asserted,
-  every input exercised, every intent clause mapped to ≥ 1 test, edge-case categories present (bounce, threshold hysteresis,
-  rapid input, power-on state). The design agent can't edit this suite.
-- **Code ↔ circuit check:** decode DDRx/PORTx per pin (OUTPUT / INPUT_PULLUP / INPUT) during simulation and compare with IR roles.
-- **What the human sees at GO:** the plain-language test list with pass marks, a **simulation replay** (recorded trace animated
-  on the breadboard view — MUST), and, when S2 lands, a live interactive simulator.
-- **Fidelity statement shown with every simulation:** "Instruction-level ATmega328P emulation of the exact binary that will be
-  flashed, with protocol-level part models. Validates logic, timing, and pin configuration; does not prove current, noise,
-  brown-out, or contact quality — the physical self-test does."
+- **Compile — arduino-cli 1.5.1** (checksum-pinned binary) + **`arduino:avr@1.8.8`**: `compile --fqbn <arduino:avr:uno |
+  arduino:avr:nano:cpu=atmega328 | …:cpu=atmega328old> --json --warnings all --output-dir <job>` → ELF + HEX + diagnostics.
+  Job-local `ARDUINO_DIRECTORIES_*`, unique output dirs, serialized installs; JSON fields like `diagnostics` are optional and parsed
+  defensively. Warm compile ≈ 0.4 s measured.
+- **Simulation — avr8js 0.21.1** runs the ATmega328P; HEX parsing reuses `parseIntelHex` from `webserial-flasher` (avr8js has no
+  HEX loader). **Custom glue:** a scenario runner and five device models (LED, button with deterministic bounce, potentiometer,
+  photoresistor divider driven by relative light levels, passive/active buzzer); stretch: servo, HC-SR04. No maintained library
+  provides portable functional part models for avr8js (audit/A8). Headless runs use a `worker_threads` pool; the same runner runs
+  in a browser worker for the live view (S2).
+- **Scenario files** use the `yaml` package in a Wokwi-shaped format we version as `vibread.sim/v1` (`set-digital`, `bounce`,
+  `set-light`, `wait`, `expect-pin`, `expect-pwm`, `expect-serial`).
+- **Independent intent tests:** the test author turns each intent clause into scenario steps plus a plain-language line ("In the
+  dark, pressing the button 3 times lights 3 LEDs"). **Coverage rules:** every output asserted, every input exercised, every intent
+  clause mapped to ≥ 1 test, edge-case categories present (bounce, threshold hysteresis, rapid input, power-on). The design agent
+  can't edit this suite.
+- **Code ↔ circuit check:** decode DDRx/PORTx per pin (OUTPUT / INPUT_PULLUP / INPUT) during simulation vs IR roles.
+- **What the human sees at GO:** the plain-language test list with pass marks and a **simulation replay** (recorded trace
+  animated on the breadboard view — MUST); the live interactive simulator arrives with S2.
+- **Fidelity statement with every simulation:** "Instruction-level ATmega328P emulation of the exact binary that will be flashed,
+  with protocol-level part models. Validates logic, timing, and pin configuration; does not prove current, noise, brown-out, or
+  contact quality — the physical self-test does."
 
-### 5.7 Schematic, layout, LVS, and LEGO-style steps (research/02, 07)
+### 5.7 Schematic, breadboard layout, LVS, and LEGO-style steps (research/07, audit/A3, A8)
 
-- **Schematic (MUST, P1):** standard symbols from module glyph ids, laid out with elkjs (EPL-2.0 option), board on the left,
-  power top/bottom, net labels; SVG in the web app and PNG for iMessage.
-- **Board profiles:** 0.1" grid, A–E / F–J 5-hole groups split by the channel, rails as explicit segments. **Uno** = off-board
-  part reached by flexible jumpers from its headers; **Nano** = on-board anchor straddling the channel at the left end, occupying
-  its rows. The profile is frozen at tonight's hardware gate.
-- **MVP layout = deterministic net-to-row allocator** (no router needed at this size): 5 V/GND on the top rails; each branch
-  placed left-to-right with a spacer row; each signal net gets a 5-hole strip; 2-lead parts span strips at footprint-legal
-  distances; the tactile button straddles the channel; board pins reach strips by jumpers; lexicographic tie-breaks make the
-  same input produce the same holes.
+- **Schematic (MUST, P1) — library:** IR → adapter → `@tscircuit/core` (board modeled as a `chip` with Arduino pin labels) →
+  Circuit JSON → `circuit-to-svg`. Verified hands-on for Uno-chip + LED + resistor (audit/A8). `@tscircuit/core` must run under
+  `tsx`/Bun in a worker (a Node ESM directory-import issue was found); PNG via resvg for iMessage.
+- **Breadboard — custom glue (no library exists):** audits found no MIT/Apache breadboard component or solderless placer (Wokwi
+  Elements has part glyphs but no breadboard; Fritzing is GPL/CC-BY-SA; other repos are apps, not libraries). We draw the board
+  grid in SVG and place `@wokwi/elements` part glyphs (MIT; wrapped with `React.createElement` because their JSX types fail under
+  React 19). Board profiles: 0.1" grid, A–E / F–J groups split by the channel, rails as explicit segments; **Uno** off-board via
+  flexible jumpers, **Nano** as an on-board anchor straddling the channel. The profile is frozen at the hardware gate.
+- **Layout — deterministic net-to-row allocator:** 5 V/GND on the top rails; each branch placed left-to-right with a spacer row;
+  each signal net gets a 5-hole strip; 2-lead parts span strips at footprint-legal distances; the tactile button straddles the
+  channel; lexicographic tie-breaks make the same input produce the same holes.
 - **LVS:** union-find over contact groups + occupied holes + jumpers → derived nets compared with IR nets; reports split nets,
-  merged nets (critical if GND+5 V), floating pins, duplicate occupancy. Same engine powers diagnosis (§5.8).
-- **Steps** (Agrawala et al. SIGGRAPH 2003, LEGO conventions, CircuitStyle): inventory → orientation legend → **USB unplugged**
-  → rails → **power-up checkpoint 1 (rails only)** → one part per step (polarity before insertion) → one jumper per step →
-  a checkpoint test after each functional subsection (ElectroTutor-style) → final power-up. Each step: per-step parts callout
-  ("1× 220 Ω — red-red-brown"), highlighted new items with a ghost-lead animation, exact holes in text ("R1: E12 → E16"),
-  color never the only cue (WCAG 1.4.1), reduced-motion respected. Own React/SVG renderer (Wokwi Elements are MIT glyphs but
-  have no breadboard; Fritzing art is CC-BY-SA — not used); `@resvg/resvg-js` PNG export per step.
+  merged nets (critical if GND+5 V), floating pins, duplicate occupancy. Same engine powers diagnosis.
+- **Steps** (Agrawala et al. SIGGRAPH 2003, LEGO conventions, CircuitStyle): inventory → orientation legend → **USB unplugged** →
+  rails → **power-up checkpoint 1 (rails only)** → one part per step (polarity before insertion) → one jumper per step → a
+  checkpoint test after each functional subsection (ElectroTutor-style) → final power-up. Each step shows a parts callout
+  ("1× 220 Ω — red-red-brown"), highlighted new items, exact holes in text ("R1: E12 → E16"), never color alone (WCAG 1.4.1);
+  PNG per step via `@resvg/resvg-js` 2.6.2 (≈19 ms for 1200×800, audit/A3).
 
-### 5.8 Physical verification and debugging (research/06)
+### 5.8 User interface — Material UI (research/audit/A7)
+
+A Claude-Code-like agent workspace, made friendly for non-technical users, composed from MUI components:
+
+- **Libraries:** `@mui/material` 9.4.0 + Emotion, `@mui/icons-material` 9.4.0, **`@mui/x-chat` 9.0.0-alpha.18** (MIT; ChatBox
+  with streaming, tool-call parts, approval states, stop, accessible message list), MUI X Community `x-charts`/`x-data-grid`
+  9.14.0 (lazy-loaded; no Pro/Premium), `react-markdown` + `react-syntax-highlighter`, React 19.3 + Vite 8.3.1, React Router 8,
+  TanStack Query 5 (polling). MUI v9 needs `sx` for spacing props.
+- **Stream glue:** MUI X Chat ships `createAiSdkAdapter`, which parses the AI SDK UI message stream (verified with a mock model,
+  including `tool-approval-request`). We wrap it to add `addToolApprovalResponse`, `stop`, and `reconnectToStream`, which the stock
+  adapter doesn't provide — approvals POST to the ApprovalBroker, which re-validates them server-side.
+- **Fallback:** if the X Chat alpha breaks, `@assistant-ui/react` ExternalStoreRuntime styled with MUI (type-checked in audit/A7).
+
+| Screen | MUI composition |
+|---|---|
+| Home / new mission | `Card` + multiline `TextField` ("What should your circuit do?"), parts `Chip`s, recent missions `List` |
+| Mission workspace (laptop) | `AppBar` with mode `Select` (Plan / Ask every time / Review / Autopilot), connection status, **Stop agent**; left `Drawer` of mission steps; center `ChatBox` with tool cards ("Checking the circuit… ✓", expandable details) and inline approval cards; right `Tabs` artifact canvas (Schematic · Steps · Code · Replay · Tests · Telemetry); bottom console lights (text + icon, never color alone) |
+| Approval card | Plain-language action + consequence, revision + expiry `Chip`s, **Allow once / Always for this mission / Deny**; physical actions show "a person must approve each time" instead of "Always" |
+| Bench / Verify | `Stepper`: Connect board → Safe firmware → Rails checkpoint → Self-test (live prompts: "Press the button now") → Diagnose; `Alert` for "likely rail short — unplug now" |
+| Build Mode (phone) | `MobileStepper` + one step `Card` (image, parts callout, holes), "I did this", stale-connection badge; polls; never offers flashing |
+| Settings / Connections | Sign-in, **Connect Claude Code** (shows the `claude mcp add` command), **Link iMessage** (one-time code), default mode |
+
+Wireframes and copy guidelines: research/audit/A7 §"Screen set". Accessibility: visible focus, ≥ 24 px targets (44 px on phone),
+reduced motion honored (including celebration and step animations), polite streaming announcements (built into X Chat).
+
+### 5.9 Physical verification and debugging (research/06, audit/A3, A8)
 
 **Safety sequence (answers the brief's "short circuit check" for the dangerous case):**
 1. **Step 0 — before any wiring:** connect the bare board; flash ViBread's safe firmware (all pins inputs, banner with design
    hash). Whatever sketch was on the board before can no longer drive pins into the new circuit.
-2. **Power-up checkpoint 1 (rails only):** plug USB; the board must enumerate, print its banner, and report normal VCC
-   (internal bandgap). No banner, repeated resets, or USB dropping off → **"likely rail short — unplug now"** with the rail
-   jumpers highlighted and a rail checklist (optional photo check).
+2. **Power-up checkpoint 1 (rails only):** plug USB; the board must enumerate, print its banner, and report normal VCC (internal
+   bandgap). No banner, repeated resets, or USB dropping off → **"likely rail short — unplug now"** with the rail jumpers
+   highlighted and a rail checklist.
 3. **Subsection checkpoints** as parts are added; full self-test at the end.
 
-- **Flashing — WRAP `webserial-flasher` 1.0.1 (MIT, STK500v1 over Web Serial)** with Uno/Nano-new 115200 and Nano-old 57600
-  profiles, DTR reset, signature check `1E 95 0F`, retries. Chrome/Edge only. Fallback: own STK500v1 uploader written from
-  Atmel's AVR061 protocol note (≈250 lines, 2 h budget).
-- **Self-test firmware** is generated from a deterministic template — never LLM-written. It runs only tests the design's safety
-  metadata allows and streams NDJSON: `rails.vcc` (idle + under load) · `digital.stuck` (idle levels under pull-up) ·
-  `button.interactive` (release → press → release) · `light.relative` (ambient, then "cover the sensor"; pass on relative change;
-  records both readings) · `pot.sweep` · `led.sequence` (each LED lit in turn; the human reports which one — web buttons or a
-  poll) · `net.continuity` only across pairs guarded by a series resistor. Unobservable cases report `unknown`.
-- **Light-sensor calibration:** the recorded ambient/covered readings set the app firmware's dark threshold (midpoint with a
-  hysteresis band), compiled in before the final flash — the lamp works under the actual room's lighting.
-- **Expected signature** per test comes from the IR revision; readings inside the logic-threshold gap and floating inputs
-  (median + variance across samples) are marked indeterminate and never gate a verdict.
-- **Diagnosis (MUST = rule table):** each failing signature maps to candidate causes with their holes highlighted, e.g.
+- **Flashing — `webserial-flasher` 1.0.1** (MIT, STK500v1 over Web Serial; browser bundle verified without Node deps), wrapped in
+  a buffered adapter (its `sendCommand` writes before attaching the response listener — a race found in audit/A3), with Uno/
+  Nano-new 115200 and Nano-old 57600 profiles, DTR reset, signature check `1E 95 0F`. Chrome/Edge are the tested browsers
+  (Firefox 151 added Web Serial behind a permission add-on). Fallback: STK500v1 uploader written from Atmel's AVR061 note (2 h).
+- **Self-test firmware** comes from a fixed **Eta** template (never LLM-written), serializing NDJSON with **ArduinoJson** 7.4.2.
+  Firmata was rejected: StandardFirmata and ConfigurableFirmata set digital pins to OUTPUT on reset, which is unsafe on an
+  unverified circuit (audit/A8). Tests run only where the design's safety metadata allows: `rails.vcc` · `digital.stuck` ·
+  `button.interactive` · `light.relative` (ambient, then "cover the sensor") · `pot.sweep` · `led.sequence` (human reports which
+  LED lit — web buttons or a poll) · `net.continuity` only across resistor-guarded pairs. Unobservable cases report `unknown`.
+- **Light-sensor calibration:** recorded ambient/covered readings set the app firmware's dark threshold (midpoint + hysteresis),
+  compiled in before the final flash.
+- **Expected signatures** come from the IR revision; readings in the logic-threshold gap and floating inputs (median + variance)
+  are indeterminate and never gate a verdict.
+- **Diagnosis (MUST = rule table in `json-rules-engine`):** failing signatures map to candidate causes with holes highlighted —
   button pin stuck LOW → {leg in a GND row, button rotated 90°, jumper to GND}; LED sequence mismatch → {jumpers swapped, LED
-  reversed, LED missing}; light reading pinned at a rail → {divider resistor missing, sensor missing, wrong row}; no banner /
-  USB drop → {rail short}. **S5 adds a fault dictionary:** single-fault mutants of the layout (lead moved ±1 row, missing part,
-  missing/misrouted jumper, rotated button, swapped jumpers, reversed polarity, wrong resistor value), each with a predicted
-  signature, ranked against the telemetry.
-- **Attribution:** tests fail in simulation → *code* · checks/LVS fail pre-build → *design* · telemetry ≠ expectation and a wiring
-  cause explains it → *wiring* · nothing explains it → *component* (ask for a swap or photo) · else *unknown*. The LLM explains
-  and proposes the fix; it never chooses pin sequences.
-- **Photo check (secondary):** HEIC → JPEG with Photon's `heif2jpeg` (MIT); Claude vision receives the photo, the expected step
-  image, and expected placements, and answers per-part questions with `unknown` allowed. It never overrides telemetry; conflicts
-  trigger "reseat + close-up." Published evaluations show multimodal models make confident wiring mistakes (research/06 §2.8).
+  reversed, LED missing}; light reading pinned at a rail → {divider resistor missing, sensor missing, wrong row}; no banner / USB
+  drop → {rail short}. **S5** adds a fault dictionary of single-fault layout mutants (moved lead, missing part, misrouted jumper,
+  rotated button, swapped jumpers, reversed polarity, wrong value) ranked against the telemetry.
+- **Attribution:** fails in simulation → *code* · checks/LVS fail pre-build → *design* · telemetry ≠ expectation and a wiring cause
+  explains it → *wiring* · nothing explains it → *component* · else *unknown*.
+- **Photo check (secondary):** `heif2jpeg` (HEIC → JPEG, ≈8 ms) + `sharp` (orient/crop/resize); Claude vision gets the photo, the
+  expected step image, and placements, answering per-part questions with `unknown` allowed. It never overrides telemetry.
 
 | Fault | MCU self-test | Photo | Human prompt |
 |---|---|---|---|
@@ -335,99 +365,122 @@ user-supplied pinout; they are flagged **unverified** and can never receive a si
 
 (D = detectable, C = conditional, N = not detectable; research/06 §6.7.)
 
-### 5.9 Permission model (brief p.5 "claude code permission control")
+### 5.10 Permission model (brief p.5 "claude code permission control")
 
-| ViBread mode | Agent SDK | Software changes (design/code edits, compile, sim, tests) | Release a revision as build target | Physical (flash, self-test, rewire step) | BOM change (new part) |
-|---|---|---|---|---|---|
-| Plan | `plan` | propose only | ask | ask | ask |
-| Ask every time | `default` + `canUseTool` → broker | ask per proposed revision | ask | ask | ask |
-| **Review (default)** | `default`, ViBread software tools allow-listed | automatic | ask once per revision (plain-language tests + diff + console evidence) | ask | ask |
-| Autopilot | `bypassPermissions` (built-ins removed, deny-by-default hook) | automatic | automatic when all consoles incl. RETRO are GO | ask — human only | ask — human only |
+Mapped onto AI SDK `toolApproval` callbacks (returning `approved`, `denied`, or `user-approval` per call; research/audit/A9):
 
-- **One `ApprovalBroker`** (SQLite): request id, action class, exact action hash (revision + action + input), expiry, one-shot
-  decision, **decider identity and kind (human/agent)**. First valid decision wins; stale or mismatched approvals are rejected.
-- **Who may decide:** physical and BOM actions — only an authenticated human: the bench laptop's operator session or an
-  iMessage handle registered to the mission. Software-release approvals may also come from a human through MCP elicitation in
-  Claude Code. **A2A clients and bridge tool calls can request actions but never approve them.** Claude Code's Channel
-  permission relay is not used (it relays Claude Code's own tool prompts, not ViBread's).
-- MUST ships the web adapter; iMessage approvals arrive with S1.
-- This realizes the brief's intent: the agent changes software and re-runs simulation freely, the human reviews the simulation,
-  and nothing touches the real board without a human. The narrowing of "bypass all permissions" is listed in §9 for sign-off.
+| ViBread mode | Software tools (design/code edits, compile, sim, tests) | Releasing a revision as build target | Physical (flash, self-test, rewire step) | BOM change (new part) |
+|---|---|---|---|---|
+| Plan | `denied` — the proposal is rendered, nothing executes | ask | ask | ask |
+| Ask every time | `user-approval` on every call | ask | ask | ask |
+| **Review (default)** | `approved` | `user-approval` once per revision (plain-language tests + diff + console evidence) | ask — human only | ask — human only |
+| Autopilot | `approved` | automatic when all consoles incl. RETRO are GO | ask — human only | ask — human only |
 
-### 5.10 Agent interop: A2A + Claude Code (research/01)
+- **ApprovalBroker** (SQLite via Drizzle): request id, action class, exact action hash (revision + action + input), expiry,
+  one-shot decision, decider identity and kind (human/agent). First valid decision wins; stale or mismatched approvals are rejected.
+  UI decisions are requests; the broker is the authority.
+- **Who may decide physical and BOM actions:** only an authenticated human — the signed-in bench laptop session or an iMessage
+  handle linked to the account. OAuth scopes never include physical approval; MCP and A2A clients can request actions, never
+  approve them.
+- The narrowing of "bypass all permissions" is listed in §9 for sign-off.
 
-- **A2A v1.0 server** (`@a2a-js/sdk` 1.2.1, Express on Node 22, bearer token): agent card at `/.well-known/agent-card.json`,
-  JSON-RPC at `/a2a`, streaming on. Skills: `design-circuit`, `validate-circuit`, `assembly-instructions`, `debug-build`,
-  `verify-photo`. Ask-back = `TASK_STATE_INPUT_REQUIRED` with a text question + JSON DataPart (request id, schema); continuation
-  reuses `taskId`/`contextId`. Physical steps appear to A2A clients as *requests awaiting a human at the bench*, never as
-  approvable prompts. Artifacts: `design-vN.netlist.json`, `firmware-vN.ino`, `validation-vN.json`, `schematic-vN.svg`,
-  `assembly-step-K.png`, `selftest-J.json`.
-- **Claude Code bridge `vibread-channel`:** local stdio MCP server on `@modelcontextprotocol/sdk` 1.30.1 (a probe of Claude
-  Code 2.1.283 negotiated MCP `2025-11-25` over stdio). Tools: `vibread_design_circuit`, `vibread_continue_task`,
-  `vibread_get_task`, `vibread_get_artifacts`, `vibread_validate`, `vibread_build_instructions`. It declares `claude/channel`
-  and pushes ViBread questions, check results, and bench outcomes into the running session; Claude answers through
-  `vibread_continue_task` (one continuation path per request). Custom channels need
-  `claude --dangerously-load-development-channels server:vibread-channel` and a personal Pro/Max or Console login (Team and
-  Enterprise orgs block channels unless an admin enables them); without channels the same server works as plain tools
-  (Claude polls `vibread_get_task`).
-- No third-party A2A↔MCP bridge qualified (Python/Go sidecars, v0.3-era, or unlicensed); we build the thin facade.
+### 5.11 Identity, OAuth, and API access (research/audit/A6)
 
-### 5.11 Photon CAPCOM (research/08)
+- **Library: Better Auth 1.7.6** (MIT) with `@better-auth/mcp`, `@better-auth/oauth-provider`, `@better-auth/cimd` 1.7.6, on
+  SQLite through its Drizzle adapter. Mounted with `toNodeHandler` **before** `express.json()`; schema generated/migrated before
+  serving (a startup failure without it was observed).
+- **User sign-in (MUST):** Google first; GitHub with S3. httpOnly + Secure + SameSite=Lax cookies, CSRF checks on, exact
+  `trustedOrigins` (`http://localhost:8787` and the stable HTTPS host). Callback URLs registered for both hosts. Apple is out
+  (needs TLS-only callbacks and developer credentials).
+- **Claude Code / MCP clients (S3):** `/mcp` is an OAuth-protected MCP resource (MCP authorization spec): Protected Resource
+  Metadata at `/.well-known/oauth-protected-resource` and `/…/mcp`, RFC 8414 metadata, PKCE S256, resource-bound tokens, **Client
+  ID Metadata Documents** for client registration (DCR only behind a flag). The user runs
+  `claude mcp add --transport http vibread https://<stable-host>/mcp`, signs in, consents — no key, no install. Scopes:
+  `circuits:read`, `circuits:write`, `bench:request`. Private-demo fallback: `--header "Authorization: Bearer <short-lived token>"`
+  minted on the Connections page. MCP server: `@modelcontextprotocol/sdk` 1.30.1 Streamable HTTP (a Claude Code 2.1.283 probe
+  connected to it; imports use explicit `.js` subpaths because the package root export is broken). Ask-back: task tools return
+  `input_required` with the question, and Claude continues with `vibread_continue_task`.
+- **A2A agents (S3):** agent card `securitySchemes` declares an OAuth2 scheme on the same issuer with a separate `/a2a` audience;
+  bearer-verification middleware runs before the A2A handlers (the SDK only advertises security, it doesn't enforce it).
+- **iMessage linking (M8):** the Connections page shows a one-time code; the user texts it to CAPCOM; the server binds the
+  verified sender handle to the account (after registering it as a Photon project user). Codes are hashed, expiring, single-use.
+- **Anthropic:** one server-side API key (secrets only, never in the browser), per-user usage caps; data-retention disclosure in
+  the README.
 
-- `spectrum-ts` **12.10.1** cloud iMessage provider inside the server; long-lived `app.messages` loop (poll votes aren't
-  delivered via webhooks); the terminal provider for development and **all late-night testing** (throttled real sends protect
-  the shared line from Apple's burst/off-hours filtering).
-- **M8 thin slice (P1):** brief by DM → status replies → GO/NO-GO poll. **S1:** step PNGs, self-test prompts as polls ("Which
-  LED is on? 1/2/3/4/none" — the phone becomes a test instrument), iMessage approvals from the registered handle, inbound photo
-  check, fault alert with highlighted image, celebration screen effect on mission success.
-- **Onboarding script:** confirm `HACKWITHPHOTON` applied (Pro: up to 100 users) → register each person as a project user →
-  they text first → CAPCOM replies text-only → links only after their reply. Polls need iOS 26: every poll has a text fallback
-  ("reply 1–4", "GO", "NO-GO"). Judges' numbers only with consent, registered on the spot with the Photon CLI.
-- **Teammates without group chats:** Free/Pro lines are shared-pool DMs (native groups need the Business tier). Each teammate
-  DMs CAPCOM; mission membership links them, so one person's approval and another's step image share one mission context.
-- Craft rules: inbound-first, 5-second debounce of bursts, typing indicator while working, one reply per turn.
+### 5.12 Photon CAPCOM (research/08, audit/A4)
 
-### 5.12 Persistence and cross-channel context
+- `spectrum-ts` 12.10.1 cloud iMessage provider inside the server; long-lived `app.messages` loop (poll votes aren't delivered via
+  webhooks); `effect` and its constants come from `spectrum-ts/providers/imessage`; the terminal provider (pre-cache its `tuichat`
+  binary) handles development and **all late-night testing** so the shared line isn't flagged for burst/off-hours sends.
+- **M8 thin slice (P1):** brief by DM → status replies → GO/NO-GO poll → iMessage linking. **S1:** step PNGs, self-test prompts as
+  polls ("Which LED is on? 1/2/3/4/none"), iMessage approvals from the linked handle, inbound photo check, fault alert with
+  highlighted image, celebration screen effect on mission success.
+- **Onboarding:** redeem `HACKWITHPHOTON` in the Dashboard and confirm Pro (100 users) → register each person → they text first →
+  CAPCOM replies text-only → links only after their reply. Polls need iOS 26: every poll has a text fallback ("reply 1–4", "GO",
+  "NO-GO"). Judges' numbers only with consent, registered with the Photon CLI (`photon spectrum users add --phone …`).
+- **Teammates without group chats:** Free/Pro are shared-pool DMs (groups need the $250/line Business tier). Each teammate DMs
+  CAPCOM; mission membership links them into one mission context.
 
-SQLite: `missions`, `members` (operator session, iMessage handle, bridge client ↔ person, human/agent kind), `revisions` (IR,
-sketch, tests, console results, layout, hashes), `messages` (channel, sender, direction, revision), `approvals`, `runs` (sim,
-self-test, photo, calibration), `artifacts` (content-addressed). The Mission Control timeline shows every event with its channel
-icon; any channel can resume a mission ("continue my moon lamp").
+### 5.13 Persistence and cross-channel context
 
-## 6. Stack, repo layout, standards
+Drizzle ORM 0.45.3 + drizzle-kit migrations on better-sqlite3 13.0.3: `missions` (+ XState snapshot), `members` (user, linked
+iMessage handle, OAuth clients, human/agent kind), `revisions` (IR, sketch, tests, console results, layout, hashes), `messages`
+(channel, sender, direction, revision), `approvals`, `runs` (sim, self-test, photo, calibration), `artifacts` (content-addressed),
+plus Better Auth's tables. The workspace timeline shows every event with its channel icon; any channel can resume a mission.
 
-**Pinned dependencies (verified on npm/apt Sep 25):** `@anthropic-ai/claude-agent-sdk` 0.3.283 · `@anthropic-ai/sdk` 0.128.0 ·
-`@a2a-js/sdk` 1.2.1 · `@modelcontextprotocol/sdk` 1.30.1 · `spectrum-ts` 12.10.1 · `heif2jpeg` 0.1.6 · `avr8js` 0.21.1 ·
-`webserial-flasher` 1.0.1 · `@resvg/resvg-js` 2.6.2 · `elkjs` 0.12.0 · `better-sqlite3` 13.0.3 · `zod` 4 · React + Vite.
-System: `arduino-cli` 1.5.1 + `arduino:avr@1.8.8`, `ngspice` 45.2, `cloudflared`.
+## 6. Stack, what we write, repo layout
+
+### 6.1 Pinned stack (each verified in research/audit)
+
+| Layer | Library (version, license) |
+|---|---|
+| Runtime | Node 22.22.x (npm ≥ 10 — the image's npm 9.2 must be upgraded for avr8js), TypeScript, `tsx` |
+| HTTP | Express 5.2.1, pino 10.3.1, express-rate-limit 8.7.0 |
+| Agent | `ai` 7.0.116 + `@ai-sdk/anthropic` 4.0.65 (Apache-2.0); `@ai-sdk/mcp` 2.0.60 for external MCP servers; zod 4.6.5 |
+| Auth | better-auth 1.7.6 + `@better-auth/mcp` / `oauth-provider` / `cimd` 1.7.6 (MIT) |
+| Interop | `@modelcontextprotocol/sdk` 1.30.1 (MIT), `@a2a-js/sdk` 1.2.1 (Apache-2.0) |
+| Messaging | `spectrum-ts` 12.10.1 (MIT), `heif2jpeg` 0.1.6 (MIT; statically bundles LGPL libheif/libde265 — notice in README) |
+| Workflow + data | xstate 5.33.2 (MIT), drizzle-orm 0.45.3 (Apache-2.0) + drizzle-kit 0.31.11, better-sqlite3 13.0.3 (MIT) |
+| Circuit/schematic | `@tscircuit/core` 0.0.1989 (MIT), `circuit-json` 0.0.506 (ISC), `circuit-to-svg` 0.0.433 (ISC) |
+| Checks | json-rules-engine 7.3.1 (ISC); ngspice 45.2 (apt, external tool) |
+| Firmware | arduino-cli 1.5.1 + `arduino:avr@1.8.8` (external tool, GPL-3); eta 4.6.0 (MIT); ArduinoJson 7.4.2 (MIT, in sketches) |
+| Simulation | avr8js 0.21.1 (MIT), yaml 2.9.1 (ISC) |
+| Bench | webserial-flasher 1.0.1 (MIT), `@types/w3c-web-serial` |
+| Rendering | `@wokwi/elements` 1.9.2 (MIT), `@resvg/resvg-js` 2.6.2 (MPL-2.0), sharp 0.35.4 (Apache-2.0) |
+| UI | `@mui/material` / `@mui/icons-material` 9.4.0, `@mui/x-chat` 9.0.0-alpha.18, `@mui/x-charts` / `x-data-grid` 9.14.0 (MIT, Community), React 19.3, Vite 8.3.1, react-router 8, `@tanstack/react-query` 5, react-markdown 10.1, react-syntax-highlighter 16.1 |
+| Network | cloudflared 2026.9.3 (Cloudflare `any` apt repo or pinned binary) or the chosen stable tunnel |
+
+Avoided on purpose: Claude Agent SDK (terms, §5.2) · MUI X Pro/Premium (commercial) · tscircuit packages without a license
+(`circuit-json-to-spice`, `@tscircuit/checks`) · Firmata (unsafe reset) · Fritzing assets (CC-BY-SA) · GPL/AGPL code in the repo.
+
+### 6.2 What we write ourselves (the glue) — and why no library covers it
+
+| Custom piece | Why custom | Built on |
+|---|---|---|
+| IR zod schema, board profiles, module data | Contract + facts specific to Arduino kits; Circuit JSON lacks pin electrical types | zod |
+| Adapters: IR → tscircuit, tools → AI SDK / MCP, AI SDK stream → MUI X Chat approvals, Spectrum messaging port, A2A executor | Connecting libraries | the libraries themselves |
+| Mission machine definition + ApprovalBroker policy | Our workflow and safety rules | XState, Drizzle |
+| Scenario runner + 5 device models | No portable avr8js part models exist | avr8js, yaml |
+| Uno rule data + pin-type check + analytic limits | Board-specific electrical rules | json-rules-engine |
+| Breadboard allocator, LVS, step list, board SVG | No solderless-breadboard placer or component exists (MIT/Apache) | Wokwi glyphs, resvg |
+| Self-test template, expected signatures, diagnosis rules | Safety depends on knowing the netlist; Firmata is unsafe | Eta, ArduinoJson, json-rules-engine |
+| MUI screens | Composition of MUI components | MUI, MUI X Chat |
+
+### 6.3 Repo layout
 
 ```
 vibread/
-  apps/server        Node 22: API+SSE+static web, orchestrator, agents, A2A, CAPCOM, broker
-  apps/web           React+Vite: operator console, Build Mode (phone), sim replay/live worker, Web Serial bench
-  apps/channel       Claude Code bridge (stdio MCP v1 + A2A client)
-  packages/core      IR schema, board profiles, module library, net utils, hashing
-  packages/checks    ERC rules, analytic limits, SPICE cross-check
-  packages/firmware  arduino-cli service, self-test generator, calibration injection
-  packages/sim       avr8js harness, device models, scenario runner, coverage (Node workers + browser)
-  packages/assembly  schematic + breadboard SVG, layout, LVS, steps, PNG export
-  packages/bench     expected signatures, rule-table diagnosis, fault dictionary, NDJSON protocol
-  packages/tools     tool registry → in-process MCP servers + A2A/bridge facades
+  apps/server        Express 5: auth, UI stream, REST, /mcp, /a2a, CAPCOM, mission machine, broker, static web
+  apps/web           React + Vite + MUI: workspace, Build Mode, bench (Web Serial), sim replay/live worker
+  packages/core      IR schema, board profiles, module library, hashing
+  packages/tools     tool registry (zod + handlers) → AI SDK tools + MCP tools
+  packages/checks    rule data + json-rules-engine, pin-type check, analytic limits, SPICE cross-check
+  packages/firmware  arduino-cli service, Eta self-test template, calibration injection
+  packages/sim       avr8js runner, device models, scenarios, coverage (Node workers + browser)
+  packages/assembly  tscircuit schematic adapter, breadboard layout, LVS, steps, SVG/PNG
+  packages/bench     expected signatures, diagnosis rules, fault dictionary, NDJSON protocol
   fixtures/          golden designs, faulted variants, sample photos
 ```
-
-| Subsystem | Industry standard | ViBread choice | Existing MCP verdict → decision |
-|---|---|---|---|
-| Agent tools | MCP | Agent SDK in-process MCP servers | — → BUILD 6 domain servers |
-| Agent-to-agent | A2A v1.0 | `@a2a-js/sdk` | Bridges toy/usable → BUILD facade |
-| Schematic/netlist | KiCad pin types, S-expr schematics | Own IR with KiCad pin semantics; elkjs SVG | KiCad MCPs usable but broad/unlicensed → BUILD |
-| Parts data | Distributor APIs (DigiKey/Nexar) | Curated library + evidence URLs | Partuno good but needs keys → COULD |
-| Electrical | ERC + SPICE | TS rules + analytic limits; ngspice cross-check | SPICE MCPs young, GPL, or native-heavy → BUILD |
-| MCU sim | Instruction-level emulators; Wokwi CI scenarios | avr8js + own scenarios | Wokwi MCP usable (cloud token) → COULD |
-| Firmware | arduino-cli / PlatformIO | arduino-cli | HardwareMCP good but local-USB-only → BUILD |
-| Board test | In-circuit test, fault dictionaries, LVS | Safe firmware + self-test + rule table (+ fault dictionary) + LVS | Serial MCPs good but can't see browser USB → BUILD |
-| Instructions | LEGO / Agrawala principles | Own step generator | None suitable → BUILD |
-| Messaging | Spectrum | `spectrum-ts` | Photon MCP archived → USE SDK directly |
 
 ## 7. Execution plan and timeline (CT)
 
@@ -437,47 +490,49 @@ vibread/
 |---|---|
 | Integrator (Barry + the lead coding agent) | Contracts, Golden Path, merges, checkpoints, pushes to `origin/main` |
 | Hardware lead | Kit inventory, demo boards, deliberate faults, hardware spikes, table demo |
-| Channels lead | Photon account/onboarding, CAPCOM testing, judge phones, Claude Code demo laptop |
-| Pitch/UX lead | Theme UI review, novice test, video, Devpost |
-| AI subagents (one per package) | `core`, `checks`, `firmware`, `sim`, `assembly`, `bench`, `tools`, `web`, `server`, `channel` — contract-first, golden tests shared |
+| Channels lead | Photon account/onboarding, Google/GitHub OAuth apps, stable tunnel, Claude Code demo laptop |
+| Pitch/UX lead | MUI theme review, novice test, video, Devpost |
+| AI subagents (one per package) | Each `packages/*` and `apps/*` — contract-first, shared golden tests |
 
-AI subagents keep building overnight against the frozen contracts and fixtures; humans integrate and test hardware in the
-morning.
+AI subagents keep building overnight against the frozen contracts and fixtures; humans integrate and test hardware in the morning.
 
 | When | Phase | Exit criterion |
 |---|---|---|
-| **Fri 23:30–00:30** | **Hardware gate + decisions:** kit photo/inventory (board, USB-serial chip, breadboard, parts), register team on Devpost, API key, Photon signup + promo + register phones, spike 8 if Barry is at the board | Board profile, module list, hero circuit frozen. **Not a 328P → re-scope within the hour.** Spare 328P board + cable sourced |
-| Sat 00:30–03:00 | **P0:** container spikes 1–5, 9; repo scaffold; contracts (IR schema, tool registry, event/poll API, NDJSON protocol); golden fixture; module library | Contracts committed; spikes green or fallback chosen |
-| Sat 00:30–08:30 | Overnight AI build of packages against contracts + golden tests | Each package passes its golden tests |
-| Sat 08:30–09:30 | Hardware spikes 6–8, 10–12 at the venue (laptop, phone, board, venue Wi-Fi) | All green or fallback chosen |
-| Sat 08:30–13:00 | **P1 = Golden Path v0** + thin CAPCOM (M8) + schematic + step visuals/theme basics; agent design path in parallel | **Checkpoint A 13:00:** Golden Path v0 runs on the real board; agent P50/P95 measured |
-| Sat 13:00–18:00 | **P2:** agent design integrated (M1) with test author + RETRO; permission modes + web broker; 3 deliberate faults diagnosed; calibration; staged power-up | **Checkpoint B 18:00:** an agent-generated design gets GO and a deliberate fault is diagnosed + fixed through the UI; rough backup video recorded |
-| Sat 16:00–18:30 | Photon online office hours — S1 questions, ask how/when Photon judges | — |
-| Sat 18:00–23:00 | **P3:** SHOULDs in order S1 → S2 → S3 → S4 → S5 → S6; **novice test** (non-EE person follows phone steps 10 min, fix top 3 issues) | **Checkpoint C 23:00:** full demo script runs; video refreshed |
+| **Sat 00:30–01:30** | Plan sign-off; decisions (§10); register team on Devpost; Anthropic key; Photon signup + promo; Google OAuth client | Keys and accounts exist |
+| Sat 01:30–08:30 | **P0 overnight (AI):** container spikes 1–5, 9, 13, 14; repo scaffold; contracts (IR schema, tool registry, UI stream + poll API, NDJSON protocol); golden fixture; module library; packages against golden tests | Contracts committed; container spikes green or fallback chosen |
+| **Sat 08:30–09:30** | **Hardware gate (if not done at night):** kit photo/inventory (board, USB-serial chip, breadboard, parts), hardware spikes 6–8, 10–12 at the venue | Board profile, module list, hero circuit frozen; **not a 328P → re-scope within the hour**; spare 328P board sourced |
+| Sat 08:30–13:00 | **P1 = Golden Path v0** + thin CAPCOM (M8) + schematic + MUI workspace shell/theme + Google sign-in; agent path in parallel | **Checkpoint A 13:00:** Golden Path v0 runs on the real board; agent P50/P95 measured |
+| Sat 13:00–18:00 | **P2:** agent design (M1) with test author + RETRO in the MUI chat; permission modes + broker; 3 deliberate faults diagnosed; calibration; staged power-up | **Checkpoint B 18:00:** an agent-generated design gets GO and a deliberate fault is diagnosed + fixed through the UI; rough backup video |
+| Sat 16:00–18:30 | Photon online office hours — S1 questions; ask how/when Photon judges | — |
+| Sat 18:00–23:00 | **P3:** SHOULDs in order S1 → S2 → S3 → S4 → S5 → S6; **novice test** (non-EE person follows the phone steps 10 min; fix top 3 issues) | **Checkpoint C 23:00:** full demo script runs; video refreshed |
 | Sat 23:00–01:00 | **P4:** polish, error states; iMessage testing via terminal provider only | Feature freeze 01:00 |
 | Sun 08:00–10:30 | **P5:** bug bash; rehearse pitch (5 min) and table demo (2 min) ×3; final video + Photon clip; screenshots | Videos done |
-| Sun 10:30–11:30 | Devpost write-up + README (dependency/license notices) → **submit by 11:30** | Submitted with 30-min buffer |
+| Sun 10:30–11:30 | Devpost write-up + README (dependency/license notices, data retention) → **submit by 11:30** | Submitted with 30-min buffer |
 | Sun 12:00–16:00 | Table judging: staffed, kit powered and pre-flashed | — |
 | Sun 16:30 | Finalist pitch (5 min) if selected | — |
 
 ## 8. Verification strategy
 
-**P0 spikes (each ≤ 30 lines; pass criterion).** Spikes 1–5 and 9 run in the container tonight; 6–8 and 10–12 need Barry's
-laptop, phone, board, and the venue network (spike 8 tonight if possible, otherwise first thing Saturday).
+**Spikes (each ≤ 30 lines; pass criterion).** 1–5, 9, 13, 14 run in the container; 6–8, 10–12 need Barry's laptop, phone, board,
+and the venue network.
 
-1. arduino-cli compiles Blink for Uno/Nano → ELF + HEX; JSON diagnostics parsed.
-2. avr8js runs that HEX in a worker thread; PB5 toggles at 1 Hz virtual time; virtual-s per wall-s recorded.
-3. ngspice: 5 V → 220 Ω → red LED DC operating point → 13–15 mA parsed.
-4. Agent SDK on Node 22: `query()` with one in-process tool on `claude-opus-5-5`, `tools: []`; `canUseTool` fires; a Bash
-   request is impossible. (Fail → manual loop.)
-5. A2A: card served with token; `sendMessage` → `INPUT_REQUIRED` → continuation → `COMPLETED` with an artifact.
-6. Claude Code on the laptop loads `vibread-channel` with the dev flag (account type confirmed), lists tools, receives one push.
+1. arduino-cli compiles Blink for Uno/Nano → ELF + HEX; JSON parsed (done once in audit/A5; repeat in the repo).
+2. avr8js runs that HEX (via `parseIntelHex`) in a worker thread; PB5 toggles at 1 Hz virtual time; virtual-s per wall-s recorded.
+3. ngspice: 5 V → 220 Ω → red LED → 13.39 mA after sign normalization.
+4. AI SDK + Anthropic: one live `streamText` call on `claude-opus-5-5` with one tool whose `toolApproval` returns `user-approval`;
+   approval round-trip resumes the loop.
+5. A2A: card served; bearer middleware rejects no-token; `sendMessage` → `TASK_STATE_INPUT_REQUIRED` → continuation →
+   `TASK_STATE_COMPLETED` with an artifact.
+6. Claude Code on the laptop: `claude mcp add --transport http …/mcp` → Better Auth login → tool list; header-token fallback works.
 7. Spectrum: terminal echo; cloud iMessage DM round-trip with a registered phone; poll vote + text fallback; PNG delivered.
-8. Chrome via `http://localhost:8787` flashes Blink with `webserial-flasher`, then reads NDJSON from a test sketch.
+8. Chrome via `http://localhost:8787` flashes Blink through the wrapped `webserial-flasher`, then reads NDJSON from a test sketch.
 9. resvg renders a 1200×800 step SVG with text to PNG.
 10. Claude vision returns schema-valid JSON for one breadboard photo + expected layout.
 11. `heif2jpeg` converts an iPhone HEIC photo.
-12. Demo phone on venue Wi-Fi opens Build Mode through the quick tunnel; a step change appears within 2 s.
+12. Demo phone on venue Wi-Fi opens Build Mode on the stable HTTPS host; a step change appears within 2 s; OAuth metadata URLs
+    resolve on that host.
+13. tscircuit adapter renders the golden fixture's schematic SVG (Uno as labeled chip) under `tsx` in a worker.
+14. MUI X Chat (wrapped `createAiSdkAdapter`) renders a streamed tool card and completes an approval round-trip in the browser.
 
 **Acceptance per MUST item:**
 
@@ -488,66 +543,66 @@ laptop, phone, board, and the venue network (spike 8 tonight if possible, otherw
 | M2 | Rule tests: LED without resistor, floating button, output-output conflict, 5 V–GND short, PWM on non-PWM pin → exact rule IDs; worst-case LED current matches hand calculation; coverage rules reject a suite missing an output assertion |
 | M3 | Schematic renders for all golden designs; replay LED states match the headless trace |
 | M4 | LVS clean on golden layouts; injected mutants (moved lead, missing jumper, merged strip) → exact diagnostics; identical layout hash on rerun; steps include both power-up checkpoints |
-| M5 | Safe firmware flashed before wiring; the rail-short path is exercised safely by pulling the USB cable during checkpoint 1 (same observable as a short-induced drop) and reports "likely rail short" — the rails are never shorted on purpose; correct build passes; faults detected: button leg in a GND row, photoresistor divider resistor missing, two LED jumpers swapped; calibration sets a working threshold in the demo room |
+| M5 | Safe firmware flashed before wiring; the rail-short path is exercised safely by pulling the USB cable during checkpoint 1 and reports "likely rail short" — rails are never shorted on purpose; correct build passes; faults detected: button leg in a GND row, photoresistor divider resistor missing, two LED jumpers swapped; calibration sets a working threshold in the demo room |
 | M6 | Rule-table diagnosis lists the true cause in the top 2 for each fault; the fix is shown; re-test passes |
-| M7 | Review is the default; Autopilot still needs a human to flash; an A2A/bridge approval attempt is rejected; stale approval rejected; agent cannot call Bash/Write |
-| M8 | Brief by DM → status → GO/NO-GO poll (and text fallback) on a registered phone |
+| M7 | Workspace shows streamed tool cards and approval cards; Review is the default; in Autopilot a flash still waits for a signed-in human; an approval POST with a stale revision or from an OAuth/A2A client is rejected; Google sign-in works on localhost and the stable host |
+| M8 | Brief by DM → status → GO/NO-GO poll (and text fallback) on a registered phone; linking code binds the handle once and rejects replay |
 | UX | Non-EE tester completes the golden circuit's phone steps; top 3 issues fixed |
 
 ## 9. Risks, pushback, mitigations
 
 | Risk | Likelihood / impact | Mitigation |
 |---|---|---|
-| Board is not an ATmega328P (Uno R4/ESP32) | Unknown / **critical** | Hardware gate tonight; source a 328P Uno/Nano clone; re-scope within the hour otherwise |
+| Board is not an ATmega328P (Uno R4/ESP32) | Unknown / **critical** | Hardware gate; source a 328P Uno/Nano clone; re-scope within the hour otherwise |
 | Scope/time overrun | High / high | Golden Path v0 first; checkpoints A/B/C; degradation rules and cut order (§4); overnight AI build |
-| Agent SDK issues (subprocess, latency) | Medium / high | Spike P0-4; same tool registry drives a manual Messages-API loop |
-| Agent designs weak or tests self-serving | Medium / high | Curated library, schema-constrained tools, deterministic checkers, independent test author + coverage rules, RETRO vote, golden fixtures as demo floor |
-| `webserial-flasher` edge cases (new, 5 stars) | Medium / high | Spike 8 tonight; own STK500v1 fallback (2 h) |
-| Phone/network path at the venue | Medium / high | Quick tunnel + polling; spike 12; phone hotspot; recorded video |
+| MUI X Chat is alpha | Medium / medium | Pinned exact version; spike 14; assistant-ui fallback |
+| tscircuit runtime quirks (Node ESM) | Medium / low | Run under `tsx`/Bun worker (verified); fallback: schematic tab shows the netlist table + breadboard view |
+| Better Auth / OAuth setup time | Medium / medium | Google first; header-token fallback for Claude Code; WorkOS AuthKit as managed fallback |
+| No stable HTTPS hostname | Medium / high | Decide at the gate (domain on Cloudflare, ngrok static domain, or Tailscale Funnel); quick tunnel + polling as last resort (no OAuth for Claude Code then) |
+| Agent designs weak or tests self-serving | Medium / high | Curated library, schema-constrained tools, deterministic checkers, independent test author + coverage rules, RETRO vote, golden fixtures |
+| `webserial-flasher` edge cases (new, 5 stars, listener race) | Medium / high | Buffered wrapper; spike 8; STK500v1 fallback (2 h) |
 | Photon provisioning / onboarding friction | Medium / medium | Sign up tonight; onboarding script; text fallbacks; terminal fallback |
 | Light-sensor behavior in the judging room | Medium / medium | Relative checks + on-bench calibration; rehearse in the room |
-| Channels blocked or dev-flag friction | Medium / low | Personal account; start Claude Code before the pitch; interop shown on video; tools-only fallback |
 | Vision misreads breadboards | High / low | Secondary evidence; never gates |
-| API spend | Low / low | Estimate ≈$0.40 per design run (~50k input + 10k output tokens at $4/$20 per MTok); cap at $100 |
-| Licensing | Low / medium | No copied code/art; no GPL/AGPL code in the repo; notices in README (Agent SDK commercial terms, elkjs EPL-2.0, LGPL Arduino libraries used as libraries) |
+| API spend | Low / low | Estimate ≈$0.40 per design run on Opus 5.5 (~50k input + 10k output tokens at $4/$20 per MTok); cap at $100; per-user caps |
+| Licensing | Low / medium | No copied code/art; no GPL/AGPL code in the repo; notices for MPL-2.0 (resvg), the statically bundled LGPL codecs in heif2jpeg, external GPL tools (arduino-cli), and LGPL Arduino libraries used as libraries |
 
-**Pushback on four points in the brief (for team sign-off):**
+**Pushback on points in the brief (for team sign-off):**
 
 1. *"Very accurate simulation; we fully rely on it; circuits as complicated as needed."* No tool simulates arbitrary circuits
    accurately; accuracy exists only for modeled parts (Wokwi itself documents limited analog support). We claim: the exact binary
    that gets flashed runs in an instruction-level emulator, and electrical limits are computed at worst-case corners, **for the
-   supported module set and envelope (§1)**. Anything outside is *unverified*. Physical verification exists because simulation
-   cannot see a loose wire or a dead LED.
+   supported module set and envelope (§1)**. Physical verification exists because simulation can't see a loose wire or a dead LED.
 2. *"Supported parts: any hardware they have."* MVP = curated library (~10 modules from the team's kit) ∩ the user's inventory,
    plus generic modules flagged unverified.
-3. *"Camera to Claude to see if we did anything wrong."* Vision is a second opinion; the MCU self-test is authoritative, matching
-   the brief's own "main thing is tests ran through the microcontroller."
-4. *"Bypass all permissions."* Autopilot bypasses software approvals only; flashing, self-tests, rewiring, and new parts always
-   need a human at the bench. A real board can be damaged; an unattended agent should not energize it.
+3. *"Camera to Claude to see if we did anything wrong."* Vision is a second opinion; the MCU self-test is authoritative, matching the
+   brief's own "main thing is tests ran through the microcontroller."
+4. *"Bypass all permissions."* Autopilot bypasses software approvals only; flashing, self-tests, rewiring, and new parts always need
+   a human at the bench.
+5. *Claude accounts.* Users can't pay with their own Claude subscription (Anthropic forbids Claude login in third-party apps);
+   ViBread's API key pays, which the Commercial Terms allow for our own product. The Claude Agent SDK is not used for this reason.
 
 ## 10. Decisions needed from the team
 
-1. **Board and parts (tonight):** exact board(s) + USB-serial chip, breadboard size, and a photo/list of the kit; is there a spare?
+1. **Board and parts:** exact board(s) + USB-serial chip, breadboard size, a photo/list of the kit; is there a spare?
 2. **Team:** members (≤ 4) and who takes each role in §7.
 3. **Anthropic API key** for the app (budget cap).
-4. **Photon:** who signs up + redeems `HACKWITHPHOTON`; which iPhones (iOS 26 for polls) to register.
-5. **Claude Code:** which laptop/account runs the interop demo (personal Pro/Max or Console; not a Team/Enterprise org with
-   channels disabled).
-6. **Theme + hero circuit:** approve Mission Control framing and the Moon-Phase Lamp, or pick a fallback.
-7. **Network during judging:** server stays in the golf container (default) and golf stays up all weekend; confirm the laptop can
-   SSH in from the venue.
-8. **Latency tolerance:** confirm the §3 budget and the live/recorded split.
-9. **Optional:** Wokwi CI token, DigiKey/Mouser keys (COULD items).
+4. **Google OAuth client** (and GitHub for S3): who creates them; callback URLs for localhost and the stable host.
+5. **Stable HTTPS hostname:** do we have a domain on Cloudflare, an ngrok account (static domain), or Tailscale?
+6. **Photon:** who signs up + redeems `HACKWITHPHOTON`; which iPhones (iOS 26 for polls) to register.
+7. **Claude Code** laptop for the interop demo.
+8. **Theme + hero circuit:** approve Mission Control and the Moon-Phase Lamp, or pick a fallback.
+9. **Latency tolerance:** confirm the §3 budget and the live/recorded split.
 
 ## 11. Originality, licensing, submission
 
-- **New this weekend:** all research in `research/` was produced Sep 25 after the prompt release (see git timestamps); no code
-  existed before this weekend. Dependencies are libraries/SDKs/CLIs used through public APIs and listed with licenses in the
-  README. Application code, prompts, module data, and art are written this weekend. Protocol-level components (KiCad-style pin
-  matrix, STK500 fallback) are written from documentation, not from GPL sources.
-- **Positioning for the Creativity rubric:** ViBread builds on Trigger-Action-Circuits and ElectroTutor (cited in the pitch) and
-  goes beyond commercial tools that stop at design, simulation, or upload: LLM design from the user's own parts, one binary
-  simulated and flashed, auto-generated self-test firmware with fault attribution on an unmodified Uno, and a permissioned agent
-  that lives in iMessage and answers other agents.
-- **Devpost package:** title, short description, team, problem/solution, tech list, 2–3 min video + 60 s Photon clip,
-  screenshots, GitHub link, tracks: Main + Photon.
+- **New this weekend:** all research in `research/` was produced Sep 25–26 after the prompt release (git timestamps); no code
+  existed before this weekend. Libraries are used through their public APIs and listed with licenses in the README. Our glue code,
+  prompts, module data, and art are written this weekend. Protocol-level pieces (KiCad-style pin matrix, STK500 fallback) are
+  written from documentation, not from GPL sources.
+- **Positioning for the Creativity rubric:** ViBread builds on Trigger-Action-Circuits and ElectroTutor (cited in the pitch) and goes
+  beyond commercial tools that stop at design, simulation, or upload: LLM design from the user's own parts, one binary simulated and
+  flashed, auto-generated self-test firmware with fault attribution on an unmodified Uno, and a permissioned agent that lives in
+  iMessage and answers other agents.
+- **Devpost package:** title, short description, team, problem/solution, tech list, 2–3 min video + 60 s Photon clip, screenshots,
+  GitHub link, tracks: Main + Photon.
