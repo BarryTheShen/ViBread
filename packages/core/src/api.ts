@@ -192,6 +192,7 @@ export interface ConnectionsView {
   claudeCode: { tokens: { id: string; scopes: string[]; createdAt: string; expiresAt: string; lastUsedAt?: string }[] };
   /** MCP endpoint to paste into `claude mcp add`. */
   mcpUrl: string;
+  phoneUrl: string;
   claude: ClaudeAccountView;
 }
 
