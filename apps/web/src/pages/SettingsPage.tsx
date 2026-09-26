@@ -389,11 +389,18 @@ function diagnosticEntries(value: unknown, fallbackArea: string): DiagnosticEntr
       ? ("entries" in value && Array.isArray(value.entries) ? value.entries : "lines" in value && Array.isArray(value.lines) ? value.lines : "logs" in value && Array.isArray(value.logs) ? value.logs : [])
       : [];
   return records.map((record) => {
-    if (typeof record === "string") return { at: "", area: fallbackArea, level: "info", message: record };
-    if (typeof record !== "object" || record === null) return { at: "", area: fallbackArea, level: "info", message: String(record) };
-    const item = record as Record<string, unknown>;
-    const message = typeof item.message === "string" ? item.message : typeof item.text === "string" ? item.text : JSON.stringify(record);
-    const at = typeof item.at === "string" ? item.at : typeof item.timestamp === "string" ? item.timestamp : typeof item.time === "string" ? item.time : "";
+    let parsed: unknown = record;
+    if (typeof record === "string") {
+      try {
+        parsed = JSON.parse(record);
+      } catch {
+        return { at: "", area: fallbackArea, level: "info", message: record };
+      }
+    }
+    if (typeof parsed !== "object" || parsed === null) return { at: "", area: fallbackArea, level: "info", message: String(parsed) };
+    const item = parsed as Record<string, unknown>;
+    const message = typeof item.message === "string" ? item.message : typeof item.msg === "string" ? item.msg : typeof item.text === "string" ? item.text : JSON.stringify(parsed);
+    const at = typeof item.at === "string" ? item.at : typeof item.timestamp === "string" ? item.timestamp : typeof item.time === "string" ? item.time : typeof item.ts === "string" ? item.ts : "";
     const area = typeof item.area === "string" ? item.area : typeof item.scope === "string" ? item.scope : fallbackArea;
     const level = typeof item.level === "string" ? item.level : typeof item.severity === "string" ? item.severity : "info";
     return { at, area, level, message };
@@ -529,9 +536,6 @@ export default function SettingsPage() {
           <>
             <Section title="Claude" id="claude-heading">
               <ClaudeAccountSection />
-              <Alert severity="info">
-                API-key setup is available from the desktop app menu. This server does not expose an API-key setting.
-              </Alert>
             </Section>
             <ClaudeCodeSection />
             <ImessageSection />
