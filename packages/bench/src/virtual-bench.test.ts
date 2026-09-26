@@ -31,15 +31,33 @@ function answerForAsk(session: SimSession, plan: SelfTestPlan, ask: Extract<Devi
 
   let value = "done";
   if (ask.kind === "which-led") {
-    // Let one pulse enter the rolling partState window, then answer as a person
-    // looking at the physically lit LED (not merely the requested subject).
-    session.run(plan.timing.ledPeriodMs);
+    // Advance in short slices outside the serial callback so at least one pulse
+    // enters the rolling partState window without re-entering SimSession.run.
     const ledSubjects = plan.subjects.filter((subject): subject is Extract<typeof plan.subjects[number], { kind: "led" }> => subject.kind === "led");
-    const brightest = ledSubjects.reduce((best, subject) => session.partState(subject.part) > session.partState(best.part) ? subject : best, ledSubjects[0]);
-    value = brightest === undefined || session.partState(brightest.part) <= 0.02 ? "none" : String(brightest.order);
+    let brightest = ledSubjects[0];
+    let brightness = 0;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      session.run(plan.timing.ledOnMs);
+      for (const subject of ledSubjects) {
+        const value = session.partState(subject.part);
+        if (value > brightness) {
+          brightness = value;
+          brightest = subject;
+        }
+      }
+      if (brightness > 0.02) break;
+    }
+    value = brightest === undefined || brightness <= 0.02 ? "none" : String(brightest.order);
   } else if (ask.kind === "heard-beep") {
-    session.run(100);
-    value = session.partState(ask.part ?? "BZ1") > 0 ? "yes" : "no";
+    let heard = false;
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      session.run(20);
+      if (session.partState(ask.part ?? "BZ1") > 0) {
+        heard = true;
+        break;
+      }
+    }
+    value = heard ? "yes" : "no";
   }
   answers[ask.id] = value;
   session.serialWrite(`${JSON.stringify({ c: "answer", id: ask.id, v: value })}\n`);
@@ -53,20 +71,31 @@ function runVirtual(circuit: Circuit, plan: SelfTestPlan, hex: string): VirtualR
   const invalid: DecodedLine[] = [];
   const answered = new Set<string>();
   const answers: Record<string, string> = {};
+  const pendingAsks: Array<Extract<DeviceLine, { t: "ask" }>> = [];
+  let done = false;
   session.onSerial((chunk) => {
     for (const decoded of decoder.push(chunk)) {
       if (decoded.t === "invalid") invalid.push(decoded);
       else {
         lines.push(decoded);
-        if (decoded.t === "ask") answerForAsk(session, plan, decoded, answered, answers);
+        if (decoded.t === "ask") pendingAsks.push(decoded);
+        if (decoded.t === "done") done = true;
       }
     }
   });
+  const answerPending = (): void => {
+    while (pendingAsks.length > 0) {
+      const ask = pendingAsks.shift();
+      if (ask !== undefined) answerForAsk(session, plan, ask, answered, answers);
+    }
+  };
   session.run(100);
   session.serialWrite('{"c":"run","test":"all"}\n');
-  // Four LED prompt windows plus the read-only and ADC passes finish in < 5 s;
-  // the simulator guard is cycle-derived, so this remains bounded and deterministic.
-  session.run(5_000);
+  for (let slice = 0; slice < 200 && !done; slice += 1) {
+    session.run(50);
+    answerPending();
+  }
+  if (!done) throw new Error("virtual bench did not finish within its bounded run window");
   return { lines, invalid, answers };
 }
 
@@ -99,6 +128,19 @@ describe("virtual bench protocol", () => {
       expect(result.diagnosis.candidates.slice(0, 2).map((candidate) => candidate.cause), `${fault.name}: ${JSON.stringify({ diagnosis: result.diagnosis, results: result.results })}`).toContain(fault.fault);
       expect(result.diagnosis.candidates[0]?.highlight.holes.length, fault.name).toBeGreaterThan(0);
     }
+  }, 120_000);
+  it("handles a moon IR whose light role precedes the LED roles", async () => {
+    const reordered = structuredClone(moon.circuit);
+    reordered.roles = [...reordered.roles].sort((left, right) => (left.part === "LDR1" ? -1 : right.part === "LDR1" ? 1 : 0));
+    const plan = planSelfTest(reordered, revisionHash(reordered));
+    const compiled = await compileBenchFirmware(plan);
+    expect(compiled.ok, compiled.log).toBe(true);
+    if (!compiled.ok || compiled.hex === undefined) throw new Error("reordered moon bench firmware did not compile");
+    const layout = layoutBoard(reordered);
+    const run = runVirtual(reordered, plan, compiled.hex);
+    expect(run.invalid, JSON.stringify(run.invalid)).toHaveLength(0);
+    const result = await evaluateRun({ circuit: reordered, layout, plan, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: "virtual-reordered-moon" });
+    expect(result.verdict, JSON.stringify(result.results)).toBe("pass");
   }, 120_000);
   it("runs the Knob Night-Light golden through the same virtual bench script", async () => {
     const plan = planSelfTest(knob.circuit, revisionHash(knob.circuit));
