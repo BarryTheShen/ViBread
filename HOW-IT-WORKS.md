@@ -56,8 +56,10 @@ Everything except Claude and iMessage works offline, on the laptop.
 6. **Bench: test the real board.** Plug in the Arduino and open **Bench** → **Use USB board**. The seven steps on
    screen:
    1. **Connect your board:** pick the Arduino in the port chooser.
-   2. **Make it safe:** ViBread flashes its own *safe self-test* program first, so a wiring mistake can't damage anything.
-   3. **Check power:** the 5 V and ground rails are right.
+   2. **Make it safe:** ViBread flashes its own *safe self-test* program first. It keeps every pin switched off until
+      that pin has been checked, so a misplaced wire is far less likely to damage anything. (No program can protect
+      against a wire straight from + to −: the build steps have you keep USB unplugged while wiring.)
+   3. **Check power:** the board starts up, answers, and reports its own supply voltage.
    4. **Test each part:** the board checks each pin *before* driving it, then asks you to help: "press the button",
       "cover the light sensor", "which light is blinking?", "did you hear a beep?".
    5. **Find the problem:** if something is wrong: "Houston, we have a problem: D2 reads LOW even with the button
@@ -92,6 +94,7 @@ cross-check needs ngspice installed on the laptop; without it EECOM says "SPICE 
 - **Nothing touches the board without your click on the Bench page.** Claude, Claude Code or an iMessage "GO" can
   *ask* for a flash; it still waits for the click.
 - If flashing from the app fails, the Bench shows a ready-to-paste `arduino-cli upload …` command and the program files.
+  Run the command on the computer that runs ViBread (with the desktop app, that's this computer).
 
 ## Without a board, without Claude
 
