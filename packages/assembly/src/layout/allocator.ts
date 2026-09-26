@@ -4,6 +4,7 @@ import {
   BREADBOARD_PROFILES,
   MODULES,
   WIRE_COLORS,
+  boardPin,
   contactGroup,
   hashJson,
   isValidHole,
@@ -24,77 +25,39 @@ import {
 
 const LEFT_COLUMNS = ["a", "b", "c", "d", "e"] as const;
 const RIGHT_COLUMNS = ["f", "g", "h", "i", "j"] as const;
-const SIGNAL_COLORS = [
-  "yellow",
-  "green",
-  "blue",
-  "orange",
-  "white",
-  "purple",
-  "cyan",
-  "magenta",
-  "lime",
-  "teal",
-  "pink",
-  "brown",
-  "gold",
-] as const;
+const SIGNAL_COLORS = ["yellow", "green", "blue", "orange", "white", "purple", "cyan", "magenta", "lime", "teal", "pink", "brown", "gold"] as const;
 
 type Side = "left" | "right";
 type NetId = string;
 type NetKind = "power" | "ground" | "signal";
-
-type InternalPinNet = {
-  net: NetId;
-  kind: NetKind;
-};
-
-type Candidate = {
-  side: Side;
-  start: number;
-  end: number;
-  pins: Record<string, HoleId>;
-};
+type NetPin = { net: NetId; kind: NetKind };
+type PendingJumper = { jumper: Jumper; phase: number };
 
 export interface AllocationContext {
   circuit: Circuit;
   profile: BreadboardProfile;
-  pinNets: Map<string, InternalPinNet>;
+  pinNets: Map<string, NetPin>;
   netKinds: Map<NetId, NetKind>;
   placements: Placement[];
   occupied: Map<HoleId, string>;
   groups: Map<string, string>;
+  strips: Map<NetId, HoleId>;
+  pending: PendingJumper[];
+  cursors: Record<Side, number>;
   nanoPinHoles: Map<BoardPinName, HoleId>;
   boardAnchor?: Layout["boardAnchor"];
-}
-
-function endpointKey(endpoint: Endpoint): string {
-  return "hole" in endpoint ? `hole:${endpoint.hole}` : `board:${endpoint.board}`;
 }
 
 function sideColumns(side: Side): readonly Column[] {
   return side === "left" ? LEFT_COLUMNS : RIGHT_COLUMNS;
 }
 
-function rowHole(side: Side, row: number, columnOffset = 0): HoleId {
-  return `${sideColumns(side)[columnOffset]}${row}`;
+function column(side: Side, index: number): Column {
+  return sideColumns(side)[index] ?? sideColumns(side).at(-1)!;
 }
 
-function endpointHole(endpoint: Endpoint): HoleId | undefined {
-  return "hole" in endpoint ? endpoint.hole : undefined;
-}
-
-function asWireColor(color: string): WireColor {
-  // The frozen core palette predates the larger signal palette.  The runtime SVG
-  // renderer supports the additional named colors while callers still see the
-  // public WireColor type.
-  return color as unknown as WireColor;
-}
-
-function netColor(net: NetId, kind: NetKind, signalIndex: number): WireColor {
-  if (kind === "power") return WIRE_COLORS[0];
-  if (kind === "ground") return WIRE_COLORS[1];
-  return asWireColor(SIGNAL_COLORS[signalIndex % SIGNAL_COLORS.length]);
+function stripHole(side: Side, row: number): HoleId {
+  return `${side === "left" ? "a" : "f"}${row}`;
 }
 
 function firstRailHole(profile: BreadboardProfile, rail: "T+" | "T-"): HoleId {
@@ -103,47 +66,75 @@ function firstRailHole(profile: BreadboardProfile, rail: "T+" | "T-"): HoleId {
   return `${rail}${position}`;
 }
 
-function netOfPin(pinNets: Map<string, InternalPinNet>, part: string, pin: string): InternalPinNet | undefined {
-  return pinNets.get(`${part}.${pin}`);
+function endpointKey(endpoint: Endpoint): string {
+  return "hole" in endpoint ? `hole:${endpoint.hole}` : `board:${endpoint.board}`;
 }
 
+function asWireColor(value: string): WireColor {
+  return value as unknown as WireColor;
+}
 
-function buildPinNets(circuit: Circuit): { pinNets: Map<string, InternalPinNet>; netKinds: Map<NetId, NetKind> } {
-  const pinNets = new Map<string, InternalPinNet>();
+function buildPinNets(circuit: Circuit): { pinNets: Map<string, NetPin>; netKinds: Map<NetId, NetKind> } {
+  const pinNets = new Map<string, NetPin>();
   const netKinds = new Map<NetId, NetKind>();
   for (const net of circuit.nets) {
     netKinds.set(net.id, net.kind);
     for (const ref of net.pins) pinNets.set(pinKey(ref), { net: net.id, kind: net.kind });
   }
   for (const part of circuit.parts) {
-    const groups = MODULES[part.module].internallyConnected ?? [];
-    for (const group of groups) {
-      const known = group
-        .map((pin) => pinNets.get(`${part.id}.${pin}`))
-        .filter((value): value is InternalPinNet => value !== undefined);
+    for (const group of MODULES[part.module].internallyConnected ?? []) {
+      const known = group.map((pin) => pinNets.get(`${part.id}.${pin}`)).filter((value): value is NetPin => value !== undefined);
       if (known.length === 0) continue;
       const first = known[0];
-      if (known.some((entry) => entry.net !== first.net)) {
-        throw new Error(`Part ${part.id} has internally joined pins assigned to different nets`);
-      }
+      if (known.some((entry) => entry.net !== first.net)) throw new Error(`Part ${part.id} has internally joined pins assigned to different nets`);
       for (const pin of group) pinNets.set(`${part.id}.${pin}`, first);
     }
   }
   return { pinNets, netKinds };
 }
 
-function pinNetOrFloating(ctx: AllocationContext, part: Part, pin: string): string {
-  return netOfPin(ctx.pinNets, part.id, pin)?.net ?? `__floating:${part.id}.${pin}`;
+function pinNet(ctx: AllocationContext, part: Part, pin: string): NetPin | undefined {
+  return ctx.pinNets.get(`${part.id}.${pin}`);
 }
 
-function candidateGroupAllowed(ctx: AllocationContext, pins: Record<string, HoleId>, part: Part): boolean {
+function pinNetId(ctx: AllocationContext, part: Part, pin: string): string {
+  return pinNet(ctx, part, pin)?.net ?? `__floating:${part.id}.${pin}`;
+}
+
+function signalIndex(ctx: AllocationContext, net: NetId): number {
+  return ctx.circuit.nets.filter((entry) => entry.kind === "signal").sort((a, b) => a.id.localeCompare(b.id)).findIndex((entry) => entry.id === net);
+}
+
+function wireColor(ctx: AllocationContext, net: NetId): WireColor {
+  const kind = ctx.netKinds.get(net) ?? "signal";
+  if (kind === "power") return WIRE_COLORS[0];
+  if (kind === "ground") return WIRE_COLORS[1];
+  return asWireColor(SIGNAL_COLORS[Math.max(0, signalIndex(ctx, net)) % SIGNAL_COLORS.length]);
+}
+
+function groupFor(ctx: AllocationContext, hole: HoleId): string {
+  const group = contactGroup(ctx.profile, hole);
+  if (group === null) throw new Error(`Invalid hole ${hole} on ${ctx.profile.id}`);
+  return group;
+}
+
+function reserveStrip(ctx: AllocationContext, net: NetId, side: Side, row: number): HoleId {
+  if (row < 1 || row > ctx.profile.rows) throw new Error(`Cannot fit ${net}: strip row ${row} is outside ${ctx.profile.id}`);
+  const hole = stripHole(side, row);
+  const group = groupFor(ctx, hole);
+  const existing = ctx.groups.get(group);
+  if (existing !== undefined && existing !== net) throw new Error(`Cannot fit ${net}: ${group} is already occupied by ${existing}`);
+  ctx.groups.set(group, net);
+  if (!ctx.strips.has(net)) ctx.strips.set(net, hole);
+  return hole;
+}
+
+function candidateAllowed(ctx: AllocationContext, part: Part, pins: Record<string, HoleId>): boolean {
   const localGroups = new Map<string, string>();
   for (const [pin, hole] of Object.entries(pins)) {
-    if (!isValidHole(ctx.profile, hole)) return false;
-    if (ctx.occupied.has(hole)) return false;
-    const group = contactGroup(ctx.profile, hole);
-    if (group === null) return false;
-    const net = pinNetOrFloating(ctx, part, pin);
+    if (!isValidHole(ctx.profile, hole) || ctx.occupied.has(hole)) return false;
+    const group = groupFor(ctx, hole);
+    const net = pinNetId(ctx, part, pin);
     const existing = ctx.groups.get(group);
     if (existing !== undefined && existing !== net) return false;
     const local = localGroups.get(group);
@@ -153,97 +144,209 @@ function candidateGroupAllowed(ctx: AllocationContext, pins: Record<string, Hole
   return true;
 }
 
-function putPlacement(ctx: AllocationContext, part: Part, candidate: Candidate): void {
-  if (!candidateGroupAllowed(ctx, candidate.pins, part)) {
-    throw new Error(`Internal allocator error: ${part.id} candidate became occupied`);
-  }
-  for (const [pin, hole] of Object.entries(candidate.pins)) {
-    const net = pinNetOrFloating(ctx, part, pin);
+function putPlacement(ctx: AllocationContext, part: Part, pins: Record<string, HoleId>): void {
+  if (!candidateAllowed(ctx, part, pins)) throw new Error(`Internal allocator error: ${part.id} placement is occupied or shorted`);
+  for (const [pin, hole] of Object.entries(pins)) {
+    const net = pinNetId(ctx, part, pin);
     ctx.occupied.set(hole, `${part.id}.${pin}`);
-    const group = contactGroup(ctx.profile, hole);
-    if (group !== null) ctx.groups.set(group, net);
+    ctx.groups.set(groupFor(ctx, hole), net);
   }
-  ctx.placements.push({ part: part.id, pins: { ...candidate.pins } });
+  ctx.placements.push({ part: part.id, pins: { ...pins } });
 }
 
-function candidatePins(part: Part, side: Side, row: number, columnOffset: number): Candidate | undefined {
-  const footprint = MODULES[part.module].footprint;
-  const columns = sideColumns(side);
-  const column = columns[columnOffset];
-  if (column === undefined) return undefined;
+function blockStart(ctx: AllocationContext, side: Side, height: number, bothSides = false): number {
+  const minimum = bothSides ? Math.max(ctx.cursors.left, ctx.cursors.right) + 1 : ctx.cursors[side] + 1;
+  if (minimum + height - 1 > ctx.profile.rows) {
+    throw new Error(`Cannot fit ${height}-row branch on ${ctx.profile.id}: no rows remain; try bb-830 or remove a branch`);
+  }
+  return minimum;
+}
 
-  if (footprint.kind === "two-lead") {
-    const span = footprint.preferredSpan;
-    return {
-      side,
-      start: row,
-      end: row + span,
-      pins: { [footprint.pins[0]]: `${column}${row}`, [footprint.pins[1]]: `${column}${row + span}` },
-    };
+function finishBlock(ctx: AllocationContext, side: Side, end: number, bothSides = false): void {
+  if (bothSides) {
+    ctx.cursors.left = end + 1;
+    ctx.cursors.right = end + 1;
+  } else ctx.cursors[side] = end + 1;
+}
+
+function addJumper(ctx: AllocationContext, from: Endpoint, to: Endpoint, net: NetId, phase: number): void {
+  if (endpointKey(from) === endpointKey(to)) return;
+  const color = wireColor(ctx, net);
+  const duplicate = ctx.pending.some((entry) => {
+    const first = endpointKey(entry.jumper.from);
+    const second = endpointKey(entry.jumper.to);
+    return entry.jumper.net === net && ((first === endpointKey(from) && second === endpointKey(to)) || (first === endpointKey(to) && second === endpointKey(from)));
+  });
+  if (duplicate) return;
+  ctx.pending.push({ phase, jumper: { id: "", from, to, color, net } });
+}
+
+function addRailJumper(ctx: AllocationContext, strip: HoleId, net: NetId): void {
+  const kind = ctx.netKinds.get(net);
+  if (kind === "power") addJumper(ctx, { hole: firstRailHole(ctx.profile, "T+") }, { hole: strip }, net, 2);
+  else if (kind === "ground") addJumper(ctx, { hole: strip }, { hole: firstRailHole(ctx.profile, "T-") }, net, 2);
+}
+
+function boardPinsForNet(ctx: AllocationContext, net: NetId): string[] {
+  return ctx.circuit.nets.find((entry) => entry.id === net)?.pins.filter((ref) => ref.part === BOARD_PART).map((ref) => ref.pin).sort() ?? [];
+}
+
+function boardPinOrder(pin: string): number {
+  const match = /^(?:D|A)(\d+)$/.exec(pin);
+  if (match) return pin[0] === "D" ? Number(match[1]) : 100 + Number(match[1]);
+  return 300;
+}
+
+function addBoardNetJumper(ctx: AllocationContext, net: NetId, strip: HoleId): void {
+  const kind = ctx.netKinds.get(net);
+  if (kind === "power") {
+    for (const pin of boardPinsForNet(ctx, net)) addJumper(ctx, { board: pin }, { hole: firstRailHole(ctx.profile, "T+") }, net, 0);
+    addJumper(ctx, { hole: firstRailHole(ctx.profile, "T+") }, { hole: strip }, net, 1);
+    return;
   }
-  if (footprint.kind === "inline3") {
-    const pins: Record<string, HoleId> = {};
-    footprint.pins.forEach((pin, index) => {
-      pins[pin] = `${column}${row + index}`;
-    });
-    return { side, start: row, end: row + 2, pins };
+  if (kind === "ground") {
+    for (const pin of boardPinsForNet(ctx, net)) addJumper(ctx, { board: pin }, { hole: firstRailHole(ctx.profile, "T-") }, net, 0);
+    return;
   }
-  if (footprint.kind === "generic-inline") {
-    const pins: Record<string, HoleId> = {};
-    modulePins(part).forEach((pin, index) => {
-      pins[pin.id] = `${column}${row + index}`;
-    });
-    return { side, start: row, end: row + Math.max(0, modulePins(part).length - 1), pins };
+  for (const pin of boardPinsForNet(ctx, net)) {
+    if (ctx.boardAnchor && ctx.nanoPinHoles.has(pin)) {
+      const headerHole = ctx.nanoPinHoles.get(pin)!;
+      addJumper(ctx, { board: pin }, { hole: headerHole }, net, 0);
+      if (headerHole !== strip && groupFor(ctx, headerHole) !== groupFor(ctx, strip)) addJumper(ctx, { hole: headerHole }, { hole: strip }, net, 1);
+    } else addJumper(ctx, { board: pin }, { hole: strip }, net, 0);
   }
-  // A four-pin button has its specified orientation: e/f at row r and r+2.
-  return {
-    side: "left",
-    start: row,
-    end: row + 2,
-    pins: { "1": `e${row}`, "2": `f${row}`, "3": `e${row + 2}`, "4": `f${row + 2}` },
+}
+
+function renderBranchError(part: Part, ctx: AllocationContext, height: number): never {
+  throw new Error(`Cannot fit ${part.id} (${MODULES[part.module].name}) on ${ctx.profile.id}: no legal ${height}-row branch remains; try bb-830 or remove a part`);
+}
+
+function ledBranches(ctx: AllocationContext, used: Set<string>): void {
+  const leds = ctx.circuit.parts.filter((part) => part.module === "led").sort((a, b) => {
+    const aNet = pinNet(ctx, a, "A")?.net ?? a.id;
+    const bNet = pinNet(ctx, b, "A")?.net ?? b.id;
+    const aPins = boardPinsForNet(ctx, [...ctx.circuit.nets.filter((net) => net.id === aNet)][0]?.id ?? aNet);
+    const bPins = boardPinsForNet(ctx, [...ctx.circuit.nets.filter((net) => net.id === bNet)][0]?.id ?? bNet);
+    return (aPins[0] ? boardPinOrder(aPins[0]) : 500) - (bPins[0] ? boardPinOrder(bPins[0]) : 500) || a.id.localeCompare(b.id);
+  });
+  const resistors = ctx.circuit.parts.filter((part) => part.module === "resistor");
+  const buttonCount = ctx.circuit.parts.filter((part) => part.module === "button").length;
+  const buttonReserve = buttonCount > 0 ? buttonCount * 4 - 1 : 0;
+  const canFinish = (side: Side): boolean => {
+    const nextCursor = ctx.cursors[side] + 1 + 5 + 1;
+    const other = side === "left" ? ctx.cursors.right : ctx.cursors.left;
+    return Math.max(nextCursor, other) + buttonReserve <= ctx.profile.rows;
   };
+  for (const led of leds) {
+    const anodeNet = pinNet(ctx, led, "A")?.net;
+    const resistor = resistors.find((part) => pinNet(ctx, part, "2")?.net === anodeNet && !used.has(part.id));
+    if (!anodeNet || !resistor) continue;
+    const signalNet = pinNet(ctx, resistor, "1")?.net;
+    const groundNet = pinNet(ctx, led, "K")?.net;
+    if (!signalNet || !groundNet) continue;
+    const side: Side = canFinish("left") ? "left" : canFinish("right") ? "right" : (renderBranchError(led, ctx, 6) as never);
+    const base = blockStart(ctx, side, 6);
+    const ledStrip = reserveStrip(ctx, anodeNet, side, base + 4);
+    const signalStrip = reserveStrip(ctx, signalNet, side, base);
+    const groundStrip = reserveStrip(ctx, groundNet, side, base + 5);
+    const resistorColumn = side === "left" ? "e" : "j";
+    const ledColumn = side === "left" ? "d" : "i";
+    const resistorPins = { "1": `${resistorColumn}${base}`, "2": `${resistorColumn}${base + 4}` };
+    const ledPins = { A: `${ledColumn}${base + 4}`, K: `${ledColumn}${base + 5}` };
+    if (!candidateAllowed(ctx, resistor, resistorPins) || !candidateAllowed(ctx, led, ledPins)) renderBranchError(led, ctx, 6);
+    putPlacement(ctx, resistor, resistorPins);
+    putPlacement(ctx, led, ledPins);
+    addRailJumper(ctx, groundStrip, groundNet);
+    finishBlock(ctx, side, base + 5);
+    used.add(led.id);
+    used.add(resistor.id);
+    // The names make the direct-strip invariant explicit for later fallback
+    // branches, even when a net appears in more than one physical branch.
+    void ledStrip;
+    void signalStrip;
+  }
 }
 
-function footprintHeight(part: Part): number {
-  const footprint = MODULES[part.module].footprint;
-  if (footprint.kind === "two-lead") return footprint.preferredSpan;
-  if (footprint.kind === "inline3") return 2;
-  if (footprint.kind === "generic-inline") return Math.max(0, modulePins(part).length - 1);
-  return 2;
+function dividerBranches(ctx: AllocationContext, used: Set<string>): void {
+  const sensors = ctx.circuit.parts.filter((part) => part.module === "photoresistor").sort((a, b) => a.id.localeCompare(b.id));
+  const resistors = ctx.circuit.parts.filter((part) => part.module === "resistor");
+  for (const sensor of sensors) {
+    const sensorSignal = pinNet(ctx, sensor, "2")?.net;
+    const resistor = resistors.find((part) => pinNet(ctx, part, "1")?.net === sensorSignal && !used.has(part.id));
+    if (!sensorSignal || !resistor) continue;
+    const powerNet = pinNet(ctx, sensor, "1")?.net;
+    const groundNet = pinNet(ctx, resistor, "2")?.net;
+    if (!powerNet || !groundNet) continue;
+    const side: Side = ctx.cursors.right <= ctx.profile.rows - 6 ? "right" : "left";
+    const base = blockStart(ctx, side, 7);
+    const powerStrip = reserveStrip(ctx, powerNet, side, base);
+    const sensorStrip = reserveStrip(ctx, sensorSignal, side, base + 2);
+    const groundStrip = reserveStrip(ctx, groundNet, side, base + 6);
+    const sensorColumn = side === "left" ? "d" : "i";
+    const resistorColumn = side === "left" ? "c" : "h";
+    const sensorPins = { "1": `${sensorColumn}${base}`, "2": `${sensorColumn}${base + 2}` };
+    const resistorPins = { "1": `${resistorColumn}${base + 2}`, "2": `${resistorColumn}${base + 6}` };
+    if (!candidateAllowed(ctx, sensor, sensorPins) || !candidateAllowed(ctx, resistor, resistorPins)) renderBranchError(sensor, ctx, 7);
+    putPlacement(ctx, sensor, sensorPins);
+    putPlacement(ctx, resistor, resistorPins);
+    addRailJumper(ctx, powerStrip, powerNet);
+    addRailJumper(ctx, groundStrip, groundNet);
+    finishBlock(ctx, side, base + 6);
+    used.add(sensor.id);
+    used.add(resistor.id);
+    void sensorStrip;
+  }
 }
 
-function placeParts(ctx: AllocationContext): void {
-  const sideEnd: Record<Side, number> = { left: 0, right: 0 };
-  const parts = [...ctx.circuit.parts].sort((a, b) => a.id.localeCompare(b.id));
+function buttonBranches(ctx: AllocationContext, used: Set<string>): void {
+  const buttons = ctx.circuit.parts.filter((part) => part.module === "button").sort((a, b) => a.id.localeCompare(b.id));
+  for (const button of buttons) {
+    const signalNet = pinNet(ctx, button, "1")?.net;
+    const groundNet = pinNet(ctx, button, "3")?.net;
+    if (!signalNet || !groundNet) continue;
+    const base = blockStart(ctx, "left", 3, true);
+    const signalStrip = reserveStrip(ctx, signalNet, "left", base);
+    reserveStrip(ctx, signalNet, "right", base);
+    const groundStrip = reserveStrip(ctx, groundNet, "left", base + 2);
+    reserveStrip(ctx, groundNet, "right", base + 2);
+    const pins = { "1": `e${base}`, "2": `f${base}`, "3": `e${base + 2}`, "4": `f${base + 2}` };
+    if (!candidateAllowed(ctx, button, pins)) renderBranchError(button, ctx, 3);
+    putPlacement(ctx, button, pins);
+    void signalStrip;
+    addRailJumper(ctx, groundStrip, groundNet);
+    finishBlock(ctx, "left", base + 2, true);
+    used.add(button.id);
+  }
+}
+
+function fallbackParts(ctx: AllocationContext, used: Set<string>): void {
+  const parts = ctx.circuit.parts.filter((part) => !used.has(part.id)).sort((a, b) => a.id.localeCompare(b.id));
   for (const part of parts) {
     const footprint = MODULES[part.module].footprint;
-    const candidates: Candidate[] = [];
-    const sides: Side[] = footprint.kind === "button4" ? ["left"] : ["left", "right"];
-    for (const side of sides) {
-      const minimum = footprint.kind === "button4" ? Math.max(sideEnd.left, sideEnd.right) + 1 : sideEnd[side] + 1;
-      for (let row = minimum; row <= ctx.profile.rows; row++) {
-        for (let column = 0; column < sideColumns(side).length; column++) {
-          const candidate = candidatePins(part, side, row, column);
-          if (!candidate || candidate.end > ctx.profile.rows) continue;
-          if (candidateGroupAllowed(ctx, candidate.pins, part)) candidates.push(candidate);
-        }
-      }
-    }
-    candidates.sort((a, b) => a.start - b.start || (a.side === b.side ? 0 : a.side === "left" ? -1 : 1) || a.end - b.end);
-    const candidate = candidates[0];
-    if (!candidate) {
-      const height = footprintHeight(part) + 2;
-      throw new Error(
-        `Cannot fit ${part.id} (${MODULES[part.module].name}) on ${ctx.profile.id}: no legal ${height}-row footprint remains; try bb-830 or remove a part`,
-      );
-    }
-    putPlacement(ctx, part, candidate);
-    if (footprint.kind === "button4") {
-      sideEnd.left = candidate.end + 1;
-      sideEnd.right = candidate.end + 1;
+    if (footprint.kind === "button4") continue;
+    const side: Side = ctx.cursors.right < ctx.cursors.left ? "right" : "left";
+    const span = footprint.kind === "two-lead" ? footprint.preferredSpan : footprint.kind === "inline3" ? 2 : Math.max(0, modulePins(part).length - 1);
+    const base = blockStart(ctx, side, span + 1);
+    const pins: Record<string, HoleId> = {};
+    if (footprint.kind === "two-lead") {
+      pins[footprint.pins[0]] = `${column(side, 4)}${base}`;
+      pins[footprint.pins[1]] = `${column(side, 4)}${base + footprint.preferredSpan}`;
+    } else if (footprint.kind === "inline3") {
+      footprint.pins.forEach((pin, index) => (pins[pin] = `${column(side, 3)}${base + index}`));
     } else {
-      sideEnd[candidate.side] = candidate.end + 1;
+      modulePins(part).forEach((pin, index) => (pins[pin.id] = `${column(side, 3)}${base + index}`));
     }
+    if (!candidateAllowed(ctx, part, pins)) renderBranchError(part, ctx, span + 1);
+    putPlacement(ctx, part, pins);
+    for (const [pin, hole] of Object.entries(pins)) {
+      const net = pinNet(ctx, part, pin);
+      if (!net) continue;
+      const row = Number.parseInt(hole.slice(1), 10);
+      const strip = reserveStrip(ctx, net.net, side, row);
+      if (net.kind === "power" || net.kind === "ground") addRailJumper(ctx, strip, net.net);
+    }
+    finishBlock(ctx, side, base + span);
+    used.add(part.id);
   }
 }
 
@@ -259,207 +362,90 @@ function reserveNano(ctx: AllocationContext): void {
     const offset = index < 15 ? index : 29 - index;
     const hole = `${side}${topRow + offset}`;
     if (!isValidHole(ctx.profile, hole)) return;
-    const existing = ctx.occupied.get(hole);
-    if (existing !== undefined) throw new Error(`Cannot fit Nano header at ${hole}: hole is already occupied`);
     ctx.occupied.set(hole, `board.${pin}`);
-    const group = contactGroup(ctx.profile, hole);
-    if (group !== null) ctx.groups.set(group, "__board");
+    ctx.groups.set(groupFor(ctx, hole), "__board");
     if (!ctx.nanoPinHoles.has(pin)) ctx.nanoPinHoles.set(pin, hole);
   });
+  ctx.cursors.left = 15;
+  ctx.cursors.right = 15;
 }
 
-function chooseSignalStrips(ctx: AllocationContext): Map<NetId, HoleId> {
-  const strips = new Map<NetId, HoleId>();
-  const usedGroups = new Set<string>();
-  const signals = ctx.circuit.nets.filter((net) => net.kind === "signal").sort((a, b) => a.id.localeCompare(b.id));
-  const candidates: { row: number; side: Side; group: string; hole: HoleId }[] = [];
-  for (let row = 1; row <= ctx.profile.rows; row++) {
-    for (const side of ["left", "right"] as const) {
-      const group = contactGroup(ctx.profile, rowHole(side, row));
-      if (group === null) continue;
-      const owner = ctx.groups.get(group);
-      if (owner === "__board") continue;
-      candidates.push({ row, side, group, hole: rowHole(side, row, side === "left" ? 4 : 4) });
-    }
+function finalizeJumpers(ctx: AllocationContext): Jumper[] {
+  const signalStrips = new Map(ctx.strips);
+  for (const net of ctx.circuit.nets.filter((entry) => entry.kind === "signal").sort((a, b) => a.id.localeCompare(b.id))) {
+    const strip = signalStrips.get(net.id);
+    if (strip === undefined) throw new Error(`Cannot fit ${net.id}: no five-hole strip was allocated`);
+    addBoardNetJumper(ctx, net.id, strip);
   }
-  for (const net of signals) {
-    const candidate = candidates.find((entry) => {
-      if (usedGroups.has(entry.group)) return false;
-      const owner = ctx.groups.get(entry.group);
-      return owner === undefined || owner === net.id;
-    });
-    if (!candidate) {
-      throw new Error(
-        `Cannot fit ${net.id}: need one five-hole signal strip but ${ctx.profile.id} has no unoccupied contact group; try bb-830`,
-      );
-    }
-    usedGroups.add(candidate.group);
-    strips.set(net.id, candidate.hole);
-    ctx.groups.set(candidate.group, net.id);
-  }
-  return strips;
-}
-
-function addJumper(
-  jumpers: Jumper[],
-  seen: Set<string>,
-  from: Endpoint,
-  to: Endpoint,
-  net: NetId,
-  color: WireColor,
-): void {
-  if (endpointKey(from) === endpointKey(to)) return;
-  const key = `${net}|${endpointKey(from)}|${endpointKey(to)}`;
-  const reverse = `${net}|${endpointKey(to)}|${endpointKey(from)}`;
-  if (seen.has(key) || seen.has(reverse)) return;
-  seen.add(key);
-  jumpers.push({ id: "", from, to, color, net });
-}
-
-function holeGroup(profile: BreadboardProfile, hole: HoleId): string | undefined {
-  return contactGroup(profile, hole) ?? undefined;
-}
-
-function shouldBridge(profile: BreadboardProfile, from: HoleId, to: HoleId): boolean {
-  const a = holeGroup(profile, from);
-  const b = holeGroup(profile, to);
-  return a === undefined || b === undefined || a !== b;
-}
-
-function makeJumpers(ctx: AllocationContext, strips: Map<NetId, HoleId>): Jumper[] {
-  const jumpers: Jumper[] = [];
-  const seen = new Set<string>();
-  const signalOrder = new Map<string, number>();
-  [...ctx.circuit.nets]
-    .filter((net) => net.kind === "signal")
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .forEach((net, index) => signalOrder.set(net.id, index));
-
-  const anchors = new Map<NetId, HoleId>();
-  for (const net of ctx.circuit.nets) {
-    if (net.kind === "power") anchors.set(net.id, firstRailHole(ctx.profile, "T+"));
-    else if (net.kind === "ground") anchors.set(net.id, firstRailHole(ctx.profile, "T-"));
-    else {
-      const strip = strips.get(net.id);
-      if (strip === undefined) throw new Error(`Internal allocator error: no strip for ${net.id}`);
-      anchors.set(net.id, strip);
-    }
-  }
-
-  const colorFor = (net: NetId): WireColor => {
-    const kind = ctx.netKinds.get(net) ?? "signal";
-    return netColor(net, kind, signalOrder.get(net) ?? 0);
-  };
-
-  const board = BOARD_PROFILES[ctx.circuit.board.profile];
-  const usedBoardPins = ctx.circuit.nets
-    .flatMap((net) => net.pins.filter((ref) => ref.part === BOARD_PART).map((ref) => ({ net, ref })))
-    .sort((a, b) => a.ref.pin.localeCompare(b.ref.pin) || a.net.id.localeCompare(b.net.id));
-
-  // Rail jumpers are emitted first so the guide can make the safe rail check a
-  // first-class operation.  A Nano has a physical header hole in addition to
-  // the wire to the rail; an Uno starts at its external header.
-  for (const { net, ref } of usedBoardPins) {
-    const anchor = anchors.get(net.id);
-    if (anchor === undefined) continue;
-    if (board.placement === "straddle") {
-      const headerHole = ctx.nanoPinHoles.get(ref.pin);
-      if (headerHole === undefined) {
-        throw new Error(`Nano header has no hole for board pin ${ref.pin}`);
-      }
-      addJumper(jumpers, seen, { board: ref.pin }, { hole: headerHole }, net.id, colorFor(net.id));
-      if (shouldBridge(ctx.profile, headerHole, anchor)) {
-        addJumper(jumpers, seen, { hole: headerHole }, { hole: anchor }, net.id, colorFor(net.id));
+  for (const net of ctx.circuit.nets.filter((entry) => entry.kind !== "signal").sort((a, b) => a.id.localeCompare(b.id))) {
+    const boardPins = boardPinsForNet(ctx, net.id);
+    if (net.kind === "power") {
+      for (const pin of boardPins) {
+        if (ctx.boardAnchor && ctx.nanoPinHoles.has(pin)) {
+          const hole = ctx.nanoPinHoles.get(pin)!;
+          addJumper(ctx, { board: pin }, { hole }, net.id, 0);
+        } else addJumper(ctx, { board: pin }, { hole: firstRailHole(ctx.profile, "T+") }, net.id, 0);
       }
     } else {
-      addJumper(jumpers, seen, { board: ref.pin }, { hole: anchor }, net.id, colorFor(net.id));
-    }
-  }
-
-  const placements = new Map(ctx.placements.map((placement) => [placement.part, placement]));
-  for (const part of [...ctx.circuit.parts].sort((a, b) => a.id.localeCompare(b.id))) {
-    const placement = placements.get(part.id);
-    if (!placement) continue;
-    for (const pin of modulePins(part).map((entry) => entry.id).sort((a, b) => a.localeCompare(b))) {
-      const net = netOfPin(ctx.pinNets, part.id, pin);
-      if (!net) continue;
-      const hole = placement.pins[pin];
-      const anchor = anchors.get(net.net);
-      if (!hole || !anchor) continue;
-      if (shouldBridge(ctx.profile, hole, anchor)) {
-        addJumper(jumpers, seen, { hole }, { hole: anchor }, net.net, colorFor(net.net));
+      for (const pin of boardPins) {
+        if (ctx.boardAnchor && ctx.nanoPinHoles.has(pin)) addJumper(ctx, { board: pin }, { hole: ctx.nanoPinHoles.get(pin)! }, net.id, 0);
+        else addJumper(ctx, { board: pin }, { hole: firstRailHole(ctx.profile, "T-") }, net.id, 0);
       }
     }
   }
-
-  const rank = (jumper: Jumper): [number, string, string, string] => {
-    const kind = ctx.netKinds.get(jumper.net) ?? "signal";
-    const phase = kind === "power" ? 0 : kind === "ground" ? 1 : 2;
-    return [phase, jumper.net, endpointKey(jumper.from), endpointKey(jumper.to)];
-  };
-  jumpers.sort((a, b) => {
-    const ar = rank(a);
-    const br = rank(b);
-    for (let i = 0; i < ar.length; i++) {
-      const cmp = String(ar[i]).localeCompare(String(br[i]));
-      if (cmp !== 0) return cmp;
-    }
-    return 0;
-  });
-  jumpers.forEach((jumper, index) => (jumper.id = `W${index + 1}`));
-  return jumpers;
+  ctx.pending.sort((a, b) => a.phase - b.phase || a.jumper.net.localeCompare(b.jumper.net) || endpointKey(a.jumper.from).localeCompare(endpointKey(b.jumper.from)) || endpointKey(a.jumper.to).localeCompare(endpointKey(b.jumper.to)));
+  return ctx.pending.map((entry, index) => ({ ...entry.jumper, id: `W${index + 1}` }));
 }
 
 export function layoutBoard(circuit: Circuit): Layout {
   const profile = BREADBOARD_PROFILES[circuit.breadboard.profile];
-  if (!profile) throw new Error(`Unknown breadboard profile ${circuit.breadboard.profile}`);
   const board = BOARD_PROFILES[circuit.board.profile];
+  if (!profile) throw new Error(`Unknown breadboard profile ${circuit.breadboard.profile}`);
   if (!board) throw new Error(`Unknown board profile ${circuit.board.profile}`);
   const { pinNets, netKinds } = buildPinNets(circuit);
-  const ctx: AllocationContext = {
-    circuit,
-    profile,
-    pinNets,
-    netKinds,
-    placements: [],
-    occupied: new Map(),
-    groups: new Map(),
-    nanoPinHoles: new Map(),
-  };
+  const ctx: AllocationContext = { circuit, profile, pinNets, netKinds, placements: [], occupied: new Map(), groups: new Map(), strips: new Map(), pending: [], cursors: { left: 0, right: 0 }, nanoPinHoles: new Map() };
   reserveNano(ctx);
-  placeParts(ctx);
-  const strips = chooseSignalStrips(ctx);
-  const jumpers = makeJumpers(ctx, strips);
-  return {
-    schema: "vibread.layout/1",
-    board: circuit.board.profile,
-    breadboard: circuit.breadboard.profile,
-    placements: ctx.placements.sort((a, b) => a.part.localeCompare(b.part)),
-    jumpers,
-    ...(ctx.boardAnchor ? { boardAnchor: ctx.boardAnchor } : {}),
-  };
+  const used = new Set<string>();
+  // Reserve compact divider and LED branches first so a half-size board has
+  // enough rows for the required one-row spacers. Buttons are deliberately
+  // last because their footprint consumes both halves of a row.
+  dividerBranches(ctx, used);
+  ledBranches(ctx, used);
+  fallbackParts(ctx, used);
+  buttonBranches(ctx, used);
+  // Every net with a board pin must have a strip/rail endpoint. Branch helpers
+  // already created signal strips; this catches a board-only signal clearly.
+  for (const net of circuit.nets.filter((entry) => entry.kind === "signal")) {
+    if (!ctx.strips.has(net.id)) {
+      const side: Side = ctx.cursors.left <= ctx.cursors.right ? "left" : "right";
+      const row = blockStart(ctx, side, 1);
+      reserveStrip(ctx, net.id, side, row);
+      finishBlock(ctx, side, row);
+    }
+  }
+  return { schema: "vibread.layout/1", board: circuit.board.profile, breadboard: circuit.breadboard.profile, placements: ctx.placements.sort((a, b) => a.part.localeCompare(b.part)), jumpers: finalizeJumpers(ctx), ...(ctx.boardAnchor ? { boardAnchor: ctx.boardAnchor } : {}) };
 }
 
 export function layoutHash(layout: Layout): string {
   return hashJson(layout);
 }
 
-export function layoutPinNet(circuit: Circuit): Map<string, InternalPinNet> {
+export function layoutPinNet(circuit: Circuit): Map<string, NetPin> {
   return buildPinNets(circuit).pinNets;
-}
-
-export function breadboardSideColumns(side: Side): readonly Column[] {
-  return sideColumns(side);
 }
 
 export function railAnchor(profile: BreadboardProfile, kind: "power" | "ground"): HoleId {
   return firstRailHole(profile, kind === "power" ? "T+" : "T-");
 }
 
-export function endpointHoleId(endpoint: Endpoint): HoleId | undefined {
-  return endpointHole(endpoint);
-}
-
 export function signalColor(index: number): string {
   return SIGNAL_COLORS[index % SIGNAL_COLORS.length];
+}
+
+export function breadboardSideColumns(side: Side): readonly Column[] {
+  return sideColumns(side);
+}
+
+export function endpointHoleId(endpoint: Endpoint): HoleId | undefined {
+  return "hole" in endpoint ? endpoint.hole : undefined;
 }

@@ -63,9 +63,9 @@ export function createPhotoChecker(deps: { models: AgentModels; store: MissionSt
             role: "user",
             content: [
               { type: "text", text: `Expected state after this step:\n${JSON.stringify(expected, null, 2)}` },
-              ...(reference ? [{ type: "text" as const, text: "Expected picture:" }, { type: "image" as const, image: reference.data, mediaType: "image/png" }] : []),
+              ...(reference ? [{ type: "text" as const, text: "Expected picture:" }, { type: "file" as const, data: reference.data, mediaType: "image/png" }] : []),
               { type: "text", text: "The builder's photo:" },
-              { type: "image", image: new Uint8Array(photo), mediaType: "image/jpeg" },
+              { type: "file", data: new Uint8Array(photo), mediaType: "image/jpeg" },
             ],
           },
         ],

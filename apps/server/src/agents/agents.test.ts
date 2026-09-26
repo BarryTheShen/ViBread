@@ -1,9 +1,12 @@
+import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { GOLDEN } from "@vibread/fixtures";
 import type { Actor, ConsoleReport, MissionStore, PermissionMode } from "@vibread/core";
 import type { Pipeline } from "@vibread/tools";
+import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
 import type { UIMessage } from "ai";
+import { MockLanguageModelV4 } from "ai/test";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentRuntime, type AgentRuntime } from "./index.js";
@@ -53,9 +56,8 @@ async function serve(runtime: AgentRuntime): Promise<string> {
   const app = express();
   app.use(express.json());
   runtime.mountChat(app);
-  const { promise, resolve } = Promise.withResolvers<void>();
-  const server = app.listen(0, "127.0.0.1", () => resolve());
-  await promise;
+  const server = app.listen(0, "127.0.0.1");
+  await once(server, "listening");
   servers.push(server);
   return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 }
@@ -211,6 +213,58 @@ describe("design agent", () => {
     expect(pipeline!.calls).toBe(0);
     const part = (await deps.messages.list(mission.id)).flatMap((m) => m.parts).find((p) => "approval" in p && p.approval?.id === approvalId) as { state: string };
     expect(part.state).toBe("output-denied");
+  });
+
+  it("stop aborts the active run and ends its stream", async () => {
+    const deps = testDeps();
+    // A model that streams one text chunk, then waits until the run is aborted.
+    const stalling = new MockLanguageModelV4({
+      doStream: async ({ abortSignal }) => ({
+        stream: new ReadableStream<LanguageModelV4StreamPart>({
+          start(controller) {
+            controller.enqueue({ type: "stream-start", warnings: [] });
+            controller.enqueue({ type: "text-start", id: "t1" });
+            controller.enqueue({ type: "text-delta", id: "t1", delta: "Thinking" });
+            abortSignal?.addEventListener("abort", () => controller.error(abortSignal.reason));
+          },
+        }),
+      }),
+    });
+    const runtime = createAgentRuntime({ ...deps, models: mockModels(stalling, jsonModel([])) });
+    const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
+    const base = await serve(runtime);
+    const response = await fetch(`${base}/api/missions/${mission.id}/chat`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ message: { id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] } }),
+    });
+    const reader = response.body!.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    expect(first).toContain('"type":"start"');
+    expect((await runtime.missions.detail(mission.id)).agentBusy).toBe(true);
+
+    const stopped = await fetch(`${base}/api/missions/${mission.id}/chat/stop`, { method: "POST" });
+    expect(await stopped.json()).toEqual({ ok: true });
+    let rest = "";
+    for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) rest += new TextDecoder().decode(chunk.value);
+    expect(rest).toContain('"type":"abort"');
+    expect((await runtime.missions.detail(mission.id)).agentBusy).toBe(false);
+    expect((await deps.messages.list(mission.id)).map((m) => m.role)).toEqual(["user", "assistant"]);
+  });
+
+  it("say() runs one turn to completion for non-streaming channels and reports pending approvals", async () => {
+    const { runtime, mission, deps } = await setup("review", [
+      proposeGolden,
+      { text: "All consoles are GO.", toolCalls: [{ name: "release_revision", input: { revision: 1 } }] },
+    ]);
+    const imessage: Actor = { kind: "human", id: "operator", channel: "imessage" };
+    const turn = await runtime.missions.say(mission.id, golden.brief, imessage);
+    expect(turn.revision).toBe(1);
+    expect(turn.text).toContain("All consoles are GO.");
+    expect(turn.pendingApprovals.map((a) => a.action)).toEqual(["release_revision"]);
+    expect((await deps.store.getMission(mission.id))?.releasedRevision).toBeUndefined();
+    const events = await runtime.missions.events(mission.id);
+    expect(events.filter((e) => e.kind === "message").map((e) => e.channel)).toEqual(["imessage", "imessage"]);
   });
 
   it("surfaces a typed error when Claude is not connected", async () => {

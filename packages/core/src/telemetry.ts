@@ -19,9 +19,25 @@ import { z } from "zod";
  *    `{c:"answer",id,v}` (v = one of `choices`, or "done" / "timeout"). The device waits up to `timeoutMs`.
  *  - `obs` carries observations for the host evaluator; `end.status` is the device's local view, the host's
  *    evaluation in @vibread/bench is authoritative.
+ *
+ * Per-test line sequence (exact ask ids and obs keys; <i> = 0-based index among subjects of that kind in plan order,
+ * <k> = the LED subject's `order`; every `ask` carries `part` = the subject's part id, except where noted):
+ *  - rails.vcc:          vcc{mv} → end (pass when 4500 ≤ mv ≤ 5500)
+ *  - pins.readonly:      per subject pin: read{pull:0}, read{pull:1}; then per output subject (led, buzzer) not stuck:
+ *                        probe{drive: active level}; mismatch → stuck{pin, level: readback} → end
+ *  - button.interactive: per button: ask `btn<i>-press` (press-hold, choices ["done"]) → obs{key:"pressed", v} →
+ *                        ask `btn<i>-release` (release, choices ["done"]) → obs{key:"released", v} → end.
+ *                        v = the stable level over `samples` reads: 0 | 1 | "mixed".
+ *  - light.relative:     per light: adc{phase:"ambient"} → ask `light<i>-cover` (cover, ["done"]) → adc{phase:"covered"} →
+ *                        ask `light<i>-uncover` (uncover, ["done"]) → end
+ *  - pot.sweep:          per pot: ask `pot<i>-min` (knob-min, ["done"]) → adc{phase:"min"} → ask `pot<i>-max`
+ *                        (knob-max, ["done"]) → adc{phase:"max"} → end
+ *  - led.sequence:       per LED in `order`: ask `led<k>` (which-led, choices ["1".."N","none"]) while THAT LED keeps
+ *                        blinking (≤ ledOnMs on per ledPeriodMs) until the answer arrives → obs{key:"which", v: answer}
+ *                        → next LED → end. The expected answer for `led<k>` is "k" (its physical position).
+ *  - buzzer.confirm:     per buzzer: short beeps repeat while waiting on ask `buzzer<i>` (heard-beep, ["yes","no"]) → end
+ *  - Answer "timeout" (or no answer within timeoutMs) makes that subject `unknown`, never `fail`.
  */
-export const TELEMETRY_PROTO = 1 as const;
-export const TELEMETRY_BAUD = 115_200 as const;
 
 export const TEST_IDS = [
   "rails.vcc",

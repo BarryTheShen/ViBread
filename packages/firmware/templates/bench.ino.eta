@@ -96,6 +96,14 @@ static void vbEmitObsNum(const char* test, const char* part, const char* key, ui
   Serial.print(F("\",\"key\":\"")); vbPrintFlash(key); Serial.print(F("\",\"v\":")); Serial.print(value); Serial.println(F("}"));
 }
 
+static void vbEmitObsStable(const char* test, const char* part, const char* key, uint32_t ones, uint32_t n) {
+  Serial.print(F("{\"t\":\"obs\",\"test\":\"")); vbPrintFlash(test);
+  if (part != nullptr) { Serial.print(F("\",\"part\":\"")); vbPrintFlash(part); }
+  Serial.print(F("\",\"key\":\"")); vbPrintFlash(key); Serial.print(F(",\"v\":"));
+  if (ones == 0 || ones == n) Serial.print(ones == 0 ? 0 : 1);
+  else Serial.print(F("\"mixed\""));
+  Serial.println(F("}"));
+}
 static void vbEmitObsStr(const char* test, const char* part, const char* key, const char* value) {
   Serial.print(F("{\"t\":\"obs\",\"test\":\"")); vbPrintFlash(test);
   if (part != nullptr) { Serial.print(F("\",\"part\":\"")); vbPrintFlash(part); }
@@ -142,6 +150,50 @@ static const char* vbAsk(const char* idP, const char* test, const char* kind, co
   vbWaiting = false;
   if (vbAbort) return nullptr;
   if (!vbAnswerReady) { strcpy(vbAnswer, "timeout"); }
+  return vbAnswer;
+}
+
+typedef void (*VbPulseFn)(uint8_t, uint16_t);
+
+static const char* vbAskWhilePulsing(const char* idP, const char* test, const char* kind, const char* part, const char* choices, uint32_t timeoutMs, VbPulseFn pulse, uint8_t active) {
+  strcpy_P(vbPendingId, idP);
+  vbAnswer[0] = '\0';
+  vbAnswerReady = false;
+  vbWaiting = true;
+  vbEmitAsk(vbPendingId, test, kind, part, choices, timeoutMs);
+  const unsigned long started = millis();
+  while (!vbAnswerReady && !vbAbort && (uint32_t)(millis() - started) < timeoutMs) {
+    pulse(active, VB_LED_ON_MS);
+    if (VB_LED_PERIOD_MS > VB_LED_ON_MS) delay(VB_LED_PERIOD_MS - VB_LED_ON_MS);
+    vbPollAnswer();
+  }
+  vbWaiting = false;
+  if (vbAbort) return nullptr;
+  if (!vbAnswerReady) strcpy(vbAnswer, "timeout");
+  return vbAnswer;
+}
+
+static const char* vbAskWhileBuzzer(const char* idP, const char* test, const char* kind, const char* part, const char* choices, uint32_t timeoutMs, uint8_t pin, uint8_t active, bool stuck) {
+  strcpy_P(vbPendingId, idP);
+  vbAnswer[0] = '\0';
+  vbAnswerReady = false;
+  vbWaiting = true;
+  vbEmitAsk(vbPendingId, test, kind, part, choices, timeoutMs);
+  const unsigned long started = millis();
+  while (!vbAnswerReady && !vbAbort && (uint32_t)(millis() - started) < timeoutMs) {
+    if (!stuck) {
+      if (active) {
+        pinMode(pin, OUTPUT); digitalWrite(pin, HIGH); delay(19); digitalWrite(pin, LOW); pinMode(pin, INPUT);
+      } else {
+        tone(pin, 2400, 35); delay(45); noTone(pin); pinMode(pin, INPUT); digitalWrite(pin, LOW);
+      }
+      delay(30);
+    }
+    vbPollAnswer();
+  }
+  vbWaiting = false;
+  if (vbAbort) return nullptr;
+  if (!vbAnswerReady) strcpy(vbAnswer, "timeout");
   return vbAnswer;
 }
 

@@ -8,7 +8,7 @@ import type {
   TestSuite,
   Trace,
 } from "@vibread/core";
-import { executeScenario, observePinModesCore, runScenarioCore } from "./engine.js";
+import { observePinModesCore, runScenarioCore } from "./engine.js";
 import { runSuiteWithWorkers } from "./pool.js";
 
 export { SimSession } from "./browser.js";
@@ -26,8 +26,5 @@ export async function observePinModes(input: { circuit: Circuit; hex: string; ms
   return Promise.resolve(observePinModesCore(input));
 }
 
-export function runScenarioSync(input: { circuit: Circuit; hex: string; scenario: Scenario }): { result: ScenarioResult; trace: Trace; pinModes: PinModeObservation[] } {
-  return executeScenario(input);
-}
 
 export type { Coverage };

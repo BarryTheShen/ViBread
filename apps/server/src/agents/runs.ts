@@ -291,11 +291,12 @@ export function createRunManager(
       return new ReadableStream<UIMessageChunk>({
         async pull(controller) {
           while (index >= tracked.chunks.length && !tracked.done) {
-            const { promise, resolve } = Promise.withResolvers<void>();
-            wake = resolve;
-            tracked.wake.add(resolve);
-            await promise;
-            tracked.wake.delete(resolve);
+            // Executor form: the repo targets lib ES2023, which has no Promise.withResolvers typing.
+            await new Promise<void>((resolve) => {
+              wake = resolve;
+              tracked.wake.add(resolve);
+            });
+            if (wake) tracked.wake.delete(wake);
           }
           if (index < tracked.chunks.length) controller.enqueue(tracked.chunks[index++]!);
           else controller.close();

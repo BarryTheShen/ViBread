@@ -35,9 +35,10 @@
     "sharp": "0.35.4"
   },
   "devDependencies": {
-    "drizzle-kit": "0.31.11",
-    "@types/express": "5.0.6",
+    "@ai-sdk/provider": "4.0.18",
     "@types/better-sqlite3": "9.6.0",
-    "@types/multer": "2.2.0"
+    "@types/express": "5.0.6",
+    "@types/multer": "2.2.0",
+    "drizzle-kit": "0.31.11"
   }
 }

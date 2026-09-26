@@ -45,7 +45,7 @@ export interface MissionStore {
   createMission(input: { title: string; brief: string; ownerId: string; inventory: InventoryItem[]; mode: PermissionMode }): Promise<Mission>;
   getMission(id: string): Promise<Mission | null>;
   listMissions(ownerId: string): Promise<Mission[]>;
-  updateMission(id: string, patch: Partial<Pick<Mission, "title" | "mode" | "phase" | "currentRevision" | "releasedRevision">>): Promise<Mission>;
+  updateMission(id: string, patch: Partial<Pick<Mission, "title" | "mode" | "phase" | "currentRevision" | "releasedRevision" | "inventory">>): Promise<Mission>;
   /** Assigns n = latest + 1 and the revision hash. */
   createRevision(missionId: string, input: { circuit: Circuit; suite?: TestSuite; author: Actor; note?: string; parent?: number }): Promise<Revision>;
   /** Latest revision when `n` is omitted. */
@@ -57,6 +57,8 @@ export interface MissionStore {
   getArtifact(hash: string): Promise<{ data: Uint8Array; contentType: string } | null>;
   appendEvent(event: Omit<TimelineEvent, "id" | "at">): Promise<TimelineEvent>;
   listEvents(missionId: string, afterId?: string): Promise<TimelineEvent[]>;
+  /** Change feed: called after every appendEvent commit (all missions). Returns an unsubscribe function. */
+  subscribe(listener: (event: TimelineEvent) => void): () => void;
 }
 
 /** The authority for every approval (PLAN §5.10). UI/iMessage decisions are requests; the broker decides. */

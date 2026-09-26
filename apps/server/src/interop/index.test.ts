@@ -82,6 +82,17 @@ function testContext() {
           },
         ];
       },
+      get(name: string) {
+        return this.list().find((tool) => tool.name === name);
+      },
+    },
+    store: {
+      async getMission(id: string) {
+        return { id, title: "Test mission", brief: "test", ownerId: "u1", mode: "review", phase: "DESIGN", inventory: [], createdAt: "", updatedAt: "" };
+      },
+      async getRevision() {
+        return null;
+      },
     },
     missions,
     broker: { async evaluate() { return { outcome: "bench-click" }; } },
