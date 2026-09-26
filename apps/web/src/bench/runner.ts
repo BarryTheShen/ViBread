@@ -76,9 +76,10 @@ export function runnerReducer(state: BenchRunnerState, event: BenchRunnerEvent):
       const next: BenchRunnerState = { ...state, lines, rawLines: [...state.rawLines, JSON.stringify(event.line)] };
       if (event.line.t === "hello") next.seenHello = event.line;
       if (event.line.t === "vcc") next.seenVcc = event.line;
-      if (event.line.t === "ask") next.asks = [...state.asks, event.line];
+      if (event.line.t === "ask") next.asks = [event.line];
       if (event.line.t === "done") {
         next.done = true;
+        next.asks = [];
         next.phase = "complete";
       }
       return next;
@@ -113,7 +114,8 @@ export class BenchRunner {
   private stateValue = initialRunnerState();
   private readonly helloWaiters: PendingLine<Extract<DeviceLine, { t: "hello" }>>[] = [];
   private readonly vccWaiters: PendingLine<Extract<DeviceLine, { t: "vcc" }>>[] = [];
-  private readonly askTimers = new Map<string, TimerHandle>();
+  private readonly askTimeouts = new Map<string, TimerHandle>();
+  private readonly askWatchdogs = new Map<string, TimerHandle>();
 
   constructor(options: BenchRunnerOptions) {
     this.plan = options.plan;
@@ -137,12 +139,23 @@ export class BenchRunner {
     if (event.type === "line" && event.line.t !== "invalid") {
       if (event.line.t === "hello") this.resolveWaiters(this.helloWaiters, event.line);
       if (event.line.t === "vcc") this.resolveWaiters(this.vccWaiters, event.line);
+      this.clearAskWatchdogs();
       if (event.line.t === "ask") {
+        this.clearAskTimeouts();
         const ask = event.line;
-        const timer = setTimeout(() => {
-          if (this.state.answers[ask.id] === undefined) this.fail(`Self-test timed out waiting for ${ask.id}.`);
-        }, ask.timeoutMs + 5_000);
-        this.askTimers.set(ask.id, timer);
+        if (ask.timeoutMs > 0) {
+          const linesAtAsk = this.state.lines.length;
+          const timeout = setTimeout(() => {
+            if (this.state.answers[ask.id] === undefined) {
+              void this.sendTimeoutAnswer(ask.id).catch((reason: unknown) => this.fail(reason instanceof Error ? reason.message : String(reason)));
+            }
+          }, ask.timeoutMs);
+          const watchdog = setTimeout(() => {
+            if (this.state.lines.length <= linesAtAsk) this.fail("The board stopped answering during the self-test. Check the cable and power, then retry.");
+          }, ask.timeoutMs + 5_000);
+          this.askTimeouts.set(ask.id, timeout);
+          this.askWatchdogs.set(ask.id, watchdog);
+        }
       }
       if (event.line.t === "done") this.clearAskTimers();
     }
@@ -168,9 +181,19 @@ export class BenchRunner {
     }
   }
 
+  private clearAskTimeouts(): void {
+    for (const timer of this.askTimeouts.values()) clearTimeout(timer);
+    this.askTimeouts.clear();
+  }
+
+  private clearAskWatchdogs(): void {
+    for (const timer of this.askWatchdogs.values()) clearTimeout(timer);
+    this.askWatchdogs.clear();
+  }
+
   private clearAskTimers(): void {
-    for (const timer of this.askTimers.values()) clearTimeout(timer);
-    this.askTimers.clear();
+    this.clearAskTimeouts();
+    this.clearAskWatchdogs();
   }
 
   private waitForLine<T extends DeviceLine>(
@@ -218,14 +241,29 @@ export class BenchRunner {
     await this.send({ c: "run", test: "all" });
   }
 
+  private async sendTimeoutAnswer(id: string): Promise<void> {
+    if (!this.state.asks.some((candidate) => candidate.id === id) || this.state.answers[id] !== undefined) return;
+    const timeout = this.askTimeouts.get(id);
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+      this.askTimeouts.delete(id);
+    }
+    await this.send({ c: "answer", id, v: "timeout" });
+  }
+
   /** Answer one visible ask button and resume the firmware. */
   async answer(id: string, value: string): Promise<void> {
     const ask = this.state.asks.find((candidate) => candidate.id === id);
     if (!ask) throw new Error(`The device did not ask for ${id}.`);
-    const timer = this.askTimers.get(id);
-    if (timer !== undefined) {
-      clearTimeout(timer);
-      this.askTimers.delete(id);
+    const timeout = this.askTimeouts.get(id);
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+      this.askTimeouts.delete(id);
+    }
+    const watchdog = this.askWatchdogs.get(id);
+    if (watchdog !== undefined) {
+      clearTimeout(watchdog);
+      this.askWatchdogs.delete(id);
     }
     await this.send({ c: "answer", id, v: value });
   }

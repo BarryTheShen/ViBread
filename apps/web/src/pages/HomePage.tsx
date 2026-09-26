@@ -25,7 +25,7 @@ import TextField from "@mui/material/TextField";
 import Toolbar from "@mui/material/Toolbar";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import { LED_COLORS, MODE_LABELS, formatOhms, type InventoryItem, type ModuleKey, type ModuleSummary } from "@vibread/core";
+import { LED_COLORS, MODE_LABELS, formatOhms, type InventoryItem, type MissionPhase, type ModuleKey, type ModuleSummary } from "@vibread/core";
 import { useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router";
 import { useCreateMission, useMissions, useModules } from "../api/hooks.js";
@@ -43,6 +43,14 @@ interface Row {
   name: string;
   count: number;
   params: Record<string, unknown>;
+}
+
+/** Recent-missions chip for the build target, worded from where the mission is now. */
+function releasedLabel(phase: MissionPhase, n: number): string {
+  if (phase === "DONE") return `Complete · r${n}`;
+  if (phase === "LAUNCH") return `Launched · r${n}`;
+  if (phase === "VERIFY" || phase === "DEBUG") return `Testing r${n}`;
+  return `Building r${n}`;
 }
 
 function defaultParams(module: ModuleKey): Record<string, unknown> {
@@ -88,7 +96,11 @@ function ParamPicker({ row, onChange }: { row: Row; onChange(params: Record<stri
 function PartsPicker({ modules, rows, setRows }: { modules: ModuleSummary[]; rows: Row[]; setRows(rows: Row[]): void }) {
   const [nextKey, setNextKey] = useState(1);
   const add = (m: ModuleSummary) => {
-    setRows([...rows, { key: nextKey, module: m.key, name: m.name, count: 1, params: defaultParams(m.key) }]);
+    // Tapping the same part again adds one more of it (a different color/value stays a separate row).
+    const params = defaultParams(m.key);
+    const same = rows.find((r) => r.module === m.key && JSON.stringify(r.params) === JSON.stringify(params));
+    if (same) return setRows(rows.map((r) => (r.key === same.key ? { ...r, count: r.count + 1 } : r)));
+    setRows([...rows, { key: nextKey, module: m.key, name: m.name, count: 1, params }]);
     setNextKey(nextKey + 1);
   };
   const update = (key: number, patch: Partial<Row>) => setRows(rows.map((r) => (r.key === key ? { ...r, ...patch } : r)));
@@ -102,7 +114,7 @@ function PartsPicker({ modules, rows, setRows }: { modules: ModuleSummary[]; row
       </Typography>
       <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
         {modules.map((m) => (
-          <Tooltip key={m.key} title={m.description} describeChild>
+          <Tooltip key={m.key} title={m.description} describeChild placement="top">
             <Chip icon={<AddIcon />} label={m.name} aria-label={`Add ${m.name}`} onClick={() => add(m)} variant="outlined" sx={{ minHeight: 32 }} />
           </Tooltip>
         ))}
@@ -237,7 +249,7 @@ export default function HomePage() {
                         secondary={`${PHASE_COPY[m.phase].label} · ${MODE_LABELS[m.mode]} mode · updated ${agoLabel(m.updatedAt, now)}`}
                         slotProps={{ primary: { sx: { fontWeight: 600 } } }}
                       />
-                      {m.releasedRevision !== undefined && <Chip size="small" label={`Building r${m.releasedRevision}`} variant="outlined" />}
+                      {m.releasedRevision !== undefined && <Chip size="small" label={releasedLabel(m.phase, m.releasedRevision)} variant="outlined" />}
                       <Typography sx={{ color: "primary.main", fontWeight: 600 }}>Open</Typography>
                     </ListItemButton>
                   ))}

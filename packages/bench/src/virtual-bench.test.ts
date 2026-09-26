@@ -34,7 +34,7 @@ function answerForAsk(session: SimSession, plan: SelfTestPlan, ask: Extract<Devi
     session.run(plan.timing.ledPeriodMs);
     const ledSubjects = plan.subjects.filter((subject): subject is Extract<typeof plan.subjects[number], { kind: "led" }> => subject.kind === "led");
     const brightest = ledSubjects.reduce((best, subject) => session.partState(subject.part) > session.partState(best.part) ? subject : best, ledSubjects[0]);
-    value = String(brightest.order);
+    value = brightest === undefined || session.partState(brightest.part) <= 0.02 ? "none" : String(brightest.order);
   } else if (ask.kind === "heard-beep") {
     session.run(100);
     value = session.partState(ask.part ?? "BZ1") > 0 ? "yes" : "no";
@@ -92,7 +92,7 @@ describe("virtual bench protocol", () => {
     for (const fault of faults) {
       const run = runVirtual(fault.circuit, plan, compiled.hex);
       expect(run.invalid, `${fault.name}: ${JSON.stringify(run.invalid)}`).toHaveLength(0);
-      const result = await evaluateRun({ circuit: moon.circuit, layout: fault.layout, plan, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: `virtual-${fault.name}` });
+      const result = await evaluateRun({ circuit: moon.circuit, layout: goodLayout, plan, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: `virtual-${fault.name}` });
       expect(result.verdict, fault.name).toBe("fail");
       expect(result.diagnosis.candidates.slice(0, 2).map((candidate) => candidate.cause), `${fault.name}: ${JSON.stringify({ diagnosis: result.diagnosis, results: result.results })}`).toContain(fault.fault);
       expect(result.diagnosis.candidates[0]?.highlight.holes.length, fault.name).toBeGreaterThan(0);

@@ -29,10 +29,26 @@ export const PHASE_COPY: Record<MissionPhase, { label: string; hint: string }> =
   DONE: { label: "Done", hint: "Mission complete" },
 };
 
+const CHANNEL_SUFFIX: Record<TimelineEvent["channel"], string> = {
+  web: "",
+  system: "",
+  imessage: " · iMessage",
+  mcp: " · Claude Code",
+  a2a: " · another agent",
+};
+
+/** Timeline text in beginner words: no console codes, no doubled verdicts, no internal jargon. */
+export function plainEventText(e: TimelineEvent): string {
+  if (e.kind === "faults.ready") return "Ready to diagnose wiring mistakes if a test fails.";
+  let text = e.text.replace(/\s\((EECOM|GUIDO|FIDO|FAO|RETRO)\)/g, "");
+  text = text.replace(/\b(GO|NO-GO) — \1:?\s*/g, "$1 — ");
+  return text;
+}
+
 export function PhaseDrawer({ missionId, phase, timeline }: { missionId: string; phase: MissionPhase; timeline: TimelineEvent[] }) {
   const now = useNow(30_000);
   const currentIndex = MISSION_PHASES.indexOf(phase);
-  const recent = timeline.slice(-6).reverse();
+  const recent = [...timeline].sort((x, y) => y.at.localeCompare(x.at)).slice(0, 8);
   return (
     <Box component="nav" aria-label="Mission steps" sx={{ display: "flex", flexDirection: "column", height: "100%", overflow: "auto" }}>
       <Typography variant="overline" sx={{ px: 2, pt: 2, color: "text.secondary" }}>
@@ -92,8 +108,8 @@ export function PhaseDrawer({ missionId, phase, timeline }: { missionId: string;
                   <BuildIcon sx={{ fontSize: 16, color: "text.secondary" }} />
                 </ListItemIcon>
                 <ListItemText
-                  primary={e.text}
-                  secondary={`${agoLabel(e.at, now)} · ${e.actor.name ?? e.actor.kind} via ${e.channel}`}
+                  primary={plainEventText(e)}
+                  secondary={`${agoLabel(e.at, now)} · ${e.actor.name ?? (e.actor.kind === "system" ? "ViBread" : e.actor.kind)}${CHANNEL_SUFFIX[e.channel]}`}
                   slotProps={{ primary: { sx: { fontSize: 13 } }, secondary: { sx: { fontSize: 12 } } }}
                 />
               </ListItem>

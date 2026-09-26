@@ -175,7 +175,7 @@ function ClaudeCodeSection() {
                 key={t.id}
                 divider
                 secondaryAction={
-                  <Button color="error" startIcon={<LinkOffIcon />} disabled={revoke.isPending} onClick={() => revoke.mutate(t.id)}>
+                  <Button color="error" startIcon={<LinkOffIcon />} disabled={revoke.isPending} onClick={() => revoke.mutate(t.id, { onSuccess: () => mint.data?.id === t.id && mint.reset() })}>
                     Revoke
                   </Button>
                 }
@@ -205,10 +205,17 @@ function ImessageSection() {
         Text your mission from your phone: get status, answer the agent's questions, and say "GO" ahead of a bench action. Anything
         physical still waits for a click at the bench.
       </Typography>
+      {connections.data && !imessage?.capcomNumber && !imessage?.linked ? (
+        // No CAPCOM number means the server has no iMessage provider: a link code would have nowhere to go.
+        <Typography sx={{ color: "text.disabled" }}>iMessage isn't set up on this server.</Typography>
+      ) : (
+      <>
       {imessage?.linked ? (
         <Alert severity="success">Linked to {imessage.handle ?? "your phone"}.</Alert>
       ) : (
-        <Typography>Not linked yet.</Typography>
+        <Typography>
+          Not linked yet.{imessage?.capcomNumber && <> Your CAPCOM number is <strong>{imessage.capcomNumber}</strong>.</>}
+        </Typography>
       )}
       <Box>
         <Button variant="contained" disabled={code.isPending} onClick={() => code.mutate()}>
@@ -248,6 +255,8 @@ function ImessageSection() {
             </Typography>
           </Box>
         </Stack>
+      )}
+      </>
       )}
     </Section>
   );

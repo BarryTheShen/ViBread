@@ -71,6 +71,12 @@ export function createAiToolset(options: AiToolsetOptions): AiToolset {
     }
 
     const decision = await evaluatePolicy({ broker, store, def, ctx, args: toolCall.input });
+    // The broker hands back an identical action a human already approved (and nobody used yet): run it; `execute`
+    // consumes it one-shot, so it can't run twice.
+    if (decision.request?.status === "approved" && (decision.outcome === "approved" || decision.outcome === "user-approval")) {
+      approvals.set(toolCall.toolCallId, decision.request);
+      return "approved";
+    }
     switch (decision.outcome) {
       case "approved":
         return "approved";

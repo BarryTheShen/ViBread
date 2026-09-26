@@ -11,11 +11,12 @@ import { createMissionMachine, type MissionMachine, type MissionEvent } from "./
 import { createApprovalBroker } from "./services/approvals.js";
 import { createLinkService, type LinkService } from "./services/links.js";
 import { createTokenService, type TokenService } from "./services/tokens.js";
-import { createMessageStore, type MessageStore } from "./store/messages.js";
+import { createCapcomSpaceStore, type CapcomSpaceStore } from "./services/capcom-spaces.js";
+import { createBenchAskStore, type BenchAskStore } from "./services/bench-asks.js";
 import { createMissionStore } from "./store/missions.js";
+import { createMessageStore, type MessageStore } from "./store/messages.js";
 import { ensureOperatorUser } from "./auth.js";
 import type { AgentRuntime } from "./agents/index.js";
-export type { MissionMachine, MissionEvent, TokenService, LinkService, MessageStore };
 
 export interface AppContext {
   config: ServerConfig;
@@ -26,6 +27,8 @@ export interface AppContext {
   machine: MissionMachine;
   tokens: TokenService;
   links: LinkService;
+  capcomSpaces: CapcomSpaceStore;
+  benchAsks: BenchAskStore;
   missions: MissionService;
   tools: ToolRegistry;
   runtime: AgentRuntime;
@@ -49,6 +52,8 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
   const machine = createMissionMachine({ db: opened.db, sqlite: opened.sqlite, store });
   const tokens = createTokenService({ db: opened.db, sqlite: opened.sqlite });
   const links = createLinkService({ db: opened.db, sqlite: opened.sqlite });
+  const capcomSpaces = createCapcomSpaceStore({ db: opened.db, sqlite: opened.sqlite });
+  const benchAsks = createBenchAskStore({ store });
   const messages = createMessageStore({ db: opened.db, sqlite: opened.sqlite });
   const claudeAccounts = createClaudeAccountService({ config, db: opened.db, log });
   const runtime = createAgentRuntime({ config, log, store, broker, machine, messages, claudeAccounts });
@@ -61,6 +66,8 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
     machine,
     tokens,
     links,
+    capcomSpaces,
+    benchAsks,
     missions: runtime.missions,
     tools: runtime.tools,
     runtime,

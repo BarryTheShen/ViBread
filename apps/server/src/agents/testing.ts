@@ -132,8 +132,12 @@ export function memoryBroker(): MemoryBroker {
       if (outcome === "approved") return { outcome };
       if (outcome === "denied") return { outcome, reason: "permission mode denies state-changing actions" };
       const actionHash = hashJson({ revisionHash: input.revisionHash, action: input.action, input: input.input });
-      const existing = [...requests.values()].find((r) => r.missionId === input.missionId && r.actionHash === actionHash && r.status === "pending");
-      if (existing) return { outcome, request: structuredClone(existing) };
+      // Mirrors ServerCore's broker: an identical pending request, or an identical APPROVED one nobody consumed yet, is
+      // returned; denied / expired / consumed requests never are, so a retry creates a new pending request.
+      const existing = [...requests.values()].find(
+        (r) => r.missionId === input.missionId && r.revisionHash === input.revisionHash && r.actionHash === actionHash && (r.status === "pending" || r.status === "approved"),
+      );
+      if (existing) return { outcome: existing.status === "approved" && outcome !== "bench-click" ? "approved" : outcome, request: structuredClone(existing) };
       const request: ApprovalRequest = {
         id: randomUUID(),
         missionId: input.missionId,

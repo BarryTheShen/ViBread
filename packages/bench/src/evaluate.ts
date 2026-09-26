@@ -31,6 +31,7 @@ interface SignatureState {
   buttonPin?: string;
   buttonPart?: string;
   ledMismatch: boolean;
+  ledNoLight: boolean;
   ledExpectedPart?: string;
   ledExpectedOrder?: number;
   ledObservedOrder?: number;
@@ -439,6 +440,7 @@ function evaluateLeds(context: EvaluationContext): BenchTestResult {
     const observation = observationForPart(context.lines, "led.sequence", led.part, "which");
     const telemetryAnswer = observation === undefined ? undefined : String(observation.v);
     const missing = ask === undefined || answerMissing(raw);
+    if (raw === "none" || telemetryAnswer === "none") context.signatures.ledNoLight = true;
     let status: TestStatus = "unknown";
     let observed = missing ? "LED answer timed out or its exact prompt is missing" : raw ?? "no answer";
     if (!missing && raw === String(led.order)) {
@@ -622,6 +624,24 @@ function rowForPart(context: EvaluationContext, partId: string | undefined, pin?
   const parsed = hole === undefined ? undefined : parseHole(hole);
   return parsed?.kind === "terminal" ? parsed.row : undefined;
 }
+function buttonGroundRow(context: EvaluationContext, partId: string): number | undefined {
+  if (context.layout === undefined) return undefined;
+  const placement = context.layout.placements.find((candidate) => candidate.part === partId);
+  const groundNet = context.circuit.nets.find((net) => net.kind === "ground" && net.pins.some((ref) => ref.part === partId));
+  if (placement === undefined || groundNet === undefined) return undefined;
+  const profile = BREADBOARD_PROFILES[context.layout.breadboard];
+  const groundHoles = groundNet.pins.map((ref) => placement.pins[ref.pin]).filter((hole): hole is HoleId => hole !== undefined);
+  const groups = new Set(groundHoles.map((hole) => contactGroup(profile, hole)).filter((group): group is string => group !== null));
+  for (const jumper of context.layout.jumpers.filter((candidate) => candidate.net === groundNet.id)) {
+    for (const endpoint of [jumper.from, jumper.to]) {
+      const hole = endpointHole(endpoint);
+      const parsed = hole === undefined ? undefined : parseHole(hole);
+      if (parsed?.kind === "terminal" && hole !== undefined && groups.has(contactGroup(profile, hole) ?? "")) return parsed.row;
+    }
+  }
+  const parsed = groundHoles.map((hole) => parseHole(hole)).find((value) => value?.kind === "terminal");
+  return parsed?.kind === "terminal" ? parsed.row : undefined;
+}
 
 function primaryRule(events: RuleEvent[]): RuleEvent | undefined {
   return [...events].sort((left, right) => right.priority - left.priority)[0];
@@ -643,7 +663,7 @@ function summaryFor(event: RuleEvent | undefined, context: EvaluationContext, fa
     case "buttonStuckLow": {
       const pin = context.signatures.buttonPin ?? "the button pin";
       const part = context.signatures.buttonPart ?? context.subjects.find((subject) => subject.kind === "button")?.part ?? "button";
-      const row = rowForPart(context, part);
+      const row = buttonGroundRow(context, part) ?? rowForPart(context, part);
       return `Houston, we have a problem: ${pin} reads LOW even with ${part} released — its leg${row === undefined ? "" : ` shares row ${row}`} with the GND jumper.`;
     }
     case "ledMismatch": {
@@ -651,7 +671,8 @@ function summaryFor(event: RuleEvent | undefined, context: EvaluationContext, fa
       const expected = context.signatures.ledExpectedOrder ?? 0;
       const observed = context.signatures.ledObservedOrder ?? 0;
       const row = rowForPart(context, part);
-      return `Houston, we have a problem: ${part} on light ${expected} blinked as light ${observed}${row === undefined ? "" : ` near row ${row}`} — check the LED jumpers.`;
+      const observedText = observed === 0 ? "no light" : `light ${observed}`;
+      return `Houston, we have a problem: ${part} on light ${expected} showed ${observedText}${row === undefined ? "" : ` near row ${row}`} — check the LED jumpers.`;
     }
     case "lightPinnedRail": {
       const pin = context.signatures.lightPin ?? "the light pin";
@@ -678,15 +699,31 @@ function candidateScore(event: RuleEvent, cause: RuleCause): number {
 }
 
 function candidatesFor(events: RuleEvent[], context: EvaluationContext): BenchRunResult["diagnosis"]["candidates"] {
-  const candidates = events.flatMap((event) => event.causes.map((cause) => ({ event, cause, score: candidateScore(event, cause) })));
+  const candidates = events.flatMap((event) => event.causes.map((cause) => {
+    const likelihood = context.signatures.ledNoLight && event.signature === "ledMismatch"
+      ? cause.cause === "led-missing" ? 0.75 : cause.cause === "led-reversed" ? 0.2 : 0.05
+      : cause.likelihood;
+    return { event, cause, likelihood, score: event.priority + likelihood };
+  }));
   candidates.sort((left, right) => right.score - left.score);
-  return candidates.map(({ cause }) => ({
+  return candidates.map(({ cause, likelihood }) => ({
     cause: cause.cause,
     title: cause.title,
-    likelihood: cause.likelihood,
+    likelihood,
     highlight: highlightForCause(cause.cause, context),
     fix: cause.fix,
   }));
+}
+function summaryWithAmbiguity(summary: string, candidates: BenchRunResult["diagnosis"]["candidates"], context: EvaluationContext): string {
+  const divider = candidates.find((candidate) => candidate.cause === "divider-resistor-missing");
+  const jumper = candidates.find((candidate) => candidate.cause === "missing-jumper");
+  if (context.signatures.lightPinnedRail && divider !== undefined && jumper !== undefined && Math.abs(divider.likelihood - jumper.likelihood) <= 0.2) {
+    const pin = context.signatures.lightPin ?? "the light pin";
+    const part = context.signatures.lightPart ?? "light sensor";
+    const row = rowForPart(context, part);
+    return `Houston, we have a problem: ${pin} (${part}) is disconnected${row === undefined ? "" : ` near row ${row}`} — the divider resistor or its jumper is missing.`;
+  }
+  return summary;
 }
 
 function verdictFor(results: BenchTestResult[]): BenchRunResult["verdict"] {
@@ -721,6 +758,7 @@ export async function evaluateRun(input: {
     signatures: {
       buttonStuckLow: false,
       ledMismatch: false,
+      ledNoLight: false,
       lightPinnedRail: false,
       outputStuck: false,
       noBanner: !hasHello || noisyFailure,
@@ -787,6 +825,7 @@ export async function evaluateRun(input: {
     calibration: context.calibrations,
     verdict,
   };
+  if (verdict === "pass") return { ...baseResult, diagnosis: { ...ruleDiagnosis, attribution: "none", candidates: [] } };
   let candidates = ruleCandidates;
   if (input.layout !== undefined && input.faultDictionary !== undefined) {
     const dictionaryCandidates = rankFaults({
@@ -804,7 +843,7 @@ export async function evaluateRun(input: {
     }
     candidates = [...merged.values()].sort((left, right) => right.likelihood - left.likelihood || left.cause.localeCompare(right.cause));
   }
-  return { ...baseResult, diagnosis: { ...ruleDiagnosis, candidates } };
+  return { ...baseResult, diagnosis: { ...ruleDiagnosis, candidates, summary: summaryWithAmbiguity(ruleDiagnosis.summary, candidates, context) } };
 }
 
 export function calibrationMacros(calibration: Calibration[]): Record<string, number> {

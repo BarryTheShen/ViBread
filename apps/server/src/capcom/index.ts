@@ -12,7 +12,7 @@ import {
 } from "spectrum-ts";
 import { effect, imessage, nativeContactCard } from "spectrum-ts/providers/imessage";
 import { terminal } from "spectrum-ts/providers/terminal";
-import type { Actor, ApprovalRequest, TimelineEvent } from "@vibread/core";
+import type { Actor, ApprovalRequest, PhotoPartAnswer, TimelineEvent } from "@vibread/core";
 import type { AppContext } from "../context.js";
 
 interface CapcomApp {
@@ -28,6 +28,40 @@ interface ApprovalNotice {
   consequence: string;
 }
 
+export interface CapcomSpaces {
+  get(spaceId: string): Promise<{ spaceId: string; handle: string; userId: string; missionId?: string | null } | null>;
+  put(input: { spaceId: string; handle: string; userId: string; missionId?: string | null }): Promise<{ spaceId: string; handle: string; userId: string; missionId?: string | null }>;
+  setMission(spaceId: string, missionId: string | null): Promise<{ spaceId: string; handle: string; userId: string; missionId?: string | null } | null>;
+  listForMission(missionId: string): Promise<{ spaceId: string; handle: string; userId: string; missionId?: string | null }[]>;
+}
+
+interface PendingApproval {
+  notice: ApprovalNotice;
+  pollTitle: string;
+}
+
+export interface BenchAsk {
+  missionId: string;
+  askId: string;
+  test: string;
+  kind: string;
+  part?: string;
+  prompt: string;
+  choices: string[];
+  createdAt: number;
+  expiresAt: number;
+  status: "open" | "answered" | "closed";
+  answer?: string;
+  answeredBy?: Actor;
+}
+
+export interface BenchAsks {
+  open(input: { missionId: string; askId: string; test: string; kind: string; part?: string; prompt: string; choices: string[]; timeoutMs: number }): BenchAsk;
+  answer(missionId: string, askId: string, value: string, actor: Actor): boolean;
+  close(missionId: string, askId: string, answer?: string): void;
+  get(missionId: string, askId: string): BenchAsk | undefined;
+  current(missionId: string): BenchAsk | undefined;
+}
 interface SendState {
   readonly cloud: boolean;
   lastSentAt: number;
@@ -59,6 +93,25 @@ function contentText(message: Message): string {
   return "";
 }
 
+export function isSupportedInboundContentType(type: string | undefined): boolean {
+  return type === "text" || type === "attachment" || type === "poll_option";
+}
+
+export function isSelectedPollOption(content: Record<string, unknown>): boolean {
+  return content.selected !== false;
+}
+
+export function approvalOutcome(
+  status: "pending" | "approved" | "denied" | "expired" | "consumed",
+  decision: "approve-once" | "approve-mission" | "deny" | undefined,
+  requested: "approve-once" | "deny",
+): "approved" | "denied" | "expired" | "decided" {
+  if ((status === "approved" || status === "consumed") && decision === requested) return "approved";
+  if (status === "denied" && decision === requested) return "denied";
+  if (status === "expired") return "expired";
+  return "decided";
+}
+
 function senderHandle(space: Space, message: Message): string {
   return message.sender?.id ?? space.id;
 }
@@ -73,6 +126,12 @@ function normalizedVote(value: string): "approve-once" | "deny" | undefined {
 function linkCodeFrom(textValue: string): string | undefined {
   const match = /^(?:link(?:ing)?(?:\s+code)?[:\s]+)?([A-Z0-9-]{6,})$/i.exec(textValue.trim());
   return match?.[1];
+}
+
+export function missionSelection(value: string): number | null | undefined {
+  const match = /^mission(?:\s+(\d+))?$/i.exec(value.trim());
+  if (!match) return undefined;
+  return match[1] ? Number(match[1]) : null;
 }
 
 function missionBriefFrom(textValue: string): string | undefined {
@@ -101,6 +160,49 @@ function approvalFromEvent(event: TimelineEvent): ApprovalNotice | undefined {
     summary: stringValue(nested.summary) ?? "Approval requested",
     consequence: stringValue(nested.consequence) ?? "This action changes the mission.",
   };
+}
+
+function benchAskFromEvent(event: TimelineEvent): BenchAsk | undefined {
+  const data = asRecord(event.data);
+  const raw = asRecord(data?.ask) ?? data;
+  if (!raw) return undefined;
+  const missionId = stringValue(raw.missionId) ?? event.missionId;
+  const askId = stringValue(raw.askId) ?? stringValue(raw.id);
+  const prompt = stringValue(raw.prompt) ?? stringValue(raw.title);
+  const choices = Array.isArray(raw.choices) ? raw.choices.filter((choice): choice is string => typeof choice === "string" && choice.length > 0) : [];
+  if (!missionId || !askId || !prompt || choices.length === 0) return undefined;
+  const statusValue = stringValue(raw.status);
+  const status: BenchAsk["status"] = statusValue === "answered" || statusValue === "closed" ? statusValue : "open";
+  return {
+    missionId,
+    askId,
+    test: stringValue(raw.test) ?? "bench",
+    kind: stringValue(raw.kind) ?? "question",
+    ...(stringValue(raw.part) ? { part: stringValue(raw.part) } : {}),
+    prompt,
+    choices,
+    createdAt: typeof raw.createdAt === "number" ? raw.createdAt : Date.now(),
+    expiresAt: typeof raw.expiresAt === "number" ? raw.expiresAt : Date.now() + 20_000,
+    status,
+  };
+}
+
+export function benchAskOptionTitle(choice: string): string {
+  return choice.trim().toLowerCase() === "none" ? "None of them" : choice;
+}
+
+export function benchAskValueForOption(ask: Pick<BenchAsk, "choices">, optionTitle: string): string | undefined {
+  const normalized = optionTitle.trim().toLowerCase();
+  return ask.choices.find((choice) => choice.trim().toLowerCase() === normalized || benchAskOptionTitle(choice).toLowerCase() === normalized);
+}
+
+export function pollTitleForApproval(notice: ApprovalNotice): string {
+  return `Mission approval #${notice.id.slice(0, 8)}: ${notice.summary}`;
+}
+
+export function pendingApprovalIndex(queue: readonly PendingApproval[], pollTitle?: string): number {
+  if (!pollTitle) return queue.length > 0 ? 0 : -1;
+  return queue.findIndex((pending) => pending.pollTitle === pollTitle);
 }
 
 function eventSummary(event: TimelineEvent): string | undefined {
@@ -197,11 +299,67 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
     : await Spectrum({ ...configForCloud(ctx), providers: [imessage.config()] })) as unknown as CapcomApp;
   const sendState: SendState = { cloud: provider === "cloud", lastSentAt: 0 };
   const send = createSender(ctx, sendState);
+  const capcomSpaces = (ctx as AppContext & { capcomSpaces?: CapcomSpaces }).capcomSpaces;
+  const benchRelayContext = ctx as unknown as { benchAsks?: BenchAsks };
+  const benchAsks = benchRelayContext.benchAsks;
   const activeMissions = new Map<string, string>();
   const spacesByMission = new Map<string, Space>();
   const awaitingFirstReply = new Set<string>();
-  const pendingApprovalsBySpace = new Map<string, ApprovalNotice[]>();
+  const pendingApprovalsBySpace = new Map<string, PendingApproval[]>();
+  const openBenchAskBySpace = new Map<string, { ask: BenchAsk; pollTitle: string }>();
+  const closedBenchPollsBySpace = new Map<string, Set<string>>();
+  const closedBenchChoicesBySpace = new Map<string, Set<string>>();
   let stopping = false;
+
+  const rememberBinding = async (space: Space, handle: string, userId: string): Promise<void> => {
+    if (!capcomSpaces) return;
+    try {
+      const binding = await capcomSpaces.get(space.id);
+      if (!binding) {
+        await capcomSpaces.put({ spaceId: space.id, handle, userId });
+        return;
+      }
+      if (binding.userId === userId && binding.missionId) {
+        activeMissions.set(handle, binding.missionId);
+        spacesByMission.set(binding.missionId, space);
+      }
+    } catch (error) {
+      ctx.log.warn({ err: error, spaceId: space.id }, "CAPCOM space lookup failed");
+    }
+  };
+
+  const persistBinding = async (space: Space, handle: string, userId: string): Promise<void> => {
+    if (!capcomSpaces) return;
+    try {
+      await capcomSpaces.put({ spaceId: space.id, handle, userId });
+    } catch (error) {
+      ctx.log.warn({ err: error, spaceId: space.id }, "CAPCOM space binding failed");
+    }
+  };
+
+  const attachMission = async (space: Space, handle: string, missionId: string): Promise<void> => {
+    activeMissions.set(handle, missionId);
+    spacesByMission.set(missionId, space);
+    if (!capcomSpaces) return;
+    try {
+      await capcomSpaces.setMission(space.id, missionId);
+    } catch (error) {
+      ctx.log.warn({ err: error, spaceId: space.id, missionId }, "CAPCOM mission attachment failed");
+    }
+  };
+
+  const rememberClosedBenchAsk = (space: Space, pending: { ask: BenchAsk; pollTitle: string }): void => {
+    openBenchAskBySpace.delete(space.id);
+    const closedPolls = closedBenchPollsBySpace.get(space.id) ?? new Set<string>();
+    closedPolls.add(pending.pollTitle);
+    closedBenchPollsBySpace.set(space.id, closedPolls);
+    const closedChoices = closedBenchChoicesBySpace.get(space.id) ?? new Set<string>();
+    for (const choice of pending.ask.choices) {
+      closedChoices.add(choice.trim().toLowerCase());
+      closedChoices.add(benchAskOptionTitle(choice).trim().toLowerCase());
+    }
+    closedBenchChoicesBySpace.set(space.id, closedChoices);
+  };
 
   const sendText = async (space: Space, value: string): Promise<void> => {
     await send(space, text(value));
@@ -221,16 +379,65 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
 
   const sendApproval = async (space: Space, notice: ApprovalNotice): Promise<void> => {
     const queue = pendingApprovalsBySpace.get(space.id) ?? [];
-    queue.push(notice);
+    const pollTitle = pollTitleForApproval(notice);
+    queue.push({ notice, pollTitle });
     pendingApprovalsBySpace.set(space.id, queue);
     const pollContent = poll(
-      `Mission approval: ${notice.summary}`,
+      pollTitle,
       option("GO"),
       option("NO-GO"),
     );
     await send(space, pollContent);
     await sendText(space, `Reply GO or NO-GO. ${notice.consequence}`);
   };
+
+  const sendBenchAsk = async (space: Space, ask: BenchAsk): Promise<void> => {
+    if (openBenchAskBySpace.has(space.id)) return;
+    const pollTitle = ask.prompt;
+    openBenchAskBySpace.set(space.id, { ask, pollTitle });
+    await send(space, poll(
+      pollTitle,
+      ...ask.choices.map((choice) => option(benchAskOptionTitle(choice))),
+    ));
+    await sendText(space, `Reply ${ask.choices.map(benchAskOptionTitle).join(" / ")}.`);
+  };
+
+  const answerBenchAsk = async (space: Space, handle: string, optionTitle: string, pollTitle?: string): Promise<boolean> => {
+    const pending = openBenchAskBySpace.get(space.id);
+    if (!pending) {
+      const closed = closedBenchPollsBySpace.get(space.id);
+      const closedChoices = closedBenchChoicesBySpace.get(space.id);
+      if ((pollTitle && closed?.has(pollTitle)) || closedChoices?.has(optionTitle.trim().toLowerCase())) {
+        await sendText(space, "That question already closed.");
+        return true;
+      }
+      return false;
+    }
+    const value = benchAskValueForOption(pending.ask, optionTitle);
+    if (!value) {
+      await sendText(space, `Reply ${pending.ask.choices.map(benchAskOptionTitle).join(" / ")}.`);
+      return true;
+    }
+    if (!benchAsks) return false;
+    const actor = await actorForHandle(handle);
+    if (!actor) return false;
+    try {
+      const answered = await benchAsks.answer(pending.ask.missionId, pending.ask.askId, value, actor);
+      if (!answered) {
+        rememberClosedBenchAsk(space, pending);
+        await sendText(space, "That question already closed.");
+        return true;
+      }
+      rememberClosedBenchAsk(space, pending);
+      await sendText(space, "Answer recorded.");
+      return true;
+    } catch {
+      rememberClosedBenchAsk(space, pending);
+      await sendText(space, "That question already closed.");
+      return true;
+    }
+  };
+
 
   const sendStepImage = async (space: Space, event: TimelineEvent): Promise<void> => {
     const step = buildStepFromEvent(event);
@@ -252,11 +459,22 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
     if (!missionId) return;
     const space = spacesByMission.get(missionId);
     if (!space) return;
+    if (event.kind === "bench.ask.opened") {
+      const ask = benchAskFromEvent(event);
+      if (ask) await sendBenchAsk(space, ask);
+    }
+    if (event.kind === "bench.ask.closed") {
+      const ask = benchAskFromEvent(event);
+      const raw = asRecord(event.data);
+      const nested = asRecord(raw?.ask) ?? raw;
+      const askId = ask?.askId ?? stringValue(nested?.askId) ?? stringValue(nested?.id);
+      const pending = openBenchAskBySpace.get(space.id);
+      if (pending && (!askId || pending.ask.askId === askId)) rememberClosedBenchAsk(space, pending);
+    }
     if (event.kind === "approval.requested") {
       const notice = approvalFromEvent(event);
       if (notice) await sendApproval(space, notice);
     }
-    if (event.kind === "build.step" || event.kind === "step") await sendStepImage(space, event);
     if (isFaultAlertEvent(event)) {
       const summary = eventSummary(event);
       if (summary) await sendText(space, faultAlertText(summary));
@@ -273,18 +491,33 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
     void handleTimelineEvent(event).catch((error: unknown) => ctx.log.warn({ err: error }, "CAPCOM timeline event failed"));
   });
 
-  const handleVote = async (space: Space, handle: string, vote: "approve-once" | "deny"): Promise<boolean> => {
+  const handleVote = async (space: Space, handle: string, vote: "approve-once" | "deny", pollTitle?: string): Promise<boolean> => {
     const queue = pendingApprovalsBySpace.get(space.id);
-    const notice = queue?.shift();
-    if (!notice) return false;
-    if (queue && queue.length === 0) pendingApprovalsBySpace.delete(space.id);
+    if (!queue) return false;
+    const index = pendingApprovalIndex(queue, pollTitle);
+    if (index < 0) return false;
+    const pending = queue[index];
+    if (!pending) return false;
     const actor = await actorForHandle(handle);
     if (!actor) return false;
-    await ctx.missions.decide(notice.id, vote, actor);
-    if (notice.actionClass === "physical") {
-      await sendText(space, vote === "approve-once" ? "Pre-approval recorded. A human must still click the bench control." : "Physical action denied; nothing was run.");
+    const outcome = await ctx.missions.decide(pending.notice.id, vote, actor);
+    queue.splice(index, 1);
+    if (queue.length === 0) pendingApprovalsBySpace.delete(space.id);
+    const result = approvalOutcome(outcome.status, outcome.decision, vote);
+    if (result === "approved") {
+      if (pending.notice.actionClass === "physical") {
+        await sendText(space, "Pre-approval recorded. A human must still click the bench control.");
+      } else {
+        await sendText(space, "GO recorded.");
+      }
+    } else if (result === "denied") {
+      if (pending.notice.actionClass === "physical") {
+        await sendText(space, "Physical action denied; nothing was run.");
+      } else {
+        await sendText(space, "NO-GO recorded.");
+      }
     } else {
-      await sendText(space, vote === "approve-once" ? "GO recorded." : "NO-GO recorded.");
+      await sendText(space, result === "expired" ? "That approval already expired." : "That approval was already decided.");
     }
     return true;
   };
@@ -310,7 +543,7 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
       // Photo checks are advisory; the default step is still useful when build state is unavailable.
     }
     const result = await ctx.runtime.checkPhoto({ missionId, step, jpeg: new Uint8Array(jpeg) });
-    await sendText(space, `${result.summary}\n${result.answers.map((answer) => `${answer.part}: ${answer.status} — ${answer.note}`).join("\n")}`);
+    await sendText(space, `${result.summary}\n${result.answers.map((answer: PhotoPartAnswer) => `${answer.part}: ${answer.status} — ${answer.note}`).join("\n")}`);
   };
 
   const handleLinkedText = async (space: Space, handle: string, userId: string, value: string): Promise<void> => {
@@ -318,13 +551,34 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
       await sendLinkAfterReply(space, userId);
       return;
     }
+    if (await answerBenchAsk(space, handle, value)) return;
     const pendingVote = normalizedVote(value);
     if (pendingVote && (await handleVote(space, handle, pendingVote))) return;
+    const requested = missionSelection(value);
+    if (requested !== undefined) {
+      const missions = await ctx.missions.list(userId);
+      if (requested === null) {
+        if (missions.length === 0) {
+          await sendText(space, "You have no missions yet. Reply `brief <what you want to build>` to begin.");
+        } else {
+          await sendText(space, `Your missions:\n${missions.map((mission, index) => `${index + 1}. ${mission.title} — ${mission.phase}`).join("\n")}\nReply \`mission <number>\` to attach.`);
+        }
+        return;
+      }
+      const selected = missions[requested - 1];
+      if (!selected) {
+        await sendText(space, `Mission ${requested} was not found. Reply \`mission\` to list your missions.`);
+        return;
+      }
+      await attachMission(space, handle, selected.id);
+      await sendText(space, `Attached to mission ${requested}: ${selected.title}.`);
+      return;
+    }
 
     if (value.trim().toLowerCase() === "status") {
       const missionId = activeMissions.get(handle);
       if (!missionId) {
-        await sendText(space, "No active mission. Reply `brief <what you want to build>` to begin.");
+        await sendText(space, "No active mission. Reply `mission` to choose one or `brief <what you want to build>` to begin.");
         return;
       }
       const detail = await ctx.missions.detail(missionId);
@@ -336,8 +590,7 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
     if (brief) {
       const actor: Actor = { kind: "human", id: userId, channel: "imessage" };
       const mission = await ctx.missions.create({ brief, inventory: [], owner: actor, title: brief.slice(0, 80) });
-      activeMissions.set(handle, mission.id);
-      spacesByMission.set(mission.id, space);
+      await attachMission(space, handle, mission.id);
       const result = await ctx.missions.say(mission.id, brief, actor);
       await sendText(space, result.question ? `${result.text}\nQuestion: ${result.question}` : result.text);
       return;
@@ -345,7 +598,7 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
 
     const missionId = activeMissions.get(handle);
     if (!missionId) {
-      await sendText(space, "Reply `brief <what you want to build>` to begin a mission.");
+      await sendText(space, "Reply `mission` to choose one or `brief <what you want to build>` to begin.");
       return;
     }
     spacesByMission.set(missionId, space);
@@ -356,6 +609,8 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
 
   const handleMessage = async (space: Space, message: Message): Promise<void> => {
     const handle = senderHandle(space, message);
+    const linkedUserId = await ctx.links.userForHandle(handle);
+    if (linkedUserId) await rememberBinding(space, handle, linkedUserId);
     const content = contentRecord(message);
     const type = stringValue(content.type);
     if (type === "attachment") {
@@ -363,16 +618,21 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
       return;
     }
     if (type === "poll_option") {
+      if (!isSelectedPollOption(content)) return;
       const optionValue = asRecord(content.option);
-      const vote = normalizedVote(stringValue(optionValue?.title) ?? stringValue(content.title) ?? "");
-      if (vote) await handleVote(space, handle, vote);
+      const pollValue = asRecord(content.poll);
+      const optionTitle = stringValue(optionValue?.title) ?? stringValue(content.title) ?? "";
+      const pollTitle = stringValue(pollValue?.title);
+      if (await answerBenchAsk(space, handle, optionTitle, pollTitle)) return;
+      const vote = normalizedVote(optionTitle);
+      if (vote) await handleVote(space, handle, vote, pollTitle);
       return;
     }
-    if (type === "reaction") return;
+    if (!isSupportedInboundContentType(type)) return;
 
     const value = contentText(message).trim();
     const waiting = awaitingFirstReply.has(handle);
-    const userId = await ctx.links.userForHandle(handle);
+    const userId = linkedUserId;
     if (waiting && userId) {
       await handleLinkedText(space, handle, userId, value);
       return;
@@ -382,6 +642,7 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
       if (code) {
         const redeemed = await ctx.links.redeem(code, handle);
         if (redeemed) {
+          await persistBinding(space, handle, redeemed.userId);
           awaitingFirstReply.add(handle);
           await sendText(space, "CAPCOM linked. Reply once to continue; links and the contact card come after your reply.");
         } else {

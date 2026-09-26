@@ -43,6 +43,10 @@ describe("pipeline", () => {
     expect(byConsole.GUIDO!.verdict).toBe("GO");
     expect(byConsole.FIDO!.verdict).toBe("GO");
     expect(byConsole.FAO!.verdict).toBe("GO");
+    // SPICE rides along as EECOM evidence: one row per LED branch (ngspice is installed on this machine), never an error.
+    const spice = byConsole.EECOM!.evidence?.spice as { rows: { part: string }[] } | undefined;
+    expect(spice?.rows.map((r) => r.part).sort()).toEqual(golden.circuit.parts.filter((p) => p.module === "led").map((p) => p.id).sort());
+    expect(byConsole.EECOM!.findings.filter((f) => f.ruleId.startsWith("SPICE-") && f.severity === "error")).toEqual([]);
     expect(results.compile?.ok).toBe(true);
     expect(results.compile).not.toHaveProperty("hex");
     expect(results.sim).not.toHaveProperty("traces");

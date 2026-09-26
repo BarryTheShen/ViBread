@@ -54,7 +54,7 @@ export function createServerAuth(config: ServerConfig, db: DB): ServerAuth {
       ...(config.google ? { google: { clientId: config.google.clientId, clientSecret: config.google.clientSecret } } : {}),
       ...(config.github ? { github: { clientId: config.github.clientId, clientSecret: config.github.clientSecret } } : {}),
     },
-    emailAndPassword: { enabled: true, autoSignIn: true, requireEmailVerification: false },
+    emailAndPassword: { enabled: true, disableSignUp: true, autoSignIn: true, requireEmailVerification: false },
     plugins: [
       jwt(),
       mcp({

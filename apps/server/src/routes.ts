@@ -1,4 +1,4 @@
-import { Router, type Express, type Request, type Response } from "express";
+import { Router, type Express, type Request, type RequestHandler, type Response } from "express";
 import multer from "multer";
 import sharp from "sharp";
 import { heifToJpeg } from "heif2jpeg";
@@ -17,9 +17,50 @@ import { applyCalibration, compileBenchFirmware, compileSketch } from "@vibread/
 import { calibrationMacros, evaluateRun, planSelfTest } from "@vibread/bench";
 import { loadFaultDictionary } from "@vibread/tools";
 import { runs } from "./db/schema.js";
+import { SqlApprovalBroker } from "./services/approvals.js";
 import type { AppContext } from "./context.js";
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
+interface WebUser {
+  id: string;
+  name: string;
+  email?: string;
+  image?: string;
+}
+
+export function missionOwnerMiddleware(ctx: AppContext): RequestHandler {
+  return async (req, res, next) => {
+    try {
+      const user = userFromLocals(res);
+      if (!user) return next(httpError(401, "UNAUTHORIZED", "sign in required"));
+      const mission = await ctx.store.getMission(String(req.params.id));
+      if (!mission || mission.ownerId !== user.id) return next(httpError(404, "MISSION_NOT_FOUND", "mission not found"));
+      res.locals.mission = mission;
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+export function approvalOwnerMiddleware(ctx: AppContext): RequestHandler {
+  return async (req, res, next) => {
+    try {
+      const user = userFromLocals(res);
+      if (!user) return next(httpError(401, "UNAUTHORIZED", "sign in required"));
+      const approval = await ctx.broker.get(String(req.params.approvalId));
+      if (approval) {
+        const mission = await ctx.store.getMission(approval.missionId);
+        if (!mission || mission.ownerId !== user.id) return next(httpError(404, "MISSION_NOT_FOUND", "mission not found"));
+        res.locals.mission = mission;
+      }
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
 
 export function mountApi(app: Express, ctx: AppContext): void {
   const router = Router();
@@ -86,6 +127,10 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const artifact = await ctx.store.getArtifact(hash);
     if (!artifact) throw httpError(404, "ARTIFACT_NOT_FOUND", "artifact not found");
     res.setHeader("Content-Type", artifact.contentType);
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    if (artifact.contentType.toLowerCase().startsWith("image/svg+xml")) {
+      res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
+    }
     res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
     res.send(Buffer.from(artifact.data));
   });
@@ -140,10 +185,79 @@ export function mountApi(app: Express, ctx: AppContext): void {
   router.get("/missions/:id/build", async (req, res) => {
     res.json(await ctx.missions.build(String(req.params.id)));
   });
+  router.get("/missions/:id/bench/requests", async (req, res) => {
+    const missionId = String(req.params.id);
+    const current = await currentRevisionForBench(ctx, missionId);
+    const requests = await sqlApprovalBroker(ctx).listBenchRequests(missionId, current.hash, current.revision);
+    res.json({ requests });
+  });
+  router.post("/missions/:id/bench/requests/:approvalId/start", async (req, res) => {
+    const missionId = String(req.params.id);
+    const current = await currentRevisionForBench(ctx, missionId);
+    const started = await sqlApprovalBroker(ctx).startBenchRequest({
+      approvalId: String(req.params.approvalId),
+      missionId,
+      revisionHash: current.hash,
+      revision: current.revision,
+      actor: actorFor(res, ctx),
+    });
+    res.json(started);
+  });
+  router.post("/missions/:id/bench/requests/:approvalId/deny", async (req, res) => {
+    const missionId = String(req.params.id);
+    const current = await currentRevisionForBench(ctx, missionId);
+    await sqlApprovalBroker(ctx).denyBenchRequest({
+      approvalId: String(req.params.approvalId),
+      missionId,
+      revisionHash: current.hash,
+      revision: current.revision,
+      actor: actorFor(res, ctx),
+    });
+    res.status(204).send();
+  });
+  router.post("/missions/:id/bench/asks", async (req, res) => {
+    const body = req.body as { askId?: unknown; test?: unknown; kind?: unknown; part?: unknown; prompt?: unknown; choices?: unknown; timeoutMs?: unknown };
+    if (typeof body.askId !== "string" || typeof body.test !== "string" || typeof body.kind !== "string" || typeof body.prompt !== "string" || !Array.isArray(body.choices) || body.choices.some((choice) => typeof choice !== "string") || typeof body.timeoutMs !== "number") {
+      throw httpError(400, "INVALID_REQUEST", "askId, test, kind, prompt, choices, and timeoutMs are required");
+    }
+    const ask = ctx.benchAsks.open({
+      missionId: String(req.params.id),
+      askId: body.askId,
+      test: body.test,
+      kind: body.kind,
+      ...(typeof body.part === "string" ? { part: body.part } : {}),
+      prompt: body.prompt,
+      choices: body.choices as string[],
+      timeoutMs: body.timeoutMs,
+    });
+    res.status(201).json(ask);
+  });
+  router.get("/missions/:id/bench/asks/:askId", async (req, res) => {
+    const ask = ctx.benchAsks.get(String(req.params.id), String(req.params.askId));
+    if (!ask) throw httpError(404, "ASK_NOT_FOUND", "bench ask not found");
+    res.json(ask);
+  });
+  router.post("/missions/:id/bench/asks/:askId/close", async (req, res) => {
+    const missionId = String(req.params.id);
+    const askId = String(req.params.askId);
+    if (!ctx.benchAsks.get(missionId, askId)) throw httpError(404, "ASK_NOT_FOUND", "bench ask not found");
+    const body = req.body as { answer?: unknown };
+    if (body.answer !== undefined && typeof body.answer !== "string") throw httpError(400, "INVALID_REQUEST", "answer must be a string");
+    ctx.benchAsks.close(missionId, askId, body.answer as string | undefined);
+    res.status(204).send();
+  });
+
+
   router.post("/missions/:id/build/step", async (req, res) => {
     const missionId = String(req.params.id);
     const n = parsePositiveInt((req.body as { n?: unknown }).n);
     const before = await ctx.missions.build(missionId);
+    const events = await ctx.store.listEvents(missionId);
+    const alreadyDone = events.some((event) => event.kind === "build.step" && event.revision === before.revision && eventStepNumber(event.data) === n);
+    if (alreadyDone) {
+      res.json(before);
+      return;
+    }
     await ctx.store.appendEvent({
       missionId,
       channel: "web",
@@ -165,9 +279,9 @@ export function mountApi(app: Express, ctx: AppContext): void {
     if (body.kind !== "bench" && body.kind !== "app") throw httpError(400, "INVALID_KIND", "kind must be bench or app");
     const mission = await ctx.store.getMission(missionId);
     if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
-    const revisionNumber = mission.releasedRevision ?? mission.currentRevision;
-    const revision = revisionNumber === undefined ? null : await ctx.store.getRevision(missionId, revisionNumber);
-    if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
+    if (mission.releasedRevision === undefined) throw httpError(409, "RELEASE_REQUIRED", "Press GO for build first");
+    const revision = await ctx.store.getRevision(missionId, mission.releasedRevision);
+    if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "released revision not found");
     const key = body.kind === "bench" ? "bench.hex" : "app.hex";
     const cachedHash = revision.results.artifacts[key];
     if (cachedHash) {
@@ -241,11 +355,16 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const missionId = String(req.params.id);
     if (!req.file) throw httpError(400, "PHOTO_REQUIRED", "multipart field photo is required");
     const step = parsePositiveInt(req.body.step ?? req.query.step);
-    let input = new Uint8Array(req.file.buffer);
-    if (req.file.mimetype === "image/heic" || req.file.mimetype === "image/heif" || /\.hei[cf]$/i.test(req.file.originalname)) {
-      input = new Uint8Array(await heifToJpeg(input));
+    let jpeg: Buffer;
+    try {
+      let input = new Uint8Array(req.file.buffer);
+      if (req.file.mimetype === "image/heic" || req.file.mimetype === "image/heif" || /\.hei[cf]$/i.test(req.file.originalname)) {
+        input = new Uint8Array(await heifToJpeg(input));
+      }
+      jpeg = await sharp(input).rotate().resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+    } catch {
+      throw httpError(400, "bad_image", "photo is not a valid image");
     }
-    const jpeg = await sharp(input).rotate().resize({ width: 1600, height: 1600, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
     const revision = await ctx.store.getRevision(missionId);
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
     const photo = await ctx.runtime.checkPhoto({ missionId, step, jpeg: new Uint8Array(jpeg) });
@@ -310,13 +429,31 @@ export function mountApi(app: Express, ctx: AppContext): void {
   app.use("/api", router);
 }
 
-function actorUser(res: Response, ctx: AppContext): { id: string; name: string; email?: string; image?: string } {
-  const user = res.locals.user as { id: string; name: string; email?: string; image?: string } | undefined;
+function sqlApprovalBroker(ctx: AppContext): SqlApprovalBroker {
+  return ctx.broker as SqlApprovalBroker;
+}
+
+async function currentRevisionForBench(ctx: AppContext, missionId: string): Promise<{ revision: number | null; hash: string }> {
+  const mission = await ctx.store.getMission(missionId);
+  if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
+  if (mission.currentRevision === undefined) return { revision: null, hash: "none" };
+  const revision = await ctx.store.getRevision(missionId, mission.currentRevision);
+  if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
+  return { revision: revision.n, hash: revision.hash };
+}
+
+function userFromLocals(res: Response): WebUser | undefined {
+  const user = res.locals.user as WebUser | undefined;
+  if (!user || typeof user.id !== "string" || typeof user.name !== "string") return undefined;
+  return user;
+}
+
+function actorUser(res: Response, ctx: AppContext): WebUser {
+  const user = userFromLocals(res);
   if (user) return user;
   if (ctx.config.singleOperator) return { id: "operator", name: "Operator" };
   throw httpError(401, "UNAUTHORIZED", "sign in required");
 }
-
 function actorFor(res: Response, ctx: AppContext): Actor {
   const user = actorUser(res, ctx);
   return { kind: "human", id: user.id, name: user.name, channel: "web" };
@@ -349,12 +486,17 @@ function isPermissionMode(value: unknown): value is PermissionMode {
   return value === "plan" || value === "ask" || value === "review" || value === "autopilot";
 }
 
+function eventStepNumber(data: unknown): number | undefined {
+  if (typeof data !== "object" || data === null || Array.isArray(data) || !("n" in data)) return undefined;
+  const n = data.n;
+  return typeof n === "number" && Number.isInteger(n) ? n : undefined;
+}
+
 function parsePositiveInt(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(n) || n < 1) throw httpError(400, "INVALID_NUMBER", "expected a positive integer");
   return n;
 }
-
 interface HttpError extends Error {
   status: number;
   code: string;

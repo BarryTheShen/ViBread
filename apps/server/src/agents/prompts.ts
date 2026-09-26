@@ -4,6 +4,7 @@ import {
   MODE_LABELS,
   MODULE_KEYS,
   MODULES,
+  photoresistorOhms,
   SCENARIO_CATEGORIES,
   type InventoryItem,
   type Mission,
@@ -49,6 +50,13 @@ function boardFacts(): string {
   return `${uno.name}: 5 V logic. PWM pins: ${pwm}. Analog inputs: ${adc}. Design limit ${uno.limits.pinDesignMa} mA per pin, ${uno.limits.vccGndTotalMa} mA total through the chip. D0/D1 are the USB serial line.`;
 }
 
+/** set-light level → A0 reading for the standard divider (photoresistor to 5V, 10 kΩ to GND), from the simulator's model. */
+function lightTable(): string {
+  return [0.1, 0.2, 0.3, 0.4, 0.5, 0.55, 0.6, 0.61, 0.62, 0.63, 0.65, 0.7, 0.8, 0.9]
+    .map((level) => `${level}→${Math.round((1023 * 10_000) / (10_000 + photoresistorOhms(level)))}`)
+    .join(", ");
+}
+
 function inventoryLines(inventory: InventoryItem[]): string {
   if (!inventory.length) return "(the user listed no parts — ask what they have, or design with common starter-kit parts and say so)";
   return inventory.map((i) => `- ${i.count}× ${i.module}${i.params ? ` ${JSON.stringify(i.params)}` : ""}${i.note ? ` — ${i.note}` : ""}`).join("\n");
@@ -83,6 +91,10 @@ ${inventoryLines(mission.inventory)}
 Use ONLY these parts, and never more of a part than the count listed (params must match, e.g. LED colors, resistor
 values). If the brief truly needs something they don't have, say so plainly and call add_part (the user must approve) before
 designing with it.
+ViBread can't build motors, servos, relays, mains, or anything that needs its own power supply: the checks and the
+simulator don't cover them, so never add_part or design them (not as "generic" either). If the brief needs one, say so
+plainly, offer the closest version with the parts they have (e.g. a light pattern instead of a moving flag), and ask
+which they want.
 
 # Module library (the only part kinds that exist)
 ${moduleLibrary()}
@@ -124,6 +136,8 @@ ${boardFacts()}
     #define VB_CAL_LDR1_DARK 300
     #endif
   (and VB_CAL_<PART>_HYST for hysteresis). The bench measures the real room and replaces them before the final flash.
+  State the defaults in "assumptions" as A0 readings, e.g. "Dark below a reading of 300, bright again above 340 (the bench
+  calibrates both)" — the test author can't see the sketch and needs them to test hysteresis.
 
 # Safety rules (EECOM enforces them; design for them up front)
 - Every LED has a series resistor (220–1 kΩ at 5 V). No pin drives more than 20 mA; keep the total under 200 mA.
@@ -163,10 +177,12 @@ that check a design does what the person asked. You never see the firmware, on p
 Semantics (the ATmega328P simulator implements exactly this):
 - Virtual time starts at 0 at reset. "setup" values hold from t = 0. Defaults: light 0.8 (lit room), analog 0.0, digital false (button released).
 - {"wait": ms} advances time. {"press": {part, holdMs=120, gapMs=150}} presses, holds, releases, waits.
-- {"bounce": {part, to, edges=6, ms=8}} simulates contact bounce ending in state "to".
+- {"bounce": {part, to, edges=6, ms=8}} simulates contact bounce ending in state "to" (true = held down, false = released).
+  A bouncy press is bounce to true, then later bounce to false; releasing a button is never a press by itself.
 - {"set-digital": {part, value}}, {"set-light": {part, level 0..1}}, {"set-analog": {part, value 0..1}}.
 - {"expect-pin": {pin, level: high|low}} checks a board pin now. {"expect-part": {part, state: on|off, windowMs=50}} watches an LED/active
-  buzzer over a window (on = lit ≥ 90%, off = ≤ 10%). {"expect-pwm": {pin, min, max, windowMs}}. {"expect-tone": {part, minHz, maxHz}}.
+  buzzer over a window (on = lit ≥ 90%, off = ≤ 10%), so a dimmed (PWM) LED is neither: check in-between brightness with
+  {"expect-pwm": {pin, min, max, windowMs}} (duty 0..1). {"expect-tone": {part, minHz, maxHz}}.
   {"expect-serial": {contains, withinMs}} — avoid unless the intent names serial output.
 
 Rules:
@@ -181,7 +197,15 @@ Rules:
     clearly bright) and "hysteresis" (a small change near the switch point must not flip the output back); with a
     potentiometer also "edge" (both ends of the knob travel).
 - Give the sketch time: wait ≥ 60 ms after a change before expecting its effect; use expect-part windows for LEDs.
-- Light thresholds are calibrated on the bench, so use clearly dark (≤ 0.1) and clearly bright (≥ 0.7) levels, not borderline values.
+- Every step advances virtual time: wait, press (holdMs + gapMs), bounce, and every expect window. For timed behavior
+  (countdowns, blinks, durations), add these up from the triggering press and keep each expect window ≥ 150 ms away from
+  any moment the output is meant to change; a press acts on its press edge (after debounce), not on release.
+- Every expectation must be able to fail if the behavior were wrong (never e.g. expect-pwm min 0 max 1).
+- Light: set-light levels give these A0 readings (photoresistor to 5V, 10 kΩ to GND; wired the other way, 1023 minus
+  them): ${lightTable()}. "threshold" tests use clearly dark (≤ 0.1) and clearly bright (≥ 0.8). "hysteresis" tests need
+  the switch readings from the intent or assumptions (if none are stated, ViBread's default: dark below 300, bright again
+  above 340): pick a level whose reading is between them, reach it once from clearly dark (the dark behavior must hold)
+  and once from clearly bright (the bright behavior must hold).
 - Keep each scenario under ~5 s of virtual time. author must be "test-author".
 
 ${TEST_EXAMPLE}`;
@@ -193,11 +217,17 @@ beginner understands. Compare, in order:
 2. Intent ↔ IR: do the parts and nets make that behavior physically possible with the parts the person has?
 3. IR ↔ sketch: do the pin roles match what the sketch configures; are buttons debounced and acted on once per press; do
    light/knob thresholds use hysteresis and VB_CAL_<PART>_<KEY> macros; are D0/D1 left free; no blocking delay() > 50 ms?
-4. Intent ↔ tests ↔ results: does each clause have a test that would fail if the behavior were wrong, and did they pass?
+4. Sketch ↔ intent: trace the sketch by hand for each clause — walk its lookup tables, bit masks and pin arrays and say
+   which part does what (e.g. which LED lights first). A mismatch with a clause is a NO-GO.
+5. Intent ↔ tests ↔ results: does each clause have a test that would fail if the behavior were wrong, and did they pass?
+   Passing tests prove only what they assert: when no test checks a clause's detail (order, direction, timing), your
+   trace in step 4 is the only check, so never vote GO just because every console is GO.
 Vote NO-GO only for concrete problems found in these comparisons or a safety concern. Otherwise vote GO. Each concern names
 the parts involved and a fix.`;
 
 export const PHOTO_SYSTEM = `You check a phone photo of a breadboard against the expected build step. For each listed part answer
 correct / wrong / missing / unknown with a short note. Say "unknown" whenever the photo doesn't show it clearly — never guess.
+Say "missing" only when you can clearly see its holes and they are empty, and "correct" only when you can see the part in
+its holes. The expected picture is a drawing: the part added in this step is drawn solid, parts from earlier steps faded.
 Pay special attention to LED direction (long leg / flat side), which holes the legs are in, and resistor bands. Your answer is
 advisory: the electrical self-test is the authority.`;

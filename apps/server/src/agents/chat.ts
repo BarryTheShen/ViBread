@@ -7,8 +7,6 @@ import type { MessageStore } from "../store/messages.js";
 import type { ApprovalLinks } from "./approval-links.js";
 import type { RunManager } from "./runs.js";
 
-const OPERATOR: Actor = { kind: "human", id: "operator", name: "Operator", channel: "web" };
-
 function sendError(res: Response, status: number, code: string, message: string): void {
   res.status(status).json({ error: { code, message } });
 }
@@ -46,22 +44,32 @@ function userMessage(body: unknown, actor: Actor): UIMessage | null {
 export function mountChat(app: Express, deps: { store: MissionStore; messages: MessageStore; runs: RunManager; links: ApprovalLinks; log: Logger }): void {
   const { store, runs, links, log } = deps;
 
-  async function mission(req: Request, res: Response): Promise<string | null> {
-    const id = String(req.params.id);
-    const found = await store.getMission(id);
-    const user = res.locals.user as { id?: string } | undefined;
-    if (!found || (user?.id && found.ownerId !== user.id)) {
-      sendError(res, 404, "not_found", "Mission not found.");
+  /**
+   * Every chat route requires a signed-in user who owns the mission (audit F3): a chat turn spends the owner's Claude
+   * credential. `res.locals.user` is set by the server's session middleware (the operator in single-operator mode).
+   * Not signed in → 401; missing or someone else's mission → 404 (never reveal that it exists).
+   */
+  async function owned(req: Request, res: Response): Promise<{ id: string; actor: Actor } | null> {
+    const user = res.locals.user as { id?: unknown; name?: unknown } | undefined;
+    if (typeof user?.id !== "string" || !user.id) {
+      sendError(res, 401, "UNAUTHORIZED", "Sign in to use the chat.");
       return null;
     }
-    return id;
+    const id = String(req.params.id);
+    const found = await store.getMission(id);
+    if (!found || found.ownerId !== user.id) {
+      sendError(res, 404, "MISSION_NOT_FOUND", "Mission not found.");
+      return null;
+    }
+    const actor = (res.locals.actor as Actor | undefined) ?? { kind: "human", id: user.id, ...(typeof user.name === "string" ? { name: user.name } : {}), channel: "web" };
+    return { id, actor };
   }
 
   app.get("/api/missions/:id/chat", async (req, res) => {
     try {
-      const id = await mission(req, res);
-      if (!id) return;
-      res.json(await links.hydrate(id));
+      const owner = await owned(req, res);
+      if (!owner) return;
+      res.json(await links.hydrate(owner.id));
     } catch (error) {
       log.error({ err: errorMessage(error) }, "chat history failed");
       sendError(res, 500, "internal_error", "Could not load the chat.");
@@ -70,12 +78,11 @@ export function mountChat(app: Express, deps: { store: MissionStore; messages: M
 
   app.post("/api/missions/:id/chat", async (req, res) => {
     try {
-      const id = await mission(req, res);
-      if (!id) return;
-      const actor = (res.locals.actor as Actor | undefined) ?? OPERATOR;
-      const message = userMessage(req.body, actor);
+      const owner = await owned(req, res);
+      if (!owner) return;
+      const message = userMessage(req.body, owner.actor);
       if (!message) return sendError(res, 400, "bad_message", 'Send { message: { role: "user", parts: [{ type: "text", text }] } }.');
-      const run = await runs.start(id, { message, actor });
+      const run = await runs.start(owner.id, { message, actor: owner.actor });
       await pipeUIMessageStreamToResponse({ response: res, stream: runs.stream(run) });
     } catch (error) {
       const { status, code } = statusOf(error);
@@ -90,9 +97,9 @@ export function mountChat(app: Express, deps: { store: MissionStore; messages: M
 
   app.get("/api/missions/:id/chat/stream", async (req, res) => {
     try {
-      const id = await mission(req, res);
-      if (!id) return;
-      const run = runs.replayable(id);
+      const owner = await owned(req, res);
+      if (!owner) return;
+      const run = runs.replayable(owner.id);
       if (!run) {
         res.status(204).end();
         return;
@@ -106,9 +113,14 @@ export function mountChat(app: Express, deps: { store: MissionStore; messages: M
   });
 
   app.post("/api/missions/:id/chat/stop", async (req, res) => {
-    const id = await mission(req, res);
-    if (!id) return;
-    runs.stop(id);
-    res.json({ ok: true });
+    try {
+      const owner = await owned(req, res);
+      if (!owner) return;
+      runs.stop(owner.id);
+      res.json({ ok: true });
+    } catch (error) {
+      log.error({ err: errorMessage(error) }, "chat stop failed");
+      if (!res.headersSent) sendError(res, 500, "internal_error", "Could not stop the agent.");
+    }
   });
 }
