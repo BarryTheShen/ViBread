@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { queryOptions, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type {
   CatalogView,
   InventoryEntry,
@@ -180,14 +180,22 @@ export function scanPollingInterval(status: ScanView["status"] | undefined): num
   return status === "ready" || status === "failed" || status === "accepted" ? false : 1_500;
 }
 
-export function useScan(scanId: string, enabled = true) {
-  return useQuery({
+/**
+ * The laptop's scan query. It keeps polling while the window is hidden — a phone window or another app covering the
+ * browser makes the page "hidden", and the paired phone's uploads must still show up (issue #4).
+ */
+export function scanQueryOptions(scanId: string, enabled = true) {
+  return queryOptions({
     queryKey: inventoryQueryKeys.scan(scanId),
     queryFn: ({ signal }) => fetchScan(scanId, signal),
     enabled: Boolean(scanId) && enabled,
     refetchInterval: (query) => scanPollingInterval(query.state.data?.status),
     refetchIntervalInBackground: true,
   });
+}
+
+export function useScan(scanId: string, enabled = true) {
+  return useQuery(scanQueryOptions(scanId, enabled));
 }
 
 export function useUploadScanPhoto(scanId: string) {
