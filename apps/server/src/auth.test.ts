@@ -41,4 +41,18 @@ describe("social sign-in configuration", () => {
     expect(result.url).toContain("client_id=google-test-id");
     expect(new URL(result.url ?? "").searchParams.get("redirect_uri")).toBe("http://127.0.0.1:8898/api/auth/callback/google");
   });
+  it("rejects open email sign-up when social auth is configured", async () => {
+    const config = loadConfig({
+      DATA_DIR: `/tmp/vb-social-signup-${randomBytes(6).toString("hex")}`,
+      PUBLIC_URL: "http://127.0.0.1:8898",
+      HOST: "127.0.0.1",
+      PORT: "8898",
+      GITHUB_CLIENT_ID: "github-test-id",
+      GITHUB_CLIENT_SECRET: "github-test-secret",
+    });
+    const database = openDatabase(config.dataDir);
+    opened.push(database);
+    const auth = createServerAuth(config, database.db).auth;
+    await expect(auth.api.signUpEmail({ body: { name: "Attacker", email: "attacker@example.com", password: "a".repeat(32) } })).rejects.toThrow();
+  });
 });

@@ -100,11 +100,19 @@ describe("GUIDO firmware checks", () => {
 });
 
 describe("SPICE cross-check", () => {
-  it("matches the audited red LED branch near 13.4 mA", async () => {
+  it("uses fixed red models at all corners and catches a wrong Vf assumption", async () => {
     const result = await spiceCrossCheck(GOLDEN[2].circuit);
     const red = result.rows.find((row) => row.part === "LED1");
     expect(result.ok).toBe(true);
-    expect(red?.spiceMa).toBeCloseTo(13.4, 1);
-    expect(result.findings).toEqual([]);
+    expect(red?.analyticMa).toBeCloseTo(13.4, 1);
+    expect(red?.spiceMa).toBeCloseTo(14.0, 1);
+    expect(red?.spiceMaxMa).toBeCloseTo(16.7, 1);
+    expect(red?.spiceMinMa).toBeCloseTo(9.7, 1);
+    const otherGoldenResults = await Promise.all([spiceCrossCheck(GOLDEN[0].circuit), spiceCrossCheck(GOLDEN[1].circuit)]);
+    expect([...otherGoldenResults, result].flatMap((crossCheck) => crossCheck.findings.filter((finding) => finding.ruleId === "SPICE-DEVIATION"))).toEqual([]);
+    expect(result.findings.every((finding) => finding.ruleId !== "SPICE-DEVIATION" || finding.refs?.parts?.[0] !== "LED1")).toBe(true);
+
+    const wrong = await spiceCrossCheck(GOLDEN[2].circuit, { analyticVf: { red: 1.0 } });
+    expect(wrong.findings.some((finding) => finding.ruleId === "SPICE-DEVIATION")).toBe(true);
   });
 });

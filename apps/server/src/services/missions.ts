@@ -201,7 +201,11 @@ export function createMissionService(
         link = links.forBroker(direct.id);
       }
       const brokerId = link?.brokerId ?? direct?.id;
-      if (!brokerId) throw new ApprovalNotFoundError(approvalId);
+      const missionId = link?.missionId ?? direct?.missionId;
+      if (!brokerId || !missionId) throw new ApprovalNotFoundError(approvalId);
+      // Only the mission's owner decides (any channel: web session, linked iMessage handle). Chat approval ids aren't
+      // broker ids, so the REST owner middleware can't resolve them; this check is the authority. Someone else's → 404.
+      if (actor.kind === "human" && (await store.getMission(missionId))?.ownerId !== actor.id) throw new ApprovalNotFoundError(approvalId);
 
       let request: ApprovalRequest;
       try {

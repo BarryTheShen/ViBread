@@ -1,6 +1,8 @@
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import CloudDoneIcon from "@mui/icons-material/CloudDone";
 import CloudOffIcon from "@mui/icons-material/CloudOff";
+import LinkOffIcon from "@mui/icons-material/LinkOff";
+import PhoneIphoneIcon from "@mui/icons-material/PhoneIphone";
 import MenuIcon from "@mui/icons-material/Menu";
 import SettingsIcon from "@mui/icons-material/Settings";
 import StopCircleIcon from "@mui/icons-material/StopCircle";
@@ -12,6 +14,7 @@ import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
 import Drawer from "@mui/material/Drawer";
 import IconButton from "@mui/material/IconButton";
+import Paper from "@mui/material/Paper";
 import Snackbar from "@mui/material/Snackbar";
 import Stack from "@mui/material/Stack";
 import Toolbar from "@mui/material/Toolbar";
@@ -23,7 +26,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { ApprovalView, Channel, PermissionMode } from "@vibread/core";
 import { useMemo, useState } from "react";
 import { Link as RouterLink, useParams } from "react-router";
-import { queryKeys, useMission, useSetMode, useStopAgent, useTimeline } from "../api/hooks.js";
+import { queryKeys, useConnections, useMission, useRevision, useSetMode, useStopAgent, useTimeline } from "../api/hooks.js";
 import { ApprovalCard } from "../chat/ApprovalCard.js";
 import { MissionChat, useMissionChatAdapter } from "../chat/MissionChat.js";
 import { ArtifactTabs } from "../workspace/ArtifactTabs.js";
@@ -53,11 +56,17 @@ export default function MissionPage() {
   const adapter = useMissionChatAdapter(missionId);
   const qc = useQueryClient();
   const wide = useMediaQuery((t: Theme) => t.breakpoints.up("lg"));
+  const phone = useMediaQuery("(max-width: 699.95px)");
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [chatApprovalIds, setChatApprovalIds] = useState<string[]>([]);
   const [notice, setNotice] = useState<string | null>(null);
   const detail = mission.data;
   const contextValue = useMemo(() => ({ missionId, detail }), [missionId, detail]);
+  const released = useRevision(missionId, detail?.mission.releasedRevision);
+  const lastRunVirtual = released.data?.results.bench?.at(-1)?.runId.startsWith("virtual-") ?? false;
+  const connections = useConnections();
+  // Nothing powers the agent: no connected Claude account and no server key.
+  const claudeMissing = connections.data?.claude?.using === "none";
 
   if (mission.isPending) {
     return (
@@ -77,6 +86,30 @@ export default function MissionPage() {
   }
 
   const { mission: m } = detail;
+  if (phone) {
+    return (
+      <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 2 }}>
+        <Paper variant="outlined" sx={{ p: 3, maxWidth: 420, display: "flex", flexDirection: "column", gap: 2 }}>
+          <Typography variant="overline" sx={{ color: "text.secondary" }}>
+            Mission Control
+          </Typography>
+          <Typography variant="h2" component="h1">
+            {m.title}
+          </Typography>
+          <Typography>
+            The full workspace needs a laptop-sized screen. On your phone, Build Mode shows one build step at a time, right next to your
+            breadboard.
+          </Typography>
+          <Button component={RouterLink} to={`/b/${missionId}`} variant="contained" size="large" startIcon={<PhoneIphoneIcon />} sx={{ minHeight: 48 }}>
+            Open Build Mode for this mission
+          </Button>
+          <Button component={RouterLink} to="/" variant="outlined" sx={{ minHeight: 48 }}>
+            All missions
+          </Button>
+        </Paper>
+      </Box>
+    );
+  }
   const offline = mission.isError;
   // Approvals requested outside this chat (Claude Code, iMessage, or before this page loaded) still need a card.
   const outsideApprovals = detail.pendingApprovals.filter((a) => a.status === "pending" && !chatApprovalIds.includes(a.id));
@@ -117,13 +150,26 @@ export default function MissionPage() {
             <Typography variant="body2" sx={{ color: "text.secondary", maxWidth: 300, display: { xs: "none", xl: "block" } }}>
               {MODE_HELP[m.mode]}
             </Typography>
-            <Chip
-              icon={offline ? <CloudOffIcon /> : detail.agentBusy ? <CircularProgress size={14} aria-hidden /> : <CloudDoneIcon />}
-              color={offline ? "error" : "default"}
-              variant="outlined"
-              label={offline ? "Server unreachable" : detail.agentBusy ? "Agent working" : "Connected · agent idle"}
-              aria-live="polite"
-            />
+            {!offline && !detail.agentBusy && claudeMissing ? (
+              <Chip
+                icon={<LinkOffIcon />}
+                color="warning"
+                variant="outlined"
+                clickable
+                component={RouterLink}
+                to="/settings"
+                label="Claude not connected"
+                aria-label="Claude not connected: the agent can't reply. Open Settings to connect it."
+              />
+            ) : (
+              <Chip
+                icon={offline ? <CloudOffIcon /> : detail.agentBusy ? <CircularProgress size={14} aria-hidden /> : <CloudDoneIcon />}
+                color={offline ? "error" : "default"}
+                variant="outlined"
+                label={offline ? "Server unreachable" : detail.agentBusy ? "Agent working" : "Connected · agent idle"}
+                aria-live="polite"
+              />
+            )}
             <Button
               variant="contained"
               color="error"
@@ -192,8 +238,22 @@ export default function MissionPage() {
             <MissionComplete
               missionId={missionId}
               phase={m.phase}
+              virtualBoard={lastRunVirtual}
               onTellAgent={() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message the agent"]')?.focus()}
             />
+            {claudeMissing && (
+              <Alert
+                severity="info"
+                sx={{ mx: 2, mt: 1, py: 0 }}
+                action={
+                  <Button component={RouterLink} to="/settings" size="small" sx={{ whiteSpace: "nowrap" }}>
+                    Connect in Settings
+                  </Button>
+                }
+              >
+                Claude isn't connected, so the agent can't chat. Checks, tests, and building still work.
+              </Alert>
+            )}
             <Box sx={{ flex: 1, minHeight: 0 }}>
               <MissionChat
                 missionId={missionId}

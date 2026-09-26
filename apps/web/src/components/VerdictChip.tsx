@@ -22,7 +22,18 @@ export const VERDICT_STYLE: Record<Verdict | "NONE", VerdictStyle> = {
   NONE: { label: "Not run yet", color: "default", icon: <RadioButtonUncheckedIcon /> },
 };
 
-export function VerdictChip({ verdict, size = "small" }: { verdict: Verdict | undefined; size?: ChipProps["size"] }) {
+/** `warnings` > 0 on a GO verdict reads "GO · 1 warning": the verdict holds, but there is something worth a look. */
+export function VerdictChip({ verdict, size = "small", warnings = 0 }: { verdict: Verdict | undefined; size?: ChipProps["size"]; warnings?: number }) {
   const style = VERDICT_STYLE[verdict ?? "NONE"];
-  return <Chip size={size} color={style.color} icon={style.icon} label={style.label} variant={verdict === "GO" || verdict === "NO-GO" ? "filled" : "outlined"} />;
+  const label = verdict === "GO" && warnings > 0 ? `GO · ${warnings} warning${warnings === 1 ? "" : "s"}` : style.label;
+  return (
+    <Chip
+      size={size}
+      color={style.color}
+      icon={style.icon}
+      label={label}
+      variant={verdict === "GO" || verdict === "NO-GO" ? "filled" : "outlined"}
+      sx={{ maxWidth: "100%" }}
+    />
+  );
 }

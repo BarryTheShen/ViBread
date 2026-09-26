@@ -21,8 +21,7 @@ const RESUME_PLACEHOLDER = { id: "vibread-resume", role: "user", parts: [] } as 
 
 /** Chat errors (AgentsCore contract) in words a beginner can act on. */
 const FRIENDLY_ERRORS: Record<string, string> = {
-  claude_not_connected:
-    "The AI agent isn't connected yet (this server has no Claude API key). Checks, simulation, and build steps still work.",
+  claude_not_connected: "Claude isn't connected, so the agent can't reply. Connect it in Settings.",
   agent_busy: "The agent is already working on this mission (maybe from iMessage or Claude Code). Wait for it, or press Stop agent.",
 };
 

@@ -67,6 +67,27 @@ describe("tool registry policy (MCP/A2A path)", () => {
     expect((await store.listRevisions(mission.id)).length).toBe(1);
   });
 
+  it("an identical approved, unused action is consumed exactly once without a new request; a denied one can be re-requested", async () => {
+    const { call, broker, store, mission } = await setup("ask");
+    const args = { circuit: golden.circuit, note: "v1" };
+    const first = await call("propose_design", args);
+    const approval = first.status === "approval-required" ? first.approval : undefined;
+    await broker.decide(approval!.id, "approve-once", HUMAN);
+    // Retried without the approval id: the broker returns the approved request, the gate consumes it and executes.
+    expect(await call("propose_design", args)).toMatchObject({ status: "executed", output: { revision: 1 } });
+    expect(broker.all().map((r) => r.status)).toEqual(["consumed"]);
+    // The next identical call (now on revision 1) needs a new approval; deny it, then retry: a fresh pending request.
+    const second = await call("propose_design", args);
+    expect(second.status).toBe("approval-required");
+    const denied = second.status === "approval-required" ? second.approval : undefined;
+    await broker.decide(denied!.id, "deny", HUMAN);
+    const third = await call("propose_design", args);
+    expect(third.status).toBe("approval-required");
+    expect(third.status === "approval-required" && third.approval.id).not.toBe(denied!.id);
+    expect(broker.all().map((r) => r.status)).toEqual(["consumed", "denied", "pending"]);
+    expect((await store.listRevisions(mission.id)).length).toBe(1);
+  });
+
   it("physical actions only become bench-click requests", async () => {
     const { call, store, mission } = await setup("autopilot");
     await store.createRevision(mission.id, { circuit: golden.circuit, author: HUMAN });

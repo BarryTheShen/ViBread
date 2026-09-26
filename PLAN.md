@@ -5,26 +5,29 @@
 > Evidence: [`research/`](research/) (technology research, sources inline) and [`research/audit/`](research/audit/)
 > (hands-on verification of every package and claim used below: installs, type checks, offline smokes).
 
-## Build status — Sat Sep 26, ≈04:00 CT (overnight build)
+## Build status — Sat Sep 26, ≈11:00 CT
 
-Everything on the ranked list (§4, items 1–16) is built, committed, and tested in the container: 22 test files / 99 tests
-(`npm test`, ~30 s), typecheck and web build clean. What is **not** verified yet needs something only the team has: real
-hardware, a Claude credential, and accounts (Google/GitHub/Photon) — see "Needs you" below.
+Everything on the ranked list (§4, items 1–16) is built, committed, and tested in the container: 24 test files / 124 tests
+(`npm test`), typecheck clean. An independent audit (round 1: 17 findings) and a code review were run against the plan; their
+fixes are in `59462ea` except the items marked *in progress*. What is **not** verified yet needs something only the team has:
+real hardware, a Claude credential, and accounts (Google/GitHub/Photon) — see "Needs you" below.
 
 | # | Item | State | Proof (live unless noted) |
 |---|---|---|---|
-| 1 | Core v0 | Built | Virtual board: bench firmware (Eta template) in the simulator, safe idle → rails → read-before-drive self-test → diagnosis. LED pulses measured ≤ 4.02 ms, 1.1 % duty. **Real board untested** |
-| 2 | Workspace + agents + test author + RETRO | Built | MUI workspace/approval cards/modes verified in the browser. Agents verified with the AI SDK mock model (approvals signed, exactly-once, tamper rejected). A **real Claude** (Opus 5.5 via oh-my-pi) designed a night light through `/mcp` on the first try: EECOM/GUIDO/FAO GO. ViBread's own agents not yet run on a real model |
-| 3, 10 | CAPCOM (iMessage) | Built | Terminal provider: link code → brief → status → poll fallback. **Cloud iMessage untested** (no Photon project) |
+| 1 | Core v0 | Built | Virtual board: bench firmware (Eta template) in the simulator, safe idle → rails → read-before-drive self-test → diagnosis. LED pulses measured ≤ 4.02 ms, 1.1 % duty. An output jumper in a rail row is reported stuck from passive reads and never driven (simulated fault). **Real board untested** |
+| 2 | Workspace + agents + test author + RETRO | Built | MUI workspace/approval cards/modes verified in the browser. Agents verified with the AI SDK mock model (approvals signed, exactly-once, tamper rejected). A **real Claude** (Opus 5.5 via oh-my-pi) designed a night light through `/mcp` on the first try: EECOM/GUIDO/FAO GO. All four prompts evaluated on real Claude through oh-my-pi; RETRO now catches a subtly wrong design (3/3 NO-GO) without false alarms on the goldens. ViBread's own runtime (AI SDK → Anthropic) not yet run with a real key. Recorded runs for the no-credential demo *in progress* |
+| 3, 10 | CAPCOM (iMessage) | Built | Terminal provider: link code → brief → status → poll fallback; links persist across restarts; `mission N`; poll votes map to the right approval; self-test prompts answerable from iMessage; iMessage pre-approvals show at the bench and still need the click. **Cloud iMessage untested** (no Photon project) |
 | 4 | Photo check | Built | Upload → HEIC/JPEG → per-part advisory answers (mock model). Real vision untested |
 | 5 | Checks (EECOM/GUIDO) | Built | Rule tests for every broken variant; 220 Ω/red worst case 16.5 mA; core warnings filtered |
 | 6, 12 | Schematic, replay, live "Try it" | Built | tscircuit (isolated runtime) SVG/PNG; replay; real-time sim in a worker: button presses step the moon phases exactly as the tests say |
 | 7 | Layout + LVS + steps | Built | Moon lamp: 15 jumpers, 33 steps, plug state on every step, phone focus crops; bb-400 fits |
-| 8, 14 | Verification + fault dictionary | Built | Golden → "Houston, we are GO"; button-in-GND-row, swapped LED jumpers, missing divider resistor each diagnosed with the right top candidate and highlighted holes; simulated single-fault dictionary merged into ranking |
+| 8, 14 | Verification + fault dictionary | Built | Golden → "Houston, we are GO" with no fix suggested; 10-fault table: every fault except a wrong resistor value (electrically invisible to the self-test) fails, true cause first in 7 and second in 3; highlighted holes |
 | 9, 15 | Sign-in, OAuth 2.1, A2A | Built | Single-operator mode live. OAuth 2.1 (DCR + PKCE + consent + token → MCP tools) end to end in a regression test; real Claude Code 2.1.283 connects with the bearer command. Google/GitHub are config-gated (redirects tested, no real client yet) |
 | 11 | Claude Code MCP + A2A | Built | `claude mcp list` → Connected; A2A ask-back → completed artifact |
-| 13 | SPICE cross-check | Built | ngspice red LED 13.40 mA vs analytic 13.41 mA |
-| 16 | Connect your Claude account | Built | oh-my-pi `login anthropic` + auth-broker + per-user auth-gateway; real claude.ai sign-in page reached from Settings, bogus code rejected, fallback to server key tested with a protocol fake. **Real sign-in needs you** |
+| 13 | SPICE cross-check | Built | Part of EECOM's evidence: fixed per-color diode models at three corners; red LED 13.99 mA SPICE vs 13.41 mA analytic; goldens show no deviation, a wrong Vf assumption is flagged |
+| 16 | Connect your Claude account | Built | oh-my-pi `login anthropic` + auth-broker + per-user auth-gateway; real claude.ai sign-in page reached from Settings, bogus code rejected, fallback to server key tested with a protocol fake. Fast failure on stale codes + random broker port *in progress*. **Real sign-in needs you** |
+| — | Desktop app (Electron: macOS arm64/x64, Windows x64, Linux x64) | *In progress* | Server + UI + bundled Node in one installer; Arduino compiler downloaded on first launch; USB via Electron's Web Serial; built and smoke-tested per OS on GitHub Actions |
+| — | Phone as a home-screen web app | *In progress* | Manifest + icons; Build Mode opens like an app |
 
 Also added while integrating: human **GO for build** (Flight Director) when the agent isn't the one releasing; mission
 completion (LAUNCH → "Does it work?" → DONE); the independent tests get written on GO for build once a credential exists.

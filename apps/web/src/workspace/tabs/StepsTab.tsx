@@ -1,5 +1,6 @@
 import NavigateBeforeIcon from "@mui/icons-material/NavigateBefore";
 import NavigateNextIcon from "@mui/icons-material/NavigateNext";
+import PhoneIphoneIcon from "@mui/icons-material/PhoneIphone";
 import PowerIcon from "@mui/icons-material/Power";
 import PowerOffIcon from "@mui/icons-material/PowerOff";
 import Alert from "@mui/material/Alert";
@@ -16,29 +17,16 @@ import Typography from "@mui/material/Typography";
 import type { RevisionDetail } from "@vibread/core";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
-import { useConnections } from "../../api/hooks.js";
-
-/**
- * Phones can't open `localhost`: when the laptop is on localhost, point the QR at the server's public URL
- * (the MCP URL's origin from GET /api/connections) instead.
- */
-function usePhoneOrigin(): string {
-  const connections = useConnections();
-  const here = window.location.origin;
-  const local = /^(localhost|127\.|\[::1\])/.test(window.location.hostname);
-  if (!local || !connections.data?.mcpUrl) return here;
-  try {
-    return new URL(connections.data.mcpUrl).origin;
-  } catch {
-    return here;
-  }
-}
+import { useBuildState, usePhoneOrigin } from "../../api/hooks.js";
 
 export function StepsTab({ missionId, revision, released }: { missionId: string; revision: RevisionDetail; released: boolean }) {
   const steps = revision.results.steps?.steps ?? [];
   const [index, setIndex] = useState(0);
   const phoneUrl = `${usePhoneOrigin()}/b/${missionId}`;
-  useEffect(() => setIndex(0), [revision.n]);
+  // Follow the builder: Build Mode's "I did this" moves BuildState.current; jump there whenever it changes.
+  const build = useBuildState(missionId, released);
+  const current = released && build.data?.revision === revision.n ? build.data.current : undefined;
+  useEffect(() => setIndex(current !== undefined ? Math.max(0, current - 1) : 0), [revision.n, current]);
 
   if (steps.length === 0) {
     return <Alert severity="info">Build steps appear here once the design passes its checks and is laid out on the breadboard.</Alert>;
@@ -58,6 +46,11 @@ export function StepsTab({ missionId, revision, released }: { missionId: string;
         </Button>
         <Typography sx={{ flex: 1, textAlign: "center", fontWeight: 600 }} aria-live="polite">
           Step {step.n} of {steps.length}
+          {current !== undefined && step.n !== current && (
+            <Button size="small" onClick={() => setIndex(current - 1)} sx={{ ml: 1 }}>
+              Go to step {current} (where the builder is)
+            </Button>
+          )}
         </Typography>
         <Button endIcon={<NavigateNextIcon />} disabled={index >= steps.length - 1} onClick={() => setIndex((i) => i + 1)}>
           Next
@@ -68,6 +61,8 @@ export function StepsTab({ missionId, revision, released }: { missionId: string;
           <Typography variant="h3" component="h2" sx={{ flex: 1 }}>
             {step.title}
           </Typography>
+          {current === step.n && <Chip color="primary" icon={<PhoneIphoneIcon />} label="The builder is on this step" />}
+          {current !== undefined && step.n < current && <Chip color="success" variant="outlined" label="Done" />}
           <Chip
             icon={step.plug === "plugged" ? <PowerIcon /> : <PowerOffIcon />}
             color={step.plug === "plugged" ? "warning" : "default"}

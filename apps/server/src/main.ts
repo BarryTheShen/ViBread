@@ -1,9 +1,11 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import http from "node:http";
 import express, { type ErrorRequestHandler, type Express } from "express";
 import rateLimit from "express-rate-limit";
 import pino from "pino";
+import type { Logger } from "pino";
 import pinoHttp from "pino-http";
 import { toNodeHandler } from "better-auth/node";
 import { mountA2a, mountMcp } from "./interop/index.js";
@@ -11,13 +13,25 @@ import { startCapcom } from "./capcom/index.js";
 import { createAppContext, type AppContextHandle } from "./context.js";
 import { getSessionUser } from "./auth.js";
 import { loadConfig, type ServerConfig } from "./config.js";
-import { mountApi } from "./routes.js";
+import { mountApi, approvalOwnerMiddleware, missionOwnerMiddleware } from "./routes.js";
 
 export interface RunningServer {
   app: Express;
   server: http.Server;
   context: AppContextHandle;
   close(): Promise<void>;
+}
+
+export function createApiErrorHandler(log: Logger): ErrorRequestHandler {
+  return (error, _req, res, next) => {
+    if (res.headersSent) return next(error);
+    const deliberate = typeof error?.status === "number" && typeof error?.code === "string";
+    const status = deliberate ? error.status : 500;
+    const code = deliberate ? error.code : "INTERNAL_ERROR";
+    const message = deliberate && error instanceof Error ? error.message : "internal server error";
+    if (!deliberate || status >= 500) log.error({ err: error }, "request failed");
+    res.status(status).json({ error: { code, message } });
+  };
 }
 
 export async function startServer(config: ServerConfig = loadConfig()): Promise<RunningServer> {
@@ -43,7 +57,7 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   app.get("/.well-known/oauth-protected-resource/mcp", (_req, res) => {
     res.json({
       resource: `${config.publicUrl}/mcp`,
-      authorization_servers: [config.publicUrl],
+      authorization_servers: [`${config.publicUrl}/api/auth`],
       bearer_methods_supported: ["header"],
       scopes_supported: ["circuits:read", "circuits:write", "bench:request"],
     });
@@ -77,6 +91,8 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
     }
   });
 
+  app.use("/api/missions/:id", missionOwnerMiddleware(ctx));
+  app.use("/api/approvals/:approvalId", approvalOwnerMiddleware(ctx));
   mountApi(app, ctx);
   ctx.runtime.mountChat(app);
   mountMcp(app, ctx, auth);
@@ -90,15 +106,7 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
     app.get("*splat", (_req, res) => res.sendFile(indexPath));
   }
 
-  const apiErrorHandler: ErrorRequestHandler = (error, _req, res, next) => {
-    if (res.headersSent) return next(error);
-    const status = typeof error?.status === "number" ? error.status : 500;
-    const code = typeof error?.code === "string" ? error.code : "INTERNAL_ERROR";
-    const message = status >= 500 && code === "INTERNAL_ERROR" ? "internal server error" : error instanceof Error ? error.message : "request failed";
-    if (status >= 500) log.error({ err: error }, "request failed");
-    res.status(status).json({ error: { code, message } });
-  };
-  app.use(apiErrorHandler);
+  app.use(createApiErrorHandler(log));
 
   const capcom = await startCapcom(ctx);
   const server = await new Promise<http.Server>((resolveServer, reject) => {
@@ -118,7 +126,8 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   return { app, server, context, close };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run directly (`tsx src/main.ts`); compared as URLs so Windows paths and paths with spaces match too.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const config = loadConfig();
   const running = await startServer(config);
   const shutdown = (): void => {

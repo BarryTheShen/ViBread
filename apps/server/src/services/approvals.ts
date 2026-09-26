@@ -31,6 +31,40 @@ interface ApprovalRow {
   consumedAt: number | null;
 }
 
+const BENCH_ACTIONS = ["flash-bench", "rail-checkpoint", "run-selftest", "flash-app"] as const;
+type BenchAction = (typeof BENCH_ACTIONS)[number];
+
+export interface BenchRequestView {
+  id: string;
+  action: BenchAction;
+  summary: string;
+  note?: string;
+  revision: number | null;
+  status: "pending" | "approved";
+  requestedBy: Actor;
+  preApprovedBy?: Actor;
+  createdAt: number;
+  expiresAt: number;
+}
+
+export class BenchRequestNotRunnableError extends Error {
+  readonly status = 409;
+  readonly code = "request_not_runnable";
+
+  constructor(message = "bench request is no longer runnable") {
+    super(message);
+  }
+}
+export class BenchRequestForbiddenError extends Error {
+  readonly status = 403;
+  readonly code = "request_forbidden";
+
+  constructor() {
+    super("only the connected web bench can start or deny a physical request");
+  }
+}
+
+
 export interface ApprovalBrokerDependencies {
   db: DB;
   sqlite: SqliteDatabase;
@@ -64,6 +98,10 @@ export class SqlApprovalBroker implements ApprovalBroker {
       if (grant) return { outcome: "approved" };
     }
     const actionHash = hashJson({ revisionHash: input.revisionHash, action: input.action, input: input.input });
+    const approved = this.deps.sqlite
+      .prepare('SELECT * FROM "approvals" WHERE "missionId" = ? AND "revisionHash" = ? AND "actionHash" = ? AND "status" = ? AND "consumedAt" IS NULL AND "expiresAt" > ? ORDER BY "createdAt" DESC LIMIT 1')
+      .get(input.missionId, input.revisionHash, actionHash, "approved", Date.now()) as ApprovalRow | undefined;
+    if (approved) return { outcome: outcome === "bench-click" ? "bench-click" : "approved", request: this.toRequest(approved) };
     this.deps.sqlite
       .prepare('UPDATE "approvals" SET "status" = ? WHERE "missionId" = ? AND "status" = ? AND "expiresAt" <= ?')
       .run("expired", input.missionId, "pending", Date.now());
@@ -189,6 +227,85 @@ export class SqlApprovalBroker implements ApprovalBroker {
       .prepare('UPDATE "approvals" SET "status" = ?, "consumedAt" = ? WHERE "id" = ? AND "status" = ? AND "actionHash" = ?')
       .run("consumed", Date.now(), approvalId, "approved", actionHash);
     return result.changes === 1;
+  }
+  async listBenchRequests(missionId: string, revisionHash: string, revision: number | null): Promise<BenchRequestView[]> {
+    const now = Date.now();
+    const rows = this.deps.sqlite
+      .prepare('SELECT * FROM "approvals" WHERE "missionId" = ? AND "revisionHash" = ? AND "actionClass" = ? AND "status" IN (?, ?) AND "consumedAt" IS NULL AND "expiresAt" > ? ORDER BY "createdAt" DESC')
+      .all(missionId, revisionHash, "physical", "pending", "approved", now) as ApprovalRow[];
+    return rows.filter((row) => BENCH_ACTIONS.includes(row.action as BenchAction)).map((row) => this.toBenchView(row, revision));
+  }
+
+  async startBenchRequest(input: { approvalId: string; missionId: string; revisionHash: string; revision: number | null; actor: Actor }): Promise<{ id: string; action: BenchAction; revision: number | null }> {
+    if (input.actor.kind !== "human" || input.actor.channel !== "web") throw new BenchRequestForbiddenError();
+    const started = this.deps.sqlite.transaction(() => {
+      const row = this.deps.sqlite.prepare('SELECT * FROM "approvals" WHERE "id" = ?').get(input.approvalId) as ApprovalRow | undefined;
+      this.assertBenchRunnable(row, input);
+      const now = Date.now();
+      const decidedBy = JSON.stringify(input.actor);
+      const update = row?.status === "pending"
+        ? this.deps.sqlite.prepare('UPDATE "approvals" SET "status" = ?, "decision" = ?, "decidedBy" = ?, "consumedAt" = ? WHERE "id" = ? AND "status" = ? AND "consumedAt" IS NULL').run("consumed", "approve-once", decidedBy, now, input.approvalId, "pending")
+        : this.deps.sqlite.prepare('UPDATE "approvals" SET "status" = ?, "consumedAt" = ? WHERE "id" = ? AND "status" = ? AND "consumedAt" IS NULL').run("consumed", now, input.approvalId, "approved");
+      if (update.changes !== 1) throw new BenchRequestNotRunnableError();
+      return { id: row!.id, action: row!.action as BenchAction, revision: input.revision, preApprovedBy: row!.preApprovedBy };
+    })();
+    if (this.deps.store) {
+      await this.deps.store.appendEvent({
+        missionId: input.missionId,
+        channel: input.actor.channel,
+        actor: input.actor,
+        kind: "bench.request.started",
+        text: `Started ${started.action}`,
+        revision: input.revision ?? undefined,
+        data: { approvalId: started.id, action: started.action, revision: started.revision, clickedBy: input.actor, preApprovedBy: started.preApprovedBy ? (JSON.parse(started.preApprovedBy) as Actor) : undefined },
+      });
+    }
+    return { id: started.id, action: started.action, revision: started.revision };
+  }
+
+  async denyBenchRequest(input: { approvalId: string; missionId: string; revisionHash: string; revision: number | null; actor: Actor }): Promise<void> {
+    if (input.actor.kind !== "human" || input.actor.channel !== "web") throw new BenchRequestForbiddenError();
+    const denied = this.deps.sqlite.transaction(() => {
+      const row = this.deps.sqlite.prepare('SELECT * FROM "approvals" WHERE "id" = ?').get(input.approvalId) as ApprovalRow | undefined;
+      this.assertBenchRunnable(row, input);
+      const update = this.deps.sqlite
+        .prepare('UPDATE "approvals" SET "status" = ?, "decision" = ?, "decidedBy" = ? WHERE "id" = ? AND "status" IN (?, ?) AND "consumedAt" IS NULL')
+        .run("denied", "deny", JSON.stringify(input.actor), input.approvalId, "pending", "approved");
+      if (update.changes !== 1) throw new BenchRequestNotRunnableError();
+      return { id: row!.id, action: row!.action as BenchAction, preApprovedBy: row!.preApprovedBy };
+    })();
+    if (this.deps.store) {
+      await this.deps.store.appendEvent({
+        missionId: input.missionId,
+        channel: input.actor.channel,
+        actor: input.actor,
+        kind: "bench.request.denied",
+        text: `Denied ${denied.action}`,
+        revision: input.revision ?? undefined,
+        data: { approvalId: denied.id, action: denied.action, revision: input.revision, deniedBy: input.actor, preApprovedBy: denied.preApprovedBy ? (JSON.parse(denied.preApprovedBy) as Actor) : undefined },
+      });
+    }
+  }
+
+  private assertBenchRunnable(row: ApprovalRow | undefined, input: { missionId: string; revisionHash: string }): asserts row is ApprovalRow {
+    if (!row || row.missionId !== input.missionId || row.actionClass !== "physical" || !BENCH_ACTIONS.includes(row.action as BenchAction) || row.revisionHash !== input.revisionHash || (row.status !== "pending" && row.status !== "approved") || row.consumedAt !== null || row.expiresAt <= Date.now()) {
+      throw new BenchRequestNotRunnableError();
+    }
+  }
+
+  private toBenchView(row: ApprovalRow, revision: number | null): BenchRequestView {
+    return {
+      id: row.id,
+      action: row.action as BenchAction,
+      summary: row.summary,
+      ...(row.consequence ? { note: row.consequence } : {}),
+      revision,
+      status: row.status as "pending" | "approved",
+      requestedBy: JSON.parse(row.requestedBy) as Actor,
+      ...(row.preApprovedBy ? { preApprovedBy: JSON.parse(row.preApprovedBy) as Actor } : {}),
+      createdAt: row.createdAt,
+      expiresAt: row.expiresAt,
+    };
   }
 
   private toRequest(row: ApprovalRow): ApprovalRequest {

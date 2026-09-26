@@ -17,3 +17,7 @@ coverage/
 *.db-wal
 *.db-shm
 .jobs/
+# desktop app build outputs
+apps/desktop/.cache/
+apps/desktop/.stage/
+apps/desktop/release/

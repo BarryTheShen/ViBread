@@ -7,6 +7,9 @@ import type {} from "@mui/x-chat/themeAugmentation";
  */
 export const MONO_FONT = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
 
+/** Visible keyboard focus on the dark theme: 2 px amber ring (≈ 11:1 against the canvas). */
+const FOCUS_RING = { outline: "2px solid #fbbf24", outlineOffset: 2 } as const;
+
 export function createMissionTheme(reducedMotion: boolean): Theme {
   const theme = createTheme({
     palette: {
@@ -43,11 +46,16 @@ export function createMissionTheme(reducedMotion: boolean): Theme {
             : {}),
         },
       },
-      MuiButtonBase: { defaultProps: { disableRipple: reducedMotion } },
+      // ButtonBase covers Button, IconButton, Tab, clickable Chip, Checkbox/Radio (SwitchBase) and ListItemButton.
+      // MUI resets `outline: 0` on these, so the global rule alone never shows: add a 2 px high-contrast ring.
+      MuiButtonBase: { defaultProps: { disableRipple: reducedMotion }, styleOverrides: { root: { "&.Mui-focusVisible": FOCUS_RING } } },
       MuiButton: { styleOverrides: { root: { minHeight: 36 } } },
       MuiIconButton: { styleOverrides: { root: { minWidth: 36, minHeight: 36 } } },
-      MuiChip: { styleOverrides: { root: { minHeight: 28, fontWeight: 500 } } },
-      MuiTab: { styleOverrides: { root: { minHeight: 44, textTransform: "none", fontWeight: 600 } } },
+      MuiChip: { styleOverrides: { root: { minHeight: 28, fontWeight: 500, "&.Mui-focusVisible": FOCUS_RING } } },
+      MuiTab: { styleOverrides: { root: { minHeight: 44, textTransform: "none", fontWeight: 600, "&.Mui-focusVisible": { ...FOCUS_RING, outlineOffset: -3 } } } },
+      MuiLink: { styleOverrides: { root: { "&:focus-visible": { ...FOCUS_RING, borderRadius: 2 } } } },
+      MuiOutlinedInput: { styleOverrides: { root: { "&.Mui-focused": { outline: "2px solid #fbbf24", outlineOffset: 2 } } } },
+      MuiSlider: { styleOverrides: { thumb: { "&.Mui-focusVisible": { ...FOCUS_RING, boxShadow: "none" } } } },
       MuiPaper: { styleOverrides: { root: { backgroundImage: "none" } } },
       MuiCard: { styleOverrides: { root: { border: "1px solid rgba(148, 170, 196, 0.22)" } } },
       MuiAppBar: {

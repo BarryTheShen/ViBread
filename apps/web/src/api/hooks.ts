@@ -74,6 +74,11 @@ export function useArtifactJson<T>(url: string | undefined) {
   });
 }
 
+/** Build Mode progress (the phone polls every 1–2 s; the laptop follows along). */
+export function useBuildState(id: string, enabled: boolean) {
+  return useQuery({ queryKey: ["mission", id, "build"], queryFn: ({ signal }) => api.build(id, signal), enabled, refetchInterval: 2_000 });
+}
+
 export function useConnections() {
   return useQuery({ queryKey: queryKeys.connections, queryFn: ({ signal }) => api.connections(signal) });
 }
@@ -145,4 +150,20 @@ export function useRevokeToken() {
 
 export function useImessageCode() {
   return useMutation({ mutationFn: () => api.imessageCode() });
+}
+
+/**
+ * Origin for links a phone will open (Build Mode QR codes). Phones can't open `localhost`: when the laptop is on
+ * localhost, use the server's public URL (the MCP URL's origin from GET /api/connections) instead.
+ */
+export function usePhoneOrigin(): string {
+  const connections = useConnections();
+  const here = window.location.origin;
+  const local = /^(localhost|127\.|\[::1\])/.test(window.location.hostname);
+  if (!local || !connections.data?.mcpUrl) return here;
+  try {
+    return new URL(connections.data.mcpUrl).origin;
+  } catch {
+    return here;
+  }
 }

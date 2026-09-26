@@ -15,7 +15,10 @@ import {
 import { layoutHash } from "./allocator.js";
 
 function endpointText(endpoint: Jumper["from"]): string {
-  return "board" in endpoint ? `Arduino ${endpoint.board}` : endpoint.hole;
+  if ("board" in endpoint) return `Arduino ${endpoint.board} header pin`;
+  if (endpoint.hole === "T-2" || endpoint.hole.startsWith("T-")) return "the blue − rail (GND)";
+  if (endpoint.hole === "T+2" || endpoint.hole.startsWith("T+")) return "the red + rail (5 V)";
+  return `hole ${endpoint.hole}`;
 }
 
 function partById(circuit: Circuit): Map<string, Part> {
@@ -58,28 +61,35 @@ function partCallout(part: Part): string {
 function placementText(part: Part, layout: Layout): { text: string; holes: string[] } {
   const placement = layout.placements.find((entry) => entry.part === part.id);
   if (!placement) return { text: `No placement was generated for ${part.id}.`, holes: [] };
-  const pins = modulePins(part)
-    .map((pin) => `${pin.id} → ${placement.pins[pin.id] ?? "unplaced"}`)
-    .join(", ");
-  let orientation = "Before inserting, check the pin labels.";
-  const footprint = MODULES[part.module].footprint;
-  if (footprint.kind === "two-lead" && footprint.polarized) {
-    const first = footprint.pins[0];
-    const second = footprint.pins[1];
-    orientation = `Before inserting, orient ${first} (+, long leg) toward its labelled hole and ${second} (−, short leg) toward its labelled hole.`;
-  } else if (footprint.kind === "button4") {
-    orientation = "Before inserting, put the button body across the centre channel; legs 1–2 face one side and 3–4 face the other pair of rows.";
-  } else if (part.module === "potentiometer") {
-    orientation = "Before inserting, keep the three legs in order A, W, B from the part's labelled side.";
+  const holes = Object.values(placement.pins);
+  let text: string;
+  if (part.module === "resistor") {
+    const ohms = Number(part.params.ohms);
+    const bands = resistorBands(ohms, Number(part.params.tolerancePct ?? 5)).join("-");
+    text = `Put the ${formatOhms(ohms)} resistor ${part.id} (${bands}) from hole ${placement.pins["1"]} to hole ${placement.pins["2"]}.`;
+  } else if (part.module === "led") {
+    const color = typeof part.params.color === "string" ? part.params.color : "red";
+    text = `Before inserting, identify the long anode (+) leg. Put the ${color} LED ${part.id} with its anode (+) in hole ${placement.pins.A} and short cathode (−) leg in hole ${placement.pins.K}.`;
+  } else if (part.module === "button") {
+    text = `Put push button ${part.id} across the horizontal centre channel: legs 1–2 go in holes ${placement.pins["1"]} and ${placement.pins["2"]}; legs 3–4 go in holes ${placement.pins["3"]} and ${placement.pins["4"]}.`;
+  } else if (part.module === "photoresistor") {
+    text = `Put the light sensor ${part.id} with its two legs in holes ${placement.pins["1"]} and ${placement.pins["2"]}; either direction is okay.`;
+  } else {
+    const name = MODULES[part.module].name.toLowerCase();
+    const pinText = modulePins(part).map((pin) => `${pin.name} in hole ${placement.pins[pin.id]}`).join(", ");
+    text = `Put the ${name} ${part.id}: ${pinText}.`;
   }
-  return {
-    text: `${orientation} Insert ${part.id}: ${pins}. Exact holes: ${Object.values(placement.pins).join(", ")}.`,
-    holes: Object.values(placement.pins),
-  };
+  return { text: `${text} Keep USB unplugged.`, holes };
+}
+
+function jumperColor(jumper: Jumper): string {
+  if (jumper.net === "GND") return "black";
+  if (jumper.net === "5V") return "red";
+  return String(jumper.color);
 }
 
 function jumperText(jumper: Jumper): string {
-  return `Connect ${jumper.id} on net ${jumper.net} from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. The label and endpoints are authoritative; wire color is only a visual aid.`;
+  return `Connect a ${jumperColor(jumper)} wire from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. Check both printed endpoints; color is only a visual aid.`;
 }
 
 function countedCallout(group: InventoryGroup): string {
@@ -116,7 +126,7 @@ function inventoryCallouts(circuit: Circuit): string[] {
 
 function orientationText(layout: Layout): string {
   const board = layout.board.includes("nano") ? "Nano across the centre channel" : "Uno beside the breadboard";
-  return `${board}. Rows are numbered from 1 upward; columns a–e are the left five-hole strips and f–j are the right five-hole strips. Top rails are T+ (5 V, red) and T− (GND, black). Read the printed hole IDs, not wire color.`;
+  return `${board}. Rows run left to right. Columns a–e are the five-hole lines above the horizontal centre channel, and f–j are the five-hole lines below it. Top rails are T+ (5 V, red) and T− (GND, black). Read printed hole IDs, never wire color alone.`;
 }
 
 function railJumpers(layout: Layout): Jumper[] {
@@ -185,7 +195,7 @@ export function buildSteps(circuit: Circuit, layout: Layout): StepList {
   push({
     kind: "checkpoint",
     title: "Rail checkpoint — plug in",
-    text: "Plug in USB only for this checkpoint. The rails.vcc test should report a healthy 5 V rail; unplug again before touching the build.",
+    text: "Plug in the USB cable. ViBread checks that the red + rail has 5 V and the blue − rail is ground before anything else runs. Unplug again before touching the build.",
     plug: "plugged",
     adds: { parts: [], jumpers: [] },
     holes: [],
@@ -207,7 +217,7 @@ export function buildSteps(circuit: Circuit, layout: Layout): StepList {
     push({
       kind: "place",
       title: `Insert ${part.id} — ${MODULES[part.module].name}`,
-      text: `${placed.text} Keep USB unplugged.`,
+      text: placed.text,
       plug: "unplugged",
       adds: { parts: [part.id], jumpers: [] },
       holes: placed.holes,

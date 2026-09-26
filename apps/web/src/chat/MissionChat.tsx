@@ -159,7 +159,11 @@ export function MissionChat({
       features={{ conversationList: false, conversationHeader: false, attachments: false, suggestions: hasDesign, scrollToBottom: true }}
       suggestions={hasDesign ? SUGGESTIONS : []}
       slots={{ messageAvatar: null, ...(hasDesign ? { emptyState: DesignOriginNotice } : {}) }}
-      slotProps={{ emptyState: { channel: designChannel } }}
+      slotProps={{
+        emptyState: { channel: designChannel },
+        // Wrap follow-up suggestions onto more lines instead of a clipped sideways-scrolling row.
+        suggestions: { sx: { "&:not([data-empty])": { flexWrap: "wrap", overflowX: "visible" } } },
+      }}
       sx={{ height: "100%", minHeight: 0, bgcolor: "transparent" }}
       localeText={{
         composerInputPlaceholder: "Tell the agent what to change, or ask why…",

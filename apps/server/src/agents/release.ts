@@ -20,6 +20,14 @@ function conflict(code: string, message: string): ToolInputError {
  * Human release (PLAN §1 "human GO", §5.10): the Flight Director releases a revision as the build target from the UI.
  * Runs the same `release_revision` ToolDef through the policy gate; the click itself is the approval, so a required
  * approval is decided approve-once by this human and consumed one-shot. Permission modes gate the agent, not the human.
+ *
+ * Release rules (recorded in PLAN.md):
+ *  - EECOM, GUIDO, FIDO, FAO must all be GO for the released revision. A revision without independent tests gets them
+ *    written first when a credential exists (recorded as revision n+1); without one → 409 tests_missing.
+ *  - RETRO must be GO. A RETRO NO-GO always blocks (409 retro_no_go).
+ *  - Only when RETRO could not run because no Claude credential exists (neither the owner's account nor the server key)
+ *    may the human release without it, and only with the explicit `acknowledgeMissingReview: true`; the waiver is written
+ *    to the timeline ("Released by <name> without the independent review — Claude isn't connected").
  */
 export function createHumanRelease(deps: {
   store: MissionStore;
@@ -84,11 +92,17 @@ export function createHumanRelease(deps: {
     }
     if (retro?.verdict === "NO-GO") throw conflict("retro_no_go", `The independent review voted NO-GO: ${retro.summary}`);
     const reviewMissing = retro?.verdict !== "GO";
-    if (reviewMissing && !input.acknowledgeMissingReview) {
-      throw conflict(
-        "retro_missing",
-        `The independent review couldn't run (${retro?.summary ?? "no review"}). Confirm to release revision ${n} without it.`,
-      );
+    if (reviewMissing) {
+      // The waiver exists only for "no Claude credential at all"; with a credential, RETRO must actually vote GO.
+      if (await deps.claudeConnected(mission.ownerId)) {
+        throw conflict("retro_missing", `The independent review hasn't voted GO yet (${retro?.summary ?? "no review"}). Try GO for build again.`);
+      }
+      if (!input.acknowledgeMissingReview) {
+        throw conflict(
+          "retro_missing",
+          `The independent review couldn't run (${retro?.summary ?? "no review"}). Confirm to release revision ${n} without it.`,
+        );
+      }
     }
 
     const args = { revision: n };

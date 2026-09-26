@@ -56,6 +56,12 @@ afterEach(() => {
 async function serve(runtime: AgentRuntime): Promise<string> {
   const app = express();
   app.use(express.json());
+  // Stand-in for the server's session middleware: header x-test-user picks the signed-in user ("-" = signed out).
+  app.use((req, res, next) => {
+    const id = req.header("x-test-user") ?? "operator";
+    if (id !== "-") res.locals.user = { id, name: id === "operator" ? "Operator" : id };
+    next();
+  });
   runtime.mountChat(app);
   const server = app.listen(0, "127.0.0.1");
   await once(server, "listening");
@@ -158,6 +164,9 @@ describe("design agent", () => {
     const detail = await runtime.missions.detail(mission.id);
     expect(detail.pendingApprovals.map((a) => a.id)).toEqual([approvalId]);
 
+    // Another signed-in user can't decide it (chat approval ids are not broker ids, so this is enforced in decide).
+    await expect(runtime.missions.decide(approvalId, "approve-once", { kind: "human", id: "someone-else", channel: "web" })).rejects.toMatchObject({ status: 404 });
+    expect(deps.broker.all().map((r) => r.status)).toEqual(["pending"]);
     const view = await runtime.missions.decide(approvalId, "approve-once", HUMAN);
     expect(view.id).toBe(approvalId);
     // Resumed run is registered before decide returns; the resume stream replays it from `start`.
@@ -202,6 +211,47 @@ describe("design agent", () => {
     expect(resumed.find((c) => c.type === "error")?.errorText).toContain("signature");
     expect(await deps.store.getRevision(mission.id)).toBeNull();
     expect(pipeline!.calls).toBe(0);
+  });
+
+  it("after a denial the agent can request the same action again: a new pending approval, no error", async () => {
+    const { deps, pipeline, runtime, mission, base } = await setup("ask", [proposeGolden, proposeGolden, { text: "Waiting for you." }]);
+    const first = await say(base, mission.id, golden.brief);
+    const firstId = String(first.find((c) => c.type === "tool-approval-request")!.approvalId);
+    await runtime.missions.decide(firstId, "deny", HUMAN);
+    const resumed = await sse(await fetch(`${base}/api/missions/${mission.id}/chat/stream`));
+    expect(resumed.some((c) => c.type === "error")).toBe(false);
+    const second = resumed.find((c) => c.type === "tool-approval-request");
+    expect(second?.approvalId).toBeDefined();
+    expect(second?.approvalId).not.toBe(firstId);
+    expect(deps.broker.all().map((r) => r.status)).toEqual(["denied", "pending"]);
+    expect((await runtime.missions.detail(mission.id)).pendingApprovals.map((a) => a.id)).toEqual([second!.approvalId]);
+    expect(pipeline!.calls).toBe(0);
+  });
+
+  it("an action a human already approved (not yet used) runs when the agent asks for it, exactly once", async () => {
+    const { deps, pipeline, mission, base } = await setup("ask", [proposeGolden, { text: "Saved." }, proposeGolden, { text: "Needs approval again." }]);
+    // Approve the same action out of band (e.g. MCP flow), then the agent issues exactly that call.
+    const policy = await deps.broker.evaluate({
+      missionId: mission.id,
+      mode: "ask",
+      actionClass: "state-changing",
+      action: "propose_design",
+      input: proposeGolden.toolCalls![0]!.input,
+      revisionHash: "none",
+      actor: HUMAN,
+      summary: "pre-approved",
+      consequence: "test",
+    });
+    await deps.broker.decide(policy.request!.id, "approve-once", HUMAN);
+    const chunks = await say(base, mission.id, golden.brief);
+    expect(chunks.some((c) => c.type === "tool-approval-request" && !c.isAutomatic)).toBe(false);
+    expect(chunks.some((c) => c.type === "tool-output-available")).toBe(true);
+    expect(pipeline!.calls).toBe(1);
+    expect(deps.broker.all().map((r) => r.status)).toEqual(["consumed"]);
+    // Asking again (new revision exists) is a new action: it needs a new approval.
+    const again = await say(base, mission.id, "Save it again.");
+    expect(again.some((c) => c.type === "tool-approval-request" && !c.isAutomatic)).toBe(true);
+    expect(pipeline!.calls).toBe(1);
   });
 
   it("a new message instead of a decision denies the open approval and the run continues", async () => {
@@ -282,6 +332,31 @@ describe("design agent", () => {
     expect(await response.json()).toMatchObject({ error: { code: "claude_not_connected", message: expect.stringContaining("Claude is not connected") } });
     await expect(runtime.missions.say(mission.id, "hi", HUMAN)).rejects.toMatchObject({ code: "claude_not_connected" });
     expect(await deps.messages.list(mission.id)).toEqual([]);
+  });
+
+  it("every chat route requires the signed-in owner (multi-user)", async () => {
+    const { deps, mission, base, runtime } = await setup("review", [{ text: "should never run" }]);
+    const body = JSON.stringify({ message: { id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] } });
+    const routes: [string, string, string?][] = [
+      ["GET", "/chat"],
+      ["POST", "/chat", body],
+      ["GET", "/chat/stream"],
+      ["POST", "/chat/stop"],
+    ];
+    for (const [user, status] of [["-", 401], ["someone-else", 404]] as const) {
+      for (const [method, path, payload] of routes) {
+        const response = await fetch(`${base}/api/missions/${mission.id}${path}`, {
+          method,
+          headers: { "content-type": "application/json", "x-test-user": user },
+          ...(payload ? { body: payload } : {}),
+        });
+        expect([user, method, path, response.status]).toEqual([user, method, path, status]);
+      }
+    }
+    expect(await deps.messages.list(mission.id)).toEqual([]);
+    expect((await runtime.missions.detail(mission.id)).agentBusy).toBe(false);
+    // The owner still gets through.
+    expect((await fetch(`${base}/api/missions/${mission.id}/chat`)).status).toBe(200);
   });
 
   it("rejects client-authored assistant history", async () => {

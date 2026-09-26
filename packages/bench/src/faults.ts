@@ -269,7 +269,22 @@ function highlightDiff(base: Layout, mutant: Layout, fault: FaultId, circuit: Ci
     const next = mutantJumpers.get(id);
     if (next === undefined || JSON.stringify(next.from) !== JSON.stringify(jumper.from) || JSON.stringify(next.to) !== JSON.stringify(jumper.to)) {
       jumpers.add(id);
-      for (const hole of [endpointHole(jumper.from), endpointHole(jumper.to), endpointHole(next?.from), endpointHole(next?.to)]) if (hole !== undefined) holes.add(hole);
+    }
+  }
+  if (fault === "missing-jumper") {
+    const light = circuit.parts.find((part) => part.module === "photoresistor");
+    const role = light === undefined ? undefined : roleForPart(circuit, light.id);
+    if (light !== undefined) {
+      parts.add(light.id);
+      const placement = baseParts.get(light.id);
+      if (placement !== undefined) for (const hole of Object.values(placement.pins)) holes.add(hole);
+    }
+    if (role !== undefined) {
+      for (const resistor of circuit.parts.filter((part) => part.module === "resistor" && circuit.nets.some((net) => net.id === role.net && net.pins.some((ref) => ref.part === part.id)))) {
+        parts.add(resistor.id);
+        const placement = baseParts.get(resistor.id);
+        if (placement !== undefined) for (const hole of Object.values(placement.pins)) holes.add(hole);
+      }
     }
   }
   if (holes.size === 0 && parts.size === 0) {
@@ -282,6 +297,7 @@ function highlightDiff(base: Layout, mutant: Layout, fault: FaultId, circuit: Ci
 function ruleLikelihood(fault: FaultId, observed: BenchRunResult): number {
   const direct = observed.diagnosis.candidates.find((candidate) => candidate.cause === fault);
   if (direct !== undefined) return Math.min(0.99, 0.6 + direct.likelihood * 0.4);
+  if (fault === "missing-jumper" && observed.results.some((result) => result.test === "light.relative" && result.status === "fail")) return 0.72;
   const family = fault.startsWith("led-") && observed.diagnosis.candidates.some((candidate) => candidate.cause.startsWith("led-"));
   if (family) return 0.25;
   return 0.02;
@@ -421,7 +437,7 @@ async function runWithSession(Session: SimSessionConstructor, circuit: Circuit, 
         session.run(plan.timing.ledPeriodMs);
         const leds = plan.subjects.filter((subject): subject is Extract<SelfTestPlan["subjects"][number], { kind: "led" }> => subject.kind === "led");
         const brightest = leds.reduce((best, subject) => session.partState(subject.part) > session.partState(best.part) ? subject : best, leds[0]);
-        value = brightest === undefined ? "none" : String(brightest.order);
+        value = brightest === undefined || session.partState(brightest.part) <= 0.02 ? "none" : String(brightest.order);
       }
       answers[decoded.id] = value;
       session.serialWrite(`${JSON.stringify({ c: "answer", id: decoded.id, v: value })}\n`);

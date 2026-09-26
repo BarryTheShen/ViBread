@@ -10,7 +10,7 @@ import ListItem from "@mui/material/ListItem";
 import ListItemText from "@mui/material/ListItemText";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import type { RevisionDetail } from "@vibread/core";
+import type { CompileDiagnostic, RevisionDetail } from "@vibread/core";
 import { useState } from "react";
 import SyntaxHighlighter from "react-syntax-highlighter/dist/esm/prism-light";
 import cpp from "react-syntax-highlighter/dist/esm/languages/prism/cpp";
@@ -19,14 +19,41 @@ import { MONO_FONT } from "../../theme.js";
 
 SyntaxHighlighter.registerLanguage("cpp", cpp);
 
+function isSketchFile(file: string | undefined): boolean {
+  if (!file) return false;
+  const path = file.replaceAll("\\", "/").toLowerCase();
+  if (/(^|\/)(cores|libraries|framework|toolchain)\//.test(path)) return false;
+  const base = path.slice(path.lastIndexOf("/") + 1);
+  return base.endsWith(".ino") || base === "sketch.cpp";
+}
+
+function DiagnosticList({ items }: { items: CompileDiagnostic[] }) {
+  return (
+    <List dense disablePadding>
+      {items.map((d, i) => (
+        <ListItem key={i} disableGutters>
+          <ListItemText
+            primary={d.message.split(/\\n|\n/)[0]}
+            secondary={`${d.file ? `${d.file.split("/").pop()} ` : ""}${d.line ? `line ${d.line}${d.column ? `:${d.column}` : ""} · ` : ""}${d.severity}`}
+            slotProps={{ primary: { sx: { fontFamily: MONO_FONT, fontSize: 12.5 } } }}
+          />
+        </ListItem>
+      ))}
+    </List>
+  );
+}
+
 export function CodeTab({ revision }: { revision: RevisionDetail }) {
   const source = revision.circuit.sketch.source;
   const compile = revision.results.compile;
   const [copied, setCopied] = useState(false);
-  const [showWarnings, setShowWarnings] = useState(false);
+  const [showCore, setShowCore] = useState(false);
   const errors = compile?.diagnostics.filter((d) => d.severity === "error") ?? [];
   const warnings = compile?.diagnostics.filter((d) => d.severity === "warning") ?? [];
-  const shown = [...errors, ...(showWarnings ? warnings : [])];
+  // Same split as the firmware console (GUIDO): only .ino / sketch.cpp diagnostics are about the user's code.
+  const sketchWarnings = warnings.filter((d) => isSketchFile(d.file));
+  const coreWarnings = warnings.filter((d) => !isSketchFile(d.file));
+  const shown = [...errors, ...sketchWarnings];
 
   return (
     <Stack sx={{ gap: 1.5 }}>
@@ -61,26 +88,21 @@ export function CodeTab({ revision }: { revision: RevisionDetail }) {
           {copied ? "Copied" : "Copy code"}
         </Button>
       </Stack>
-      {warnings.length > 0 && (
+      {coreWarnings.length > 0 && (
         <Box>
-          <Button size="small" onClick={() => setShowWarnings((v) => !v)} aria-expanded={showWarnings}>
-            {showWarnings ? "Hide" : "Show"} {warnings.length} compiler warning{warnings.length === 1 ? "" : "s"} (the code still works)
+          <Button size="small" onClick={() => setShowCore((v) => !v)} aria-expanded={showCore}>
+            {showCore ? "Hide" : "Show"} {coreWarnings.length} warning{coreWarnings.length === 1 ? "" : "s"} from the Arduino core (not your code)
           </Button>
+          {showCore && (
+            <Alert severity="info" sx={{ maxHeight: 220, overflow: "auto", mt: 0.5 }}>
+              <DiagnosticList items={coreWarnings} />
+            </Alert>
+          )}
         </Box>
       )}
       {shown.length > 0 && (
         <Alert severity={errors.length > 0 ? "error" : "warning"} sx={{ maxHeight: 260, overflow: "auto" }}>
-          <List dense disablePadding>
-            {shown.map((d, i) => (
-              <ListItem key={i} disableGutters>
-                <ListItemText
-                  primary={d.message.split(/\\n|\n/)[0]}
-                  secondary={`${d.file ? `${d.file.split("/").pop()} ` : ""}${d.line ? `line ${d.line}${d.column ? `:${d.column}` : ""} · ` : ""}${d.severity}`}
-                  slotProps={{ primary: { sx: { fontFamily: MONO_FONT, fontSize: 12.5 } } }}
-                />
-              </ListItem>
-            ))}
-          </List>
+          <DiagnosticList items={shown} />
         </Alert>
       )}
       <Box sx={{ borderRadius: 1, overflow: "hidden", border: 1, borderColor: "divider" }}>

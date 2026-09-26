@@ -135,6 +135,14 @@ export async function invokeTool(input: {
 
   const decision = await evaluatePolicy({ broker: input.broker, store: input.store, def, ctx: input.ctx, args });
   const ctx: ToolContext = { ...input.ctx, mode: decision.mode };
+  // An identical action a human already approved and nobody has used: consume it one-shot, then run it.
+  const granted = decision.request;
+  if (granted?.status === "approved" && (decision.outcome === "approved" || decision.outcome === "user-approval")) {
+    if (!(await input.broker.consume(granted.id, await currentActionHash(input.store, def, input.ctx.missionId, args)))) {
+      return { status: "denied", reason: "That approval was already used." };
+    }
+    return { status: "executed", output: await def.handler(ctx, args) };
+  }
   switch (decision.outcome) {
     case "approved":
       return { status: "executed", output: await def.handler(ctx, args) };
