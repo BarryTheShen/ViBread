@@ -149,7 +149,9 @@ export function mountApi(app: Express, ctx: AppContext): void {
     if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
     const released = mission.releasedRevision === undefined ? null : await ctx.store.getRevision(missionId, mission.releasedRevision);
     const latestBench = released?.results.bench?.at(-1);
-    if (!latestBench || latestBench.verdict !== "pass" || latestBench.runId.startsWith("virtual-")) {
+    if (!latestBench) throw httpError(409, "bench_run_required", "Run the bench test with your Arduino first.");
+    if (latestBench.verdict !== "pass") throw httpError(409, "bench_run_failed", "The last bench test didn't pass. Fix the wiring and run it again.");
+    if (latestBench.runId.startsWith("virtual-")) {
       throw httpError(409, "real_board_required", "The virtual board passed. Run the bench with your real Arduino to complete the mission.");
     }
     const phase = await ctx.machine.phase(missionId);
@@ -193,12 +195,23 @@ export function mountApi(app: Express, ctx: AppContext): void {
   router.get("/missions/:id/bench/requests", async (req, res) => {
     const missionId = String(req.params.id);
     const current = await currentRevisionForBench(ctx, missionId);
+    if (current.revision === null) {
+      res.json({ requests: [] });
+      return;
+    }
     const requests = await sqlApprovalBroker(ctx).listBenchRequests(missionId, current.hash, current.revision);
     res.json({ requests });
   });
   router.post("/missions/:id/bench/requests/:approvalId/start", async (req, res) => {
     const missionId = String(req.params.id);
     const current = await currentRevisionForBench(ctx, missionId);
+    if (current.revision === null) throw httpError(409, "request_not_runnable", "Nothing is released for the bench yet");
+    const approval = await ctx.broker.get(String(req.params.approvalId));
+    if (approval?.action === "flash-app") {
+      const released = await ctx.store.getRevision(missionId, current.revision);
+      const latestBench = released?.results.bench?.at(-1);
+      if (!latestBench || latestBench.verdict !== "pass") throw httpError(409, "needs_passing_selftest", "Run a passing bench self-test before flashing the app.");
+    }
     const started = await sqlApprovalBroker(ctx).startBenchRequest({
       approvalId: String(req.params.approvalId),
       missionId,
@@ -211,6 +224,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
   router.post("/missions/:id/bench/requests/:approvalId/deny", async (req, res) => {
     const missionId = String(req.params.id);
     const current = await currentRevisionForBench(ctx, missionId);
+    if (current.revision === null) throw httpError(409, "request_not_runnable", "Nothing is released for the bench yet");
     await sqlApprovalBroker(ctx).denyBenchRequest({
       approvalId: String(req.params.approvalId),
       missionId,
@@ -331,12 +345,14 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const runPrefix = typeof body.runId === "string" && body.runId.startsWith("virtual-") ? "virtual" : "run";
     const revision = await ctx.store.getRevision(missionId, body.revision);
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
+    const serverPlan = revision.results.selftest;
+    if (!serverPlan) throw httpError(409, "SELFTEST_PLAN_REQUIRED", "This revision has no server-generated self-test plan.");
     // PLAN item 14: rank single-fault mutants when the background fault dictionary (faults.json) is ready.
     const faultDictionary = await loadFaultDictionary(ctx.store, revision.results.artifacts);
     const result = await evaluateRun({
       circuit: revision.circuit,
       layout: revision.results.layout,
-      plan: body.plan,
+      plan: serverPlan,
       lines: body.lines,
       answers: body.answers,
       kind: body.kind,
@@ -450,9 +466,9 @@ function sqlApprovalBroker(ctx: AppContext): SqlApprovalBroker {
 async function currentRevisionForBench(ctx: AppContext, missionId: string): Promise<{ revision: number | null; hash: string }> {
   const mission = await ctx.store.getMission(missionId);
   if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
-  if (mission.currentRevision === undefined) return { revision: null, hash: "none" };
-  const revision = await ctx.store.getRevision(missionId, mission.currentRevision);
-  if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
+  if (mission.releasedRevision === undefined) return { revision: null, hash: "none" };
+  const revision = await ctx.store.getRevision(missionId, mission.releasedRevision);
+  if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "released revision not found");
   return { revision: revision.n, hash: revision.hash };
 }
 

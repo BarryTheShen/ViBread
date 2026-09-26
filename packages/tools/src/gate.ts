@@ -55,9 +55,11 @@ async function boundRevision(store: MissionStore, def: ToolDef, missionId: strin
   let target = latest;
   if (def.name === "release_revision") target = await store.getRevision(missionId, Number((args as { revision?: number }).revision));
   else if (def.actionClass === "physical") {
-    // The bench lists and runs requests for the mission's current revision only.
-    const current = (await store.getMission(missionId))?.currentRevision;
-    target = current === undefined ? null : await store.getRevision(missionId, current);
+    // The bench flashes and tests the RELEASED revision (the build target), so a bench request is bound to its hash:
+    // an approval must never run against a different design version (PLAN §5.10). The request tool refuses when
+    // nothing is released, so "none" is never filed.
+    const released = (await store.getMission(missionId))?.releasedRevision;
+    target = released === undefined ? null : await store.getRevision(missionId, released);
     return { latest, target, revisionHash: target?.hash ?? "none" };
   }
   return { latest, target, revisionHash: target?.hash ?? latest?.hash ?? "none" };

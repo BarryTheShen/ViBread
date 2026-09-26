@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { GOLDEN } from "@vibread/fixtures";
-import type { Actor } from "@vibread/core";
+import type { Actor, BenchRunResult } from "@vibread/core";
 import { createAiToolset, invokeTool } from "@vibread/tools";
 import { isStepCount, streamText } from "ai";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -57,12 +57,28 @@ describe("bench requests from agents reach the bench", () => {
     await running?.close();
   });
 
-  async function missionWithRevision(): Promise<string> {
+  /** A mission with revision 1; `released` makes it the build target (what the bench flashes and tests). */
+  async function missionWithRevision(options: { released?: boolean } = { released: true }): Promise<string> {
     const { ctx } = running.context;
     const mission = await ctx.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: OPERATOR });
     const revision = await ctx.store.createRevision(mission.id, { circuit: golden.circuit, suite: golden.suite, author: OPERATOR });
-    await ctx.store.updateMission(mission.id, { currentRevision: revision.n });
+    await ctx.store.updateMission(mission.id, { currentRevision: revision.n, ...(options.released ? { releasedRevision: revision.n } : {}) });
     return mission.id;
+  }
+
+  /** A passing virtual self-test on revision n (ServerCore requires one on the released revision before flash-app). */
+  async function passSelftest(missionId: string, n: number): Promise<void> {
+    const { ctx } = running.context;
+    const pass: BenchRunResult = {
+      runId: `pass-${n}`,
+      revision: n,
+      kind: "selftest",
+      results: [],
+      diagnosis: { attribution: "none", candidates: [], summary: "All bench checks passed." },
+      calibration: [],
+      verdict: "pass",
+    };
+    await ctx.store.saveResults(missionId, n, { bench: [pass] });
   }
 
   async function listed(missionId: string): Promise<BenchRequest[]> {
@@ -91,7 +107,10 @@ describe("bench requests from agents reach the bench", () => {
     const preApproved = await listed(missionId);
     expect(preApproved.map((r) => [r.action, r.status, r.preApprovedBy?.channel])).toEqual([["flash-app", "approved", "imessage"]]);
 
-    // The bench click runs it — exactly once.
+    // flash-app needs a passing self-test on the released revision first (server rule); then the bench click runs it once.
+    const early = await fetch(`${base}/api/missions/${missionId}/bench/requests/${id}/start`, { method: "POST" });
+    expect(early.status).toBe(409);
+    await passSelftest(missionId, 1);
     const start = await fetch(`${base}/api/missions/${missionId}/bench/requests/${id}/start`, { method: "POST" });
     expect(start.status).toBe(200);
     expect(await start.json()).toMatchObject({ id, action: "flash-app", revision: 1 });
@@ -127,7 +146,43 @@ describe("bench requests from agents reach the bench", () => {
     const missionId = await missionWithRevision();
     await expect(
       invokeTool({ registry: ctx.tools, broker: ctx.broker, store: ctx.store, ctx: { missionId, actor: CLAUDE_CODE }, name: "request_bench_action", args: { action: "flash-app", revision: 7 } }),
-    ).rejects.toThrow("The bench runs the mission's current revision (1), not revision 7.");
+    ).rejects.toThrow("The bench runs the released revision (1), not revision 7.");
     expect(await listed(missionId)).toEqual([]);
+  });
+
+  it("audit R3-1: after a newer design is proposed, a bench request is bound to the RELEASED revision and runs that one", async () => {
+    const { ctx } = running.context;
+    const missionId = await missionWithRevision(); // r1 released
+    // A newer design version appears (as over MCP): r2 is current, r1 stays the build target.
+    const r2 = await ctx.store.createRevision(missionId, { circuit: { ...golden.circuit, title: "Moon-Phase Lamp v2" }, suite: golden.suite, author: CLAUDE_CODE, parent: 1 });
+    await ctx.store.updateMission(missionId, { currentRevision: r2.n });
+    const r1 = (await ctx.store.getRevision(missionId, 1))!;
+
+    const result = await invokeTool({ registry: ctx.tools, broker: ctx.broker, store: ctx.store, ctx: { missionId, actor: CLAUDE_CODE }, name: "request_bench_action", args: { action: "flash-app" } });
+    expect(result.status).toBe("bench-click");
+    const approval = result.status === "bench-click" ? result.approval! : undefined;
+    expect([approval?.action, approval?.revisionHash]).toEqual(["flash-app", r1.hash]);
+    expect(result.status === "bench-click" && (result.output as { revision: number }).revision).toBe(1);
+
+    const requests = await listed(missionId);
+    expect(requests.map((r) => [r.action, r.revision])).toEqual([["flash-app", 1]]);
+    await passSelftest(missionId, 1); // "after a virtual pass on r1"
+    const start = await fetch(`${base}/api/missions/${missionId}/bench/requests/${requests[0]!.id}/start`, { method: "POST" });
+    expect(start.status).toBe(200);
+    expect(await start.json()).toMatchObject({ action: "flash-app", revision: 1 });
+    // Asking for the unreleased r2 explicitly is refused, naming the released one.
+    await expect(
+      invokeTool({ registry: ctx.tools, broker: ctx.broker, store: ctx.store, ctx: { missionId, actor: CLAUDE_CODE }, name: "request_bench_action", args: { action: "flash-app", revision: 2 } }),
+    ).rejects.toThrow("The bench runs the released revision (1), not revision 2.");
+  });
+
+  it("with nothing released, a bench request is refused and nothing is listed", async () => {
+    const { ctx } = running.context;
+    const missionId = await missionWithRevision({ released: false });
+    await expect(
+      invokeTool({ registry: ctx.tools, broker: ctx.broker, store: ctx.store, ctx: { missionId, actor: CLAUDE_CODE }, name: "request_bench_action", args: { action: "run-selftest" } }),
+    ).rejects.toThrow("Nothing is released for the bench yet — press GO for build first.");
+    expect(await listed(missionId)).toEqual([]);
+    expect(await ctx.broker.listPending(missionId)).toEqual([]);
   });
 });

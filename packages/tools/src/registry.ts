@@ -486,21 +486,21 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
       name: "request_bench_action",
       title: "Ask for a bench action",
       description:
-        "Request a physical action (flash firmware, rail checkpoint, self-test). It never runs from here: it waits for the person " +
-        "to click Start in the bench browser that holds the USB port.",
+        "Request a physical action (flash firmware, rail checkpoint, self-test) on the RELEASED revision (the build target). It " +
+        "never runs from here: it waits for the person to click Start in the bench browser that holds the USB port.",
       actionClass: "physical",
       input: z.object({
         action: z.enum(BENCH_ACTIONS),
-        revision: revisionArg.describe("Must be the mission's current revision (the one the bench runs); defaults to it."),
+        revision: revisionArg.describe("Must be the released revision (the build target the bench runs); defaults to it."),
         note: z.string().max(200).optional(),
       }),
       handler: async (ctx, input) => {
         const mission = await requireMission(store, ctx.missionId);
-        // The bench runs the mission's current revision; a request is bound to it (gate.ts) and listed only for it.
-        const n = mission.currentRevision;
-        if (n === undefined) throw new ToolInputError("There is no revision to use at the bench yet.");
+        // The bench runs the released revision (the build target); a request is bound to its hash (gate.ts).
+        const n = mission.releasedRevision;
+        if (n === undefined) throw new ToolInputError("Nothing is released for the bench yet — press GO for build first.");
         if (input.revision !== undefined && input.revision !== n) {
-          throw new ToolInputError(`The bench runs the mission's current revision (${n}), not revision ${input.revision}.`);
+          throw new ToolInputError(`The bench runs the released revision (${n}), not revision ${input.revision}. Release revision ${input.revision} first (GO for build).`);
         }
         return {
           summary: `${BENCH_ACTION_TEXT[input.action]} — waiting for a click at the bench`,
