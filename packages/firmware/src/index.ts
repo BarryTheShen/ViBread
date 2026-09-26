@@ -10,6 +10,7 @@ import {
   BOARD_PROFILES,
   boardPin,
   SELFTEST_LIMITS,
+  VCC_PASS_MV,
   type BoardPin,
   type BoardProfile,
   type BoardProfileId,
@@ -891,7 +892,11 @@ function ensureReadonly(): string {
   return "if (!vbReadonlyDone) vbRunReadonly();";
 }
 
+/**
+ * Board power check: measure the MCU's VCC (≈5 V), not breadboard-rail continuity. The part tests that follow exercise the breadboard rails.
+ */
 function makeRails(): string {
+  const passWindow = `mv >= ${VCC_PASS_MV.min} && mv <= ${VCC_PASS_MV.max}`;
   return [
     'vbEmitBegin(PSTR("rails.vcc"));',
     "uint8_t savedAdmux = ADMUX;",
@@ -903,7 +908,7 @@ function makeRails(): string {
     "uint16_t mv = bandgap == 0 ? 0 : (uint16_t)((1100UL * 1023UL) / bandgap);",
     "ADMUX = savedAdmux;",
     "vbEmitVcc(mv);",
-    'vbEmitEnd(PSTR("rails.vcc"), mv >= 4000 && mv <= 6000 ? PSTR("pass") : PSTR("unknown"), nullptr);',
+    `vbEmitEnd(PSTR("rails.vcc"), ${passWindow} ? PSTR("pass") : PSTR("fail"), nullptr);`,
   ].join("\n  ");
 }
 

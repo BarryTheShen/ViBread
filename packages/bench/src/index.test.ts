@@ -48,8 +48,47 @@ function pins(readD2 = 32): DeviceLine[] {
 async function run(lines: DeviceLine[], answers: Record<string, string>, runLayout: Layout | undefined = layout) {
   return evaluateRun({ circuit: moonPhaseLamp, plan, layout: runLayout, lines: [...header(), ...lines], answers, kind: "selftest", revision: 1, runId: "test" });
 }
+const railPlan: typeof plan = { ...plan, tests: ["rails.vcc"] };
+
+async function evaluateRail(mv?: number) {
+  const lines: DeviceLine[] = [
+    { t: "hello", fw: "vibread-bench", proto: 1, design: railPlan.design, board: railPlan.board },
+    ...(mv === undefined ? [] : [{ t: "vcc" as const, mv }]),
+  ];
+  const result = await evaluateRun({
+    circuit: moonPhaseLamp,
+    plan: railPlan,
+    layout,
+    lines,
+    answers: {},
+    kind: "rails",
+    revision: 1,
+    runId: "rail-test",
+  });
+  const rail = result.results.find((candidate) => candidate.test === "rails.vcc");
+  if (rail === undefined) throw new Error("rails.vcc result missing");
+  return rail;
+}
+
 
 describe("bench self-test", () => {
+  it.each([
+    [4490, "fail"],
+    [4500, "pass"],
+    [5500, "pass"],
+    [5510, "fail"],
+  ] as const)("evaluates the board-power VCC window at %d mV", async (mv, status) => {
+    const rail = await evaluateRail(mv);
+    expect(rail.status).toBe(status);
+    expect(rail.subjects[0]).toMatchObject({ part: "board power", observed: `${mv} mV` });
+  });
+
+  it("reports unknown only when the board-power VCC reading is missing", async () => {
+    const rail = await evaluateRail();
+    expect(rail.status).toBe("unknown");
+    expect(rail.subjects[0]).toMatchObject({ part: "board power", observed: "no board VCC reading" });
+  });
+
   it("derives safe subjects, order, timings, and friendly prompts", () => {
     expect(plan.tests).toEqual(["rails.vcc", "pins.readonly", "button.interactive", "light.relative", "led.sequence"]);
     expect(plan.timing).toEqual({ ledOnMs: 5, ledPeriodMs: 50, ledPulses: 20, promptTimeoutMs: 20_000, samples: 32 });

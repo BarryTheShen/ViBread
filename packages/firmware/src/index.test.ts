@@ -57,6 +57,8 @@ describe("firmware compiler", () => {
 
   it("renders and compiles the launch self-test within Uno budgets", async () => {
     const source = renderBenchFirmware(launchPlan);
+    expect(source).toContain('vbEmitEnd(PSTR("rails.vcc"), mv >= 4500 && mv <= 5500 ? PSTR("pass") : PSTR("fail"), nullptr);');
+    expect(source).not.toContain('PSTR("rails.vcc"), mv >= 4500 && mv <= 5500 ? PSTR("pass") : PSTR("unknown")');
     expect(source).toContain('PSTR("led1")');
     expect(source).toContain('PSTR("btn0-press")');
     expect(source).toContain('PSTR("btn1-release")');
