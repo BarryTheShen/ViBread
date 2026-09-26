@@ -147,6 +147,13 @@ export const capcomSpaces = sqliteTable("capcom_spaces", {
   missionId: text("missionId"),
   updatedAt: timestamp("updatedAt").notNull(),
 });
+export const pairedDevices = sqliteTable("paired_devices", {
+  idHash: text("idHash").primaryKey(),
+  createdAt: timestamp("createdAt").notNull(),
+  lastSeenAt: timestamp("lastSeenAt"),
+  userAgent: text("userAgent"),
+});
+
 
 
 /** PLAN item 16: a ViBread user's connected Claude account (credential lives in the oh-my-pi auth broker's own store). */
@@ -350,6 +357,7 @@ export const dbSchema = {
   apiTokens,
   imessageLinks,
   capcomSpaces,
+  pairedDevices,
   user,
   session,
   account,

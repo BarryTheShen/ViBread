@@ -13,6 +13,10 @@ import CardContent from "@mui/material/CardContent";
 import Checkbox from "@mui/material/Checkbox";
 import Chip from "@mui/material/Chip";
 import Container from "@mui/material/Container";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
 import FormControl from "@mui/material/FormControl";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import FormGroup from "@mui/material/FormGroup";
@@ -36,7 +40,7 @@ import { useState } from "react";
 import { Link as RouterLink, useLocation, useNavigate } from "react-router";
 import { authClient } from "../api/auth.js";
 import { ClaudeAccountSection } from "./ClaudeAccountSection.js";
-import { useConnections, useImessageCode, useMintToken, useRevokeToken } from "../api/hooks.js";
+import { useConnections, useImessageCode, useLanDevices, useMintToken, useRevokeToken, useUnpairAllPhones } from "../api/hooks.js";
 import { ErrorOrSignIn, ProviderButtons, useProviders } from "../components/SignIn.js";
 import { useDefaultMode } from "../lib/prefs.js";
 import { agoLabel, expiryLabel, useNow } from "../lib/time.js";
@@ -196,6 +200,84 @@ function ClaudeCodeSection() {
   );
 }
 
+/** Phones paired over the LAN; only rendered on the laptop itself (the endpoint answers loopback requests only). */
+function PhonesSection() {
+  const devices = useLanDevices();
+  const unpair = useUnpairAllPhones();
+  const now = useNow(30_000);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  if (devices.isPending || devices.data === null) return null;
+  if (devices.isError) {
+    return (
+      <Section title="Phones" id="phones-heading">
+        <Alert severity="error">Couldn't load paired phones: {devices.error.message}</Alert>
+      </Section>
+    );
+  }
+  const list = devices.data;
+  const lastUsed = list
+    .map((d) => d.lastSeenAt ?? d.createdAt)
+    .sort()
+    .at(-1);
+  return (
+    <Section title="Phones" id="phones-heading">
+      <Typography sx={{ color: "text.secondary" }}>
+        Phones on your Wi-Fi open Build Mode by scanning the QR code in the Steps tab. A paired phone can only follow build steps and
+        send photo checks.
+      </Typography>
+      <Typography sx={{ fontWeight: 600 }}>
+        {list.length === 0
+          ? "No phones paired."
+          : `${list.length} phone${list.length === 1 ? "" : "s"} paired${lastUsed ? ` · last used ${agoLabel(lastUsed, now)}` : ""}`}
+      </Typography>
+      {list.length > 0 && (
+        <List dense disablePadding>
+          {list.map((d) => (
+            <ListItem key={d.id} disableGutters divider>
+              <ListItemText
+                primary={d.userAgent ? describeDevice(d.userAgent) : "Phone"}
+                secondary={`Paired ${agoLabel(d.createdAt, now)}${d.lastSeenAt ? ` · last used ${agoLabel(d.lastSeenAt, now)}` : ""}`}
+              />
+            </ListItem>
+          ))}
+        </List>
+      )}
+      <Box>
+        <Button color="error" variant="outlined" startIcon={<LinkOffIcon />} disabled={unpair.isPending} onClick={() => setConfirmOpen(true)}>
+          Unpair all phones
+        </Button>
+      </Box>
+      {unpair.isSuccess && <Alert severity="success">All phones unpaired. The QR code in the Steps tab is new; scan it again on each phone.</Alert>}
+      {unpair.isError && <Alert severity="error">Couldn't unpair: {unpair.error.message}</Alert>}
+      <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)}>
+        <DialogTitle>Unpair all phones?</DialogTitle>
+        <DialogContent>
+          <Typography>Phones will need to scan the new QR code.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
+          <Button
+            color="error"
+            variant="contained"
+            disabled={unpair.isPending}
+            onClick={() => unpair.mutate(undefined, { onSettled: () => setConfirmOpen(false) })}
+          >
+            {unpair.isPending ? "Unpairing…" : "Unpair all phones"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+    </Section>
+  );
+}
+
+/** "iPhone · Safari" style label from a user-agent string; falls back to a generic name. */
+function describeDevice(userAgent: string): string {
+  const device = /iPhone|iPad|Android|Pixel|Macintosh|Windows|Linux/.exec(userAgent)?.[0] ?? "Phone";
+  const browser = /CriOS|Chrome|Firefox|FxiOS|Edg|Safari/.exec(userAgent)?.[0];
+  const name = browser === "CriOS" ? "Chrome" : browser === "FxiOS" ? "Firefox" : browser === "Edg" ? "Edge" : browser;
+  return name ? `${device} · ${name}` : device;
+}
+
 function ImessageSection() {
   const connections = useConnections();
   const code = useImessageCode();
@@ -327,6 +409,7 @@ export default function SettingsPage() {
           <>
             <ClaudeAccountSection />
             <ClaudeCodeSection />
+            <PhonesSection />
             <ImessageSection />
           </>
         )}

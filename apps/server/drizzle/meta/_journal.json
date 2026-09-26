@@ -36,6 +36,13 @@
       "when": 1790435979881,
       "tag": "0004_petite_nuke",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1790445914429,
+      "tag": "0005_normal_paibok",
+      "breakpoints": true
     }
   ]
 }
