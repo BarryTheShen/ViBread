@@ -38,49 +38,53 @@ declare module "@mui/material/Typography" {
 }
 
 /**
- * Signal Teal tokens. Keep all UI colours here so feature slices use the shared palette instead of copying old warm
- * colours into their own components.
+ * Coolors blue/red/orange palette. Keep all UI colours here so feature slices use the shared palette instead of copying
+ * brand literals into their own components.
  */
 export const THEME_TOKENS = {
   light: {
-    main: "#F4F7F7",
-    sidebar: "#E8EFEE",
-    cards: "#FFFFFF",
-    text: "#12201F",
-    secondaryText: "#4B605E",
-    primary: "#0F766E",
+    main: "#FBF8EE",
+    sidebar: "#F3EDD3",
+    cards: "#FFFDF8",
+    text: "#003049",
+    secondaryText: "#3E5C6E",
+    primary: "#003049",
     primaryText: "#FFFFFF",
-    link: "#0B5F5A",
-    accent: "#0E7490",
-    success: "#166534",
-    info: "#1D4ED8",
-    warning: "#9A3412",
-    error: "#B91C1C",
-    inputBorder: "#6B8582",
-    divider: "#D3DFDD",
-    canvas: "#0B171A",
-    code: "#D9E9E6",
-    qr: "#FFFFFF",
+    link: "#003049",
+    accent: "#F77F00",
+    accentText: "#003049",
+    success: "#2D6A4F",
+    info: "#1F5A7A",
+    warning: "#FCBF49",
+    warningText: "#704600",
+    error: "#D62828",
+    inputBorder: "#5C7280",
+    divider: "#E4DCC0",
+    canvas: "#00202F",
+    code: "#F3EDD3",
+    qr: "#FFFDF8",
   },
   dark: {
-    main: "#0E1719",
-    sidebar: "#142124",
-    cards: "#192B2E",
-    text: "#F0FAF9",
-    secondaryText: "#B5CBC8",
-    primary: "#2DD4BF",
-    primaryText: "#062A28",
-    link: "#5EEAD4",
-    accent: "#22D3EE",
-    success: "#86EFAC",
-    info: "#93C5FD",
-    warning: "#FCD34D",
-    error: "#FDA4AF",
-    inputBorder: "#6B8582",
-    divider: "#2A3E41",
-    canvas: "#0B171A",
-    code: "#112629",
-    qr: "#FFFFFF",
+    main: "#001B29",
+    sidebar: "#00232F",
+    cards: "#003049",
+    text: "#EAE2B7",
+    secondaryText: "#BFB896",
+    primary: "#FCBF49",
+    primaryText: "#003049",
+    link: "#FCBF49",
+    accent: "#F77F00",
+    accentText: "#003049",
+    success: "#7BD389",
+    info: "#8EC5E8",
+    warning: "#FCBF49",
+    warningText: "#003049",
+    error: "#FF7A70",
+    inputBorder: "#7F9EAB",
+    divider: "#16414F",
+    canvas: "#00202F",
+    code: "#00202F",
+    qr: "#FFFDF8",
   },
 } as const;
 
@@ -90,7 +94,7 @@ export const INTER_FONT = '"Inter Variable", Inter, "Helvetica Neue", Arial, san
 export const LORA_FONT = 'Lora, Georgia, "Times New Roman", serif';
 
 const focusRing = {
-  outline: "3px solid var(--mui-palette-input-main)",
+  outline: "3px solid var(--mui-palette-primary-main)",
   outlineOffset: 2,
 } as const;
 
@@ -99,10 +103,10 @@ const lightPalette = {
   contrastThreshold: 4.5,
   primary: { main: THEME_TOKENS.light.primary, contrastText: THEME_TOKENS.light.primaryText },
   link: { main: THEME_TOKENS.light.link },
-  secondary: { main: THEME_TOKENS.light.accent, contrastText: THEME_TOKENS.light.primaryText },
+  secondary: { main: THEME_TOKENS.light.accent, contrastText: THEME_TOKENS.light.accentText },
   success: { main: THEME_TOKENS.light.success, contrastText: THEME_TOKENS.light.primaryText },
   info: { main: THEME_TOKENS.light.info, contrastText: THEME_TOKENS.light.primaryText },
-  warning: { main: THEME_TOKENS.light.warning, contrastText: THEME_TOKENS.light.primaryText },
+  warning: { main: THEME_TOKENS.light.warning, contrastText: THEME_TOKENS.light.warningText },
   error: { main: THEME_TOKENS.light.error, contrastText: THEME_TOKENS.light.primaryText },
   background: { default: THEME_TOKENS.light.main, paper: THEME_TOKENS.light.cards, sidebar: THEME_TOKENS.light.sidebar },
   text: { primary: THEME_TOKENS.light.text, secondary: THEME_TOKENS.light.secondaryText },
@@ -118,7 +122,7 @@ const darkPalette = {
   contrastThreshold: 4.5,
   primary: { main: THEME_TOKENS.dark.primary, contrastText: THEME_TOKENS.dark.primaryText },
   link: { main: THEME_TOKENS.dark.link },
-  secondary: { main: THEME_TOKENS.dark.accent, contrastText: THEME_TOKENS.dark.primaryText },
+  secondary: { main: THEME_TOKENS.dark.accent, contrastText: THEME_TOKENS.dark.accentText },
   success: { main: THEME_TOKENS.dark.success, contrastText: THEME_TOKENS.dark.primaryText },
   info: { main: THEME_TOKENS.dark.info, contrastText: THEME_TOKENS.dark.primaryText },
   warning: { main: THEME_TOKENS.dark.warning, contrastText: THEME_TOKENS.dark.primaryText },
@@ -133,8 +137,8 @@ const darkPalette = {
 };
 
 /**
- * Signal Teal, border-led ViBread theme. MUI's colorSchemes keeps the two palettes in one theme and ThemeProvider's
- * default system mode follows prefers-color-scheme until the user chooses Light or Dark in Settings.
+ * Coolors blue/red/orange, border-led ViBread theme. MUI's colorSchemes keeps the two palettes in one theme and
+ * ThemeProvider's default system mode follows prefers-color-scheme until the user chooses Light or Dark in Settings.
  */
 export function createMissionTheme(reducedMotion: boolean): Theme {
   return createTheme({
