@@ -310,6 +310,9 @@ describe("server core persistence", () => {
       const scan = await scans.create("operator");
       const withPhoto = await scans.addPhoto("operator", scan.id, "photo-hash");
       expect(withPhoto.photos).toBe(1);
+      const failed = await scans.fail("operator", scan.id, { code: "claude_rate_limited", message: "rate limited", retryAfter: "2030-01-01T00:00:00.000Z" });
+      expect(failed.status).toBe("failed");
+      expect(failed.errorCode).toBe("claude_rate_limited");
       const ready = await scans.analyze("operator", scan.id, { observations: [{ photoIndex: 0, typeId: resistor.id, label: "220 ohm resistor", count: 1, confidence: "high", box: [0, 0, 10, 10] }], analyzed: [{ hash: "analyzed-hash", width: 100, height: 100 }] }, await catalog.types("operator"), await inventory.entries("operator"));
       expect(ready.status).toBe("ready");
       expect(ready.items[0]?.cropUrl).toContain("/crops/0");

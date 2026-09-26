@@ -18,16 +18,29 @@ import type {
   TokenMintResponse,
 } from "@vibread/core";
 
-/** A non-2xx response from the ViBread server, carrying the `{ error: { code, message } }` body. */
+/**
+ * A non-2xx response from the ViBread server, carrying the `{ error: { code, message, retryAt? } }` body. `retryAt` (ISO
+ * time) comes from the body or the Retry-After header, e.g. when Claude is rate-limited.
+ */
 export class HttpError extends Error {
   constructor(
     readonly status: number,
     readonly code: string,
     message: string,
+    readonly retryAt?: string,
   ) {
     super(message);
     this.name = "HttpError";
   }
+}
+
+/** Retry-After as an ISO time: seconds or an HTTP date. */
+function retryAfterHeader(res: Response): string | undefined {
+  const value = res.headers.get("retry-after");
+  if (!value) return undefined;
+  const seconds = Number(value);
+  const at = Number.isFinite(seconds) ? Date.now() + seconds * 1000 : Date.parse(value);
+  return Number.isFinite(at) ? new Date(at).toISOString() : undefined;
 }
 
 function isApiError(value: unknown): value is ApiError {
@@ -42,7 +55,10 @@ export async function errorFromResponse(res: Response): Promise<HttpError> {
   if (text) {
     try {
       const body: unknown = JSON.parse(text);
-      if (isApiError(body)) return new HttpError(res.status, body.error.code, body.error.message);
+      if (isApiError(body)) {
+        const retryAt = "retryAt" in body.error && typeof body.error.retryAt === "string" ? body.error.retryAt : retryAfterHeader(res);
+        return new HttpError(res.status, body.error.code, body.error.message, retryAt);
+      }
       // OAuth-style bodies (`{ error: "invalid_credentials", error_description? }`) from the OAuth/MCP routes.
       if (typeof body === "object" && body !== null && "error" in body && typeof body.error === "string") {
         const description = "error_description" in body && typeof body.error_description === "string" ? body.error_description : body.error;
