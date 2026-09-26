@@ -54,8 +54,9 @@ USB bench works the same on every OS). How it works inside: [HOW-IT-WORKS.md](HO
   ViBread's own local server). For the full Chromium sandbox on Ubuntu 24.04+, use the `.deb`.
 - **USB on Linux:** add yourself to the serial group once and log out/in: `sudo usermod -aG dialout $USER` (Arch:
   `uucp`). Then the bench's *Choose filtered USB port* picks the Arduino automatically (or asks when several are plugged in).
-- **Phones:** menu **ViBread → Show phone link / QR** (same Wi-Fi). Allow ViBread through the firewall when your OS
-  asks (Windows/macOS prompt on first phone connection; private networks only).
+- **Phones:** menu **ViBread → Show phone link / QR** (same Wi-Fi). Phones pair by scanning the QR code; other devices
+  on the Wi-Fi can't open your ViBread. Allow ViBread through the firewall when your OS asks (Windows/macOS prompt on
+  first phone connection; private networks only).
 - **AI agents:** menu **ViBread → Set Anthropic API key…**, or connect a Claude account in Settings. The key is
   encrypted with the OS keychain (macOS Keychain, Windows DPAPI, GNOME Keyring/KWallet on Linux); on a Linux desktop
   without a keyring it is stored obfuscated, not encrypted, in `settings.json` (readable only by your user), and the
