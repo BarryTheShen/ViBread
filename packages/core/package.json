@@ -1,0 +1,15 @@
+{
+  "name": "@vibread/core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "zod": "4.6.5",
+    "@noble/hashes": "2.4.0",
+    "canonicalize": "5.1.0",
+    "yaml": "2.9.1"
+  }
+}
