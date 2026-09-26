@@ -1,4 +1,4 @@
-import { CONSOLE_LABELS, hashJson, type Actor, type Circuit, type ConsoleReport, type Mission, type MissionStore, type Revision, type TestSuite } from "@vibread/core";
+import { CONSOLE_LABELS, ScenarioSchema, hashJson, type Actor, type Circuit, type ConsoleReport, type Finding, type Mission, type MissionStore, type Revision, type Scenario, type TestSuite } from "@vibread/core";
 import { ToolInputError, circuitInterface, crashFinding, deterministicGo, errorMessage, isClaudeNotConnected, requireRevision, statusReport } from "./common.js";
 import type { Pipeline } from "./pipeline.js";
 import type { RegistryHooks } from "./registry.js";
@@ -53,38 +53,104 @@ export class TestsNotWrittenError extends ToolInputError {
   }
 }
 
+/** One failing scenario the test reviewer judged (RegistryHooks.reviewTests). */
+export interface TestReview {
+  id: string;
+  verdict: "test-wrong" | "design-wrong" | "unsure";
+  reason: string;
+  /** The corrected scenario (same id) for "test-wrong". */
+  scenario?: Scenario;
+}
+
+/** What the review of a revision's failing tests did. */
+export interface ReviewOutcome {
+  /** The revision to report: `revision` itself, or n+1 with the corrected suite, already evaluated. */
+  revision: Revision;
+  reviews: TestReview[];
+  /** Scenario ids replaced by corrected ones. */
+  corrected: string[];
+}
+
+/** Hardware the tests drive and watch: part ids + kinds and pin roles (labels, order and values don't change a test). */
+function hardwareKey(circuit: Circuit): string {
+  const parts = circuit.parts.map((p) => `${p.id}:${p.module}`).sort();
+  const roles = circuit.roles.map((r) => `${r.pin}:${r.mode}:${r.part}`).sort();
+  return hashJson({ board: circuit.board.profile, parts, roles });
+}
+
 /**
- * Design-revision operations shared by the tools (propose_design, run_scenarios) and the human release route.
- * Suites written by the independent test author are cached by (brief, design interface) — what the author sees — so a
- * suite written for a read-only run is the same suite a later revision records, and is never paid for twice.
+ * Which scenarios of the previous suite still apply to `circuit`: with the same hardware, every scenario whose clauses all
+ * still exist with the same text is kept (passing or not — a correct test that fails must stay until the design passes
+ * it); `clauses` are the intent clauses new or changed since, which need new scenarios. Undefined when the hardware
+ * changed (the whole suite is rewritten).
+ */
+export function carryForward(previous: { circuit: Circuit; suite: TestSuite }, circuit: Circuit): { keep: Scenario[]; clauses: string[] } | undefined {
+  if (hardwareKey(previous.circuit) !== hardwareKey(circuit)) return undefined;
+  const before = new Map(previous.circuit.intent.map((c) => [c.id, c.text.trim()]));
+  const now = new Map(circuit.intent.map((c) => [c.id, c.text.trim()]));
+  const keep = previous.suite.scenarios.filter((s) => s.clauses.every((id) => now.has(id) && now.get(id) === before.get(id)));
+  const covered = new Set(keep.flatMap((s) => s.clauses));
+  const clauses = circuit.intent.filter((c) => before.get(c.id) !== c.text.trim() || !covered.has(c.id)).map((c) => c.id);
+  return { keep, clauses };
+}
+
+/**
+ * Design-revision operations shared by the tools (propose_design, run_scenarios, dispute_test) and the human release
+ * route. Suites written by the independent test author are cached by (brief, design interface) — what the author sees — so
+ * a suite written for a read-only run is the same suite a later revision records, and is never paid for twice.
  */
 export interface DesignOps {
-  /** The suite for this circuit's interface: cached, else written now. Throws TestsNotWrittenError without a credential. */
-  suiteFor(mission: Mission, circuit: Circuit, signal?: AbortSignal): Promise<TestSuite>;
+  /**
+   * The suite for this circuit: cached; else, with `previous`, the previous suite's scenarios that still apply plus new
+   * ones for changed clauses only (carryForward); else written now. Throws TestsNotWrittenError without a credential.
+   */
+  suiteFor(mission: Mission, circuit: Circuit, signal?: AbortSignal, previous?: Revision | null): Promise<TestSuite>;
   /** Pipeline + RETRO + onEvaluated for one revision. */
   evaluate(mission: Mission, n: number, signal?: AbortSignal): Promise<Revision>;
   /** Records a suite for a revision that has none as revision n+1 (same circuit), then evaluates it. */
   recordSuite(mission: Mission, revision: Revision, suite: TestSuite): Promise<Revision>;
+  /**
+   * When simulation tests failed, the test author reviews them against the intent (never the sketch): scenarios that
+   * contradict the intent are corrected and re-run as revision n+1 (same circuit); ones still in doubt become TESTS-SUSPECT
+   * (tool-side) and ones the reviewer confirms stay SIM-FAIL with its reason. `only`/`dispute`: the design agent's dispute.
+   */
+  reviewFailedTests(mission: Mission, revision: Revision, options?: { signal?: AbortSignal; only?: string[]; dispute?: string }): Promise<ReviewOutcome>;
 }
 
 export function createDesignOps(deps: { store: MissionStore; pipeline: Pipeline; hooks?: RegistryHooks }): DesignOps {
   const { store, pipeline, hooks = {} } = deps;
   const suites = new Map<string, TestSuite>();
 
+  async function recordCorrectedSuite(mission: Mission, revision: Revision, suite: TestSuite, note: string): Promise<Revision> {
+    const next = await store.createRevision(mission.id, { circuit: revision.circuit, suite, author: TEST_AUTHOR, note, parent: revision.n });
+    await store.updateMission(mission.id, { currentRevision: next.n });
+    await store.appendEvent({ missionId: mission.id, channel: "system", actor: TEST_AUTHOR, kind: "revision.created", text: `Revision ${next.n}: ${note}`, revision: next.n, data: { hash: next.hash, parent: revision.n } });
+    return next;
+  }
+
   const ops: DesignOps = {
-    async suiteFor(mission, circuit, signal) {
+    async suiteFor(mission, circuit, signal, previous) {
       const design = circuitInterface(circuit);
       const key = hashJson({ brief: mission.brief, design });
       const cached = suites.get(key);
       if (cached) return cached;
-      if (!hooks.writeTests) throw new ToolInputError("No independent test author is configured.");
       const { coverageOf } = await import("@vibread/sim");
+      const plan = previous?.suite ? carryForward({ circuit: previous.circuit, suite: previous.suite }, circuit) : undefined;
+      if (plan && plan.clauses.length === 0 && plan.keep.length > 0) {
+        const kept: TestSuite = { ...previous!.suite!, scenarios: plan.keep };
+        if (coverageOf(circuit, kept).missing.length === 0) {
+          suites.set(key, kept);
+          return kept;
+        }
+      }
+      if (!hooks.writeTests) throw new ToolInputError("No independent test author is configured.");
       try {
         const suite = await hooks.writeTests({
           missionId: mission.id,
           brief: mission.brief,
           design,
           coverageGaps: (candidate) => coverageOf(circuit, candidate).missing,
+          ...(plan?.keep.length ? { keep: plan.keep, clauses: plan.clauses } : {}),
           ...(signal ? { signal } : {}),
         });
         // A suite with coverage gaps isn't kept: the next proposal asks the author again instead of reusing its gaps.
@@ -117,6 +183,91 @@ export function createDesignOps(deps: { store: MissionStore; pipeline: Pipeline;
       });
       return ops.evaluate(mission, next.n);
     },
+
+    async reviewFailedTests(mission, revision, options = {}) {
+      const unchanged: ReviewOutcome = { revision, reviews: [], corrected: [] };
+      const suite = revision.suite;
+      if (!hooks.reviewTests || !suite || suite.author !== "test-author") return unchanged;
+      const failing = failingScenarios(revision).filter((f) => !options.only || options.only.includes(f.id));
+      const failures = failing.flatMap((f) => {
+        const scenario = suite.scenarios.find((s) => s.id === f.id);
+        return scenario ? [{ scenario, detail: f.detail }] : [];
+      });
+      if (!failures.length) return unchanged;
+      const reviews = await hooks.reviewTests({
+        missionId: mission.id,
+        brief: mission.brief,
+        design: circuitInterface(revision.circuit),
+        failures,
+        ...(options.dispute ? { dispute: options.dispute } : {}),
+        ...(options.signal ? { signal: options.signal } : {}),
+      });
+      const judged = reviews.filter((r) => failures.some((f) => f.scenario.id === r.id));
+      if (!judged.length) return unchanged;
+      const repairs = new Map<string, Scenario>();
+      for (const review of judged) {
+        if (review.verdict !== "test-wrong" || !review.scenario) continue;
+        const parsed = ScenarioSchema.safeParse({ ...review.scenario, id: review.id });
+        if (parsed.success) repairs.set(review.id, parsed.data);
+      }
+
+      let final = revision;
+      if (repairs.size) {
+        const corrected: TestSuite = { ...suite, scenarios: suite.scenarios.map((s) => repairs.get(s.id) ?? s) };
+        const ids = [...repairs.keys()];
+        const next = await recordCorrectedSuite(mission, revision, corrected, `revision ${revision.n} with corrected independent tests (${ids.join(", ")}): they contradicted the intent, not the design.`);
+        final = await ops.evaluate(mission, next.n, options.signal);
+      }
+
+      // Rewrite FIDO's findings with what the review found.
+      const stillFailing = new Map(failingScenarios(final).map((f) => [f.id, f.detail]));
+      const byId = new Map(judged.map((r) => [r.id, r]));
+      const fido = final.results.reports.find((r) => r.console === "FIDO");
+      if (fido && stillFailing.size) {
+        const findings = fido.findings.map((finding): Finding => {
+          const id = finding.ruleId === "SIM-FAIL" ? finding.refs?.scenarios?.[0] : undefined;
+          const review = id ? byId.get(id) : undefined;
+          if (!id || !review) return finding;
+          if (review.verdict === "test-wrong") {
+            return {
+              ...finding,
+              ruleId: "TESTS-SUSPECT",
+              toolSide: true,
+              title: `${id}: this test looks wrong, not the design`,
+              detail: `${repairs.has(id) ? "The corrected test still fails" : "The test reviewer couldn't correct it"}. Reviewer: ${review.reason} Failure: ${finding.detail ?? ""}`.trim(),
+              fix: "A ViBread test problem: don't change the design for it; tell the person what the test expects and ask how to proceed.",
+            };
+          }
+          const note = review.verdict === "design-wrong" ? `The test reviewer confirmed this test matches the intent: ${review.reason}` : `The test reviewer couldn't tell whether the test or the design is wrong: ${review.reason}`;
+          return { ...finding, detail: `${finding.detail ?? ""} — ${note}`.trim() };
+        });
+        const saved = await store.saveResults(mission.id, final.n, {
+          reports: final.results.reports.map((r) => (r.console === "FIDO" ? { ...r, findings, summary: summaryWithSuspects(r.summary, findings) } : r)),
+        });
+        final = saved;
+      }
+      await store.appendEvent({
+        missionId: mission.id,
+        channel: "system",
+        actor: TEST_AUTHOR,
+        kind: "tests.reviewed",
+        text: `Test review of revision ${revision.n}: ${judged.map((r) => `${r.id} ${r.verdict}${repairs.has(r.id) ? " (corrected)" : ""}`).join(", ") || "no verdict"}`,
+        revision: final.n,
+        data: { reviews: judged.map(({ scenario: _scenario, ...rest }) => rest), corrected: [...repairs.keys()] },
+      });
+      return { revision: final, reviews: judged, corrected: [...repairs.keys()] };
+    },
   };
   return ops;
+}
+
+/** The failing scenarios of a revision's FIDO report, with the simulator's failure detail. */
+function failingScenarios(revision: Revision): { id: string; detail: string }[] {
+  const fido = revision.results.reports.find((r) => r.console === "FIDO");
+  return (fido?.findings ?? []).flatMap((f) => (f.ruleId === "SIM-FAIL" && f.refs?.scenarios?.[0] ? [{ id: f.refs.scenarios[0], detail: f.detail ?? f.title }] : []));
+}
+
+function summaryWithSuspects(summary: string, findings: Finding[]): string {
+  const suspects = findings.filter((f) => f.ruleId === "TESTS-SUSPECT").length;
+  return suspects ? `${summary} ${suspects} failing test${suspects === 1 ? " looks" : "s look"} wrong (a ViBread test problem).` : summary;
 }

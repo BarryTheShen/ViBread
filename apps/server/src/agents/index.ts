@@ -97,6 +97,18 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
           throw error;
         }
       },
+      async reviewTests(input) {
+        const started = Date.now();
+        try {
+          const reviews = await author.review(input);
+          debug.event(input.missionId, "agent", `test review: ${reviews.map((r) => `${r.id} ${r.verdict}`).join(", ") || "no verdict"}`.slice(0, 300), { step: "test-review", ms: Date.now() - started, disputed: input.dispute !== undefined, reviews: reviews.map((r) => ({ id: r.id, verdict: r.verdict, reason: r.reason, corrected: r.scenario !== undefined })) });
+          return reviews;
+        } catch (error) {
+          // Without a review the failures stand as they are (SIM-FAIL); the design turn goes on.
+          debug.event(input.missionId, "agent", `test review failed: ${errorMessage(error)}`.slice(0, 300), { step: "test-review", ms: Date.now() - started, error: errorMessage(error), ...(error instanceof StructuredAnswerError ? { rawAnswer: error.raw } : {}) }, "warn");
+          return [];
+        }
+      },
       review,
       onEvaluated: async (missionId, revision) => {
         const mission = await deps.store.getMission(missionId);

@@ -3,7 +3,6 @@ import {
   CONSOLE_LABELS,
   MODULE_KEYS,
   MODULES,
-  hashJson,
   parseCircuit,
   type ConsoleReport,
   type Finding,
@@ -11,6 +10,7 @@ import {
   type Mission,
   type MissionStore,
   type Revision,
+  type Scenario,
   type TestSuite,
   type ToolDef,
   type ToolRegistry,
@@ -35,19 +35,37 @@ import {
   traceTools,
   type ToolTraceEvent,
 } from "./common.js";
-import { TestsNotWrittenError, createDesignOps, type DesignOps } from "./design.js";
+import { TestsNotWrittenError, createDesignOps, type DesignOps, type ReviewOutcome, type TestReview } from "./design.js";
 import type { Pipeline } from "./pipeline.js";
 
 /** Model-backed collaborators the registry calls; the agents slice supplies them (tests use mock models). */
 export interface RegistryHooks {
-  /** Independent test author: sees the brief and the design interface only (never the sketch). `gaps` reports coverage holes. */
+  /**
+   * Independent test author: sees the brief and the design interface only (never the sketch). `gaps` reports coverage
+   * holes. `keep`: scenarios carried over from the previous revision — the author writes new ones for `clauses` only and
+   * the returned suite contains both.
+   */
   writeTests?(input: {
     missionId: string;
     brief: string;
     design: CircuitInterface;
     coverageGaps: (suite: TestSuite) => string[];
+    keep?: Scenario[];
+    clauses?: string[];
     signal?: AbortSignal;
   }): Promise<TestSuite>;
+  /**
+   * The test author reviewing its own failing scenarios against the intent and the simulator's failure timelines (never
+   * the sketch). `dispute`: the design agent's reason for thinking a test is wrong.
+   */
+  reviewTests?(input: {
+    missionId: string;
+    brief: string;
+    design: CircuitInterface;
+    failures: { scenario: Scenario; detail: string }[];
+    dispute?: string;
+    signal?: AbortSignal;
+  }): Promise<TestReview[]>;
   /** RETRO reviewer: sees everything, can only vote. */
   review?(input: { mission: Mission; revision: Revision; signal?: AbortSignal }): Promise<ConsoleReport>;
   onEvaluated?(missionId: string, revision: Revision): Promise<void>;
@@ -62,7 +80,7 @@ const DETAIL_LIMIT = 600;
  * Findings the design can't fix: a stage crashed, the independent tests couldn't be written, or the independent suite
  * doesn't cover the circuit (only the test author writes tests), plus any finding a console marks `toolSide`.
  */
-const TOOL_SIDE_RULES: Record<string, true> = { "STAGE-CRASH": true, "TESTS-NOT-WRITTEN": true, "COV-OUTPUT": true, "COV-INPUT": true, "COV-CLAUSE": true, "COV-CATEGORY": true };
+const TOOL_SIDE_RULES: Record<string, true> = { "STAGE-CRASH": true, "TESTS-NOT-WRITTEN": true, "TESTS-SUSPECT": true, "PLACEMENT-UNMET": true, "COV-OUTPUT": true, "COV-INPUT": true, "COV-CLAUSE": true, "COV-CATEGORY": true };
 
 export function isToolSide(finding: Finding): boolean {
   return TOOL_SIDE_RULES[finding.ruleId] === true || finding.toolSide === true;
@@ -96,6 +114,46 @@ function brief(findings: Finding[]): BriefFinding[] {
 
 function verdictLine(reports: ConsoleReport[]): string {
   return reports.map((r) => `${CONSOLE_LABELS[r.console]} ${r.verdict}`).join(" · ");
+}
+
+/**
+ * The placement summary of a revision (which rows/side each part got, and whether requested groups sit together):
+ * results.placement, else the FAO report's evidence.placement.
+ */
+function placementOf(revision: Revision): { text: string; unmet: string[] } | undefined {
+  const fao = revision.results.reports.find((r) => r.console === "FAO");
+  const placement: unknown = ("placement" in revision.results ? revision.results.placement : undefined) ?? fao?.evidence?.placement;
+  if (!placement || typeof placement !== "object" || !("text" in placement) || typeof placement.text !== "string") return undefined;
+  const groups: unknown[] = "groups" in placement && Array.isArray(placement.groups) ? placement.groups : [];
+  const unmet = groups.flatMap((g) => (g && typeof g === "object" && "met" in g && g.met === false && "detail" in g && typeof g.detail === "string" ? [g.detail] : []));
+  return { text: placement.text, unmet };
+}
+
+/** What propose_design and dispute_test return to the design agent for a checked revision. */
+function designResult(revision: Revision, review?: ReviewOutcome) {
+  const reports = revision.results.reports;
+  const findings = brief(reports.flatMap((r) => r.findings));
+  const toolSide = findings.filter((f) => f.toolSide && f.severity === "error").length;
+  const notes: string[] = [];
+  if (toolSide) notes.push(`${toolSide} blocking finding${toolSide === 1 ? " is" : "s are"} a ViBread tool problem (toolSide), not a design problem: don't redesign for ${toolSide === 1 ? "it" : "them"}; tell the person.`);
+  if (review?.corrected.length) notes.push(`The test author corrected ${review.corrected.join(", ")} (they contradicted the intent) and re-ran them as revision ${revision.n}.`);
+  if (findings.some((f) => f.ruleId === "SIM-FAIL")) {
+    notes.push("If a failing test looks wrong rather than the design, call dispute_test — never remove or change user-visible behavior just to pass a test.");
+  }
+  const placement = placementOf(revision);
+  if (placement?.unmet.length) notes.push(`The requested placement wasn't met (${placement.unmet.join("; ")}): tell the person, and don't describe the layout as if it were.`);
+  return {
+    summary: `Revision ${revision.n}: ${verdictLine(reports)}${notes.length ? ` — ${notes.join(" ")}` : ""}`,
+    accepted: true,
+    revision: revision.n,
+    hash: revision.hash,
+    verdicts: verdicts(reports),
+    allGo: allGo(reports),
+    findings,
+    consoles: reports.map((r) => ({ console: r.console, verdict: r.verdict, summary: r.summary })),
+    ...(review?.reviews.length ? { testReview: review.reviews.map((r) => ({ scenario: r.id, verdict: r.verdict, reason: r.reason, ...(review.corrected.includes(r.id) ? { corrected: true } : {}) })) } : {}),
+    ...(placement ? { placement: placement.text } : {}),
+  };
 }
 
 async function requireMission(store: MissionStore, missionId: string): Promise<Mission> {
@@ -189,21 +247,14 @@ export function createToolRegistry(deps: {
         }
         const circuit = parsed.circuit;
         const previous = await store.getRevision(ctx.missionId);
-        const design = circuitInterface(circuit);
-        const interfaceKey = (c: CircuitInterface) => hashJson({ parts: c.parts, roles: c.roles, intent: c.intent, board: c.board });
 
         let suite: TestSuite | undefined;
         let testsNote: string | undefined;
-        const { coverageOf } = await import("@vibread/sim"); // engines load inside handlers (see createToolRegistry)
-        // The same interface keeps its suite — unless that suite doesn't cover the circuit: then the author gets another try.
-        if (previous?.suite && interfaceKey(circuitInterface(previous.circuit)) === interfaceKey(design) && coverageOf(circuit, previous.suite).missing.length === 0) {
-          suite = previous.suite;
-        } else {
-          try {
-            suite = await ops.suiteFor(mission, circuit, ctx.signal);
-          } catch (error) {
-            testsNote = `The independent test writer's answer couldn't be used: ${errorMessage(error)}`;
-          }
+        try {
+          // Keeps the previous suite's scenarios for unchanged clauses; asks the author only for changed ones.
+          suite = await ops.suiteFor(mission, circuit, ctx.signal, previous);
+        } catch (error) {
+          testsNote = `The independent test writer's answer couldn't be used: ${errorMessage(error)}`;
         }
 
         const revision = await store.createRevision(ctx.missionId, {
@@ -229,31 +280,44 @@ export function createToolRegistry(deps: {
           // No suite: FIDO says why instead of waiting silently for tests that won't come.
           const fido = report(
             "FIDO",
-            [{ console: "FIDO", ruleId: "TESTS-NOT-WRITTEN", severity: "error", title: "The simulation tests couldn't be written, so nothing was simulated.", detail: testsNote, fix: "Not a design problem: propose the design again to retry the test writer, or tell the person." }],
+            [{ console: "FIDO", ruleId: "TESTS-NOT-WRITTEN", severity: "error", toolSide: true, title: "The simulation tests couldn't be written, so nothing was simulated.", detail: testsNote, fix: "Not a design problem: propose the design again to retry the test writer, or tell the person." }],
             "NO-GO: the independent test writer's answer couldn't be used.",
             revision.hash,
           );
           evaluated = await store.saveResults(ctx.missionId, revision.n, { reports: evaluated.results.reports.map((r) => (r.console === "FIDO" ? fido : r)) });
         }
-        const reports = evaluated.results.reports;
-        const go = allGo(reports);
-        const findings = brief(reports.flatMap((r) => r.findings));
-        const toolSide = findings.filter((f) => f.toolSide && f.severity === "error").length;
-        const toolSideNote = toolSide
-          ? ` — ${toolSide} blocking finding${toolSide === 1 ? " is" : "s are"} a ViBread tool problem (toolSide), not a design problem: don't redesign for ${toolSide === 1 ? "it" : "them"}; tell the person.`
-          : "";
+        // Failed simulation tests are reviewed against the intent before they count against the design (issue #16).
+        const reviewed = await ops.reviewFailedTests(mission, evaluated, ctx.signal ? { signal: ctx.signal } : {});
         return {
-          summary: `Revision ${revision.n}: ${verdictLine(reports)}${toolSideNote}`,
-          accepted: true,
-          revision: revision.n,
-          hash: revision.hash,
-          verdicts: verdicts(reports),
-          allGo: go,
-          findings,
+          ...designResult(reviewed.revision, reviewed),
           ...(parsed.issues.length ? { issues: parsed.issues } : {}),
           ...(testsNote ? { testsNote } : {}),
-          consoles: reports.map((r) => ({ console: r.console, verdict: r.verdict, summary: r.summary })),
         };
+      },
+    }),
+    defineTool({
+      name: "dispute_test",
+      title: "Question a simulation test",
+      description:
+        "When a failing simulation test (FIDO SIM-FAIL) looks wrong rather than the design — it checks something the intent " +
+        "doesn't say, or its timing contradicts the intent — ask the independent test author to review it instead of changing " +
+        "the design to pass it. Wrong tests are corrected and re-run as a new revision (same circuit); confirmed tests stay, " +
+        "with the reviewer's reason. Never remove or change user-visible behavior just to satisfy a test.",
+      actionClass: "state-changing",
+      input: z.object({
+        revision: revisionArg,
+        scenarios: z.array(z.string().regex(/^T\d+$/)).min(1).describe('Failing scenario ids you think are wrong, e.g. ["T1", "T5"].'),
+        reason: z.string().min(1).max(1000).describe("Why the test contradicts the intent (cite the clause and the timeline)."),
+      }),
+      handler: async (ctx, input) => {
+        const mission = await requireMission(store, ctx.missionId);
+        const revision = await requireRevision(store, ctx.missionId, input.revision);
+        const failing = (revision.results.reports.find((r) => r.console === "FIDO")?.findings ?? []).flatMap((f) => (f.ruleId === "SIM-FAIL" ? (f.refs?.scenarios ?? []) : []));
+        const disputed = input.scenarios.filter((id) => failing.includes(id));
+        if (!disputed.length) throw new ToolInputError(`None of ${input.scenarios.join(", ")} is a failing simulation test on revision ${revision.n} (failing: ${failing.join(", ") || "none"}).`);
+        const reviewed = await ops.reviewFailedTests(mission, revision, { only: disputed, dispute: input.reason, ...(ctx.signal ? { signal: ctx.signal } : {}) });
+        if (!reviewed.reviews.length) throw new ToolInputError("The test review isn't available right now (no independent test author, or these tests weren't written by it).");
+        return designResult(reviewed.revision, reviewed);
       },
     }),
     defineTool({
