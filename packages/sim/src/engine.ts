@@ -479,6 +479,26 @@ export class SimMachine {
     return Math.max(0, (count * this.profile.clockHz) / elapsed);
   }
 
+  /**
+   * Live pitch of a tone() output (passive buzzer / generic): Hz from the spacing of the rising edges in the last
+   * `windowMs`, 0 once the edges stop for three periods (noTone(), tone() duration over). Scans from the newest edge.
+   */
+  recentToneFrequency(part: string, windowMs: number): number {
+    const rises = this.toneRises.get(part) ?? [];
+    const now = this.cpu.cycles;
+    const start = now - Math.round((windowMs / 1000) * this.profile.clockHz);
+    let first = -1;
+    let count = 0;
+    for (let i = rises.length - 1; i >= 0 && rises[i] >= start; i -= 1) {
+      first = rises[i];
+      count += 1;
+    }
+    if (count < 2) return 0;
+    const last = rises[rises.length - 1];
+    const period = (last - first) / (count - 1);
+    return period > 0 && now - last <= 3 * period ? this.profile.clockHz / period : 0;
+  }
+
   pinModes(): PinModeObservation[] {
     this.observeModesIfDue(true);
     return [...this.modeStates.entries()]
@@ -742,8 +762,12 @@ export class SimMachine {
       } else if (part.module === "buzzer-passive") {
         const p = this.pinToNode.get(`${part.id}.P`);
         const n = this.pinToNode.get(`${part.id}.N`);
-        value = (p ? values.get(p) ?? 0 : 0) - (n ? values.get(n) ?? 0 : 0) >= 0.5 ? 1 : 0;
-        on = value > 0;
+        const coilOhms = MODULES[part.module].electrical.coilOhms ?? 16;
+        const voltage = Math.abs((p ? values.get(p) ?? 0 : 0) - (n ? values.get(n) ?? 0 : 0));
+        const current = voltage / coilOhms;
+        const ratedCurrent = 0.02;
+        value = clamp(current / ratedCurrent, 0, 1);
+        on = current >= 0.001;
       } else if (part.module === "generic") {
         const role = typeof part.params.role === "string" ? part.params.role : "";
         value = role === "analog-sensor" ? this.sensors.analog.get(part.id) ?? 0 : this.sensors.digital.get(part.id) ? 1 : 0;

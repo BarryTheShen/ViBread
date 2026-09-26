@@ -154,6 +154,76 @@ describe("avr8js golden simulation", () => {
     for (const part of ["LED1", "LED2", "LED3", "LED4"]) expect(moonSession.partState(part), part).toBeGreaterThanOrEqual(0.97);
   }, 30_000);
 
+  it("reports the live tone() pitch of a passive buzzer and silence after noTone()", async () => {
+    const source = `void setup() { pinMode(8, OUTPUT); }
+void loop() {
+  tone(8, 440); delay(300);
+  tone(8, 1000); delay(300);
+  noTone(8); delay(300);
+}
+`;
+    const circuit = {
+      ...moon.circuit,
+      title: "Tone check",
+      parts: [
+        { id: "R1", module: "resistor" as const, params: { ohms: 1_000, tolerancePct: 5 } },
+        { id: "BZ1", module: "buzzer-passive" as const, params: {} },
+      ],
+      nets: [
+        { id: "D8", kind: "signal" as const, pins: [{ part: "board", pin: "D8" }, { part: "R1", pin: "1" }] },
+        { id: "BZP", kind: "signal" as const, pins: [{ part: "R1", pin: "2" }, { part: "BZ1", pin: "P" }] },
+        { id: "GND", kind: "ground" as const, pins: [{ part: "board", pin: "GND" }, { part: "BZ1", pin: "N" }] },
+      ],
+      roles: [{ pin: "D8", mode: "OUTPUT" as const, part: "BZ1", purpose: "tone" }],
+      sketch: { source },
+    };
+    const compiled = await compileSketch({ source, board: circuit.board.profile });
+    if (!compiled.ok || !compiled.hex) throw new Error(`tone sketch compile failed: ${compiled.log}`);
+    const session = new SimSession({ circuit, hex: compiled.hex });
+    session.run(200);
+    expect(session.toneFrequency("BZ1", 50)).toBeCloseTo(440, -1);
+    session.run(300);
+    expect(session.toneFrequency("BZ1", 50)).toBeCloseTo(1000, -1);
+    session.run(200);
+    expect(session.toneFrequency("BZ1", 50)).toBe(0);
+    const directCircuit = {
+      ...circuit,
+      parts: [{ id: "BZ1", module: "buzzer-passive" as const, params: {} }],
+      nets: [
+        { id: "D8", kind: "signal" as const, pins: [{ part: "board", pin: "D8" }, { part: "BZ1", pin: "P" }] },
+        { id: "GND", kind: "ground" as const, pins: [{ part: "board", pin: "GND" }, { part: "BZ1", pin: "N" }] },
+      ],
+    };
+    const directSession = new SimSession({ circuit: directCircuit, hex: compiled.hex });
+    directSession.run(200);
+    expect(directSession.toneFrequency("BZ1", 50)).toBeCloseTo(440, -1);
+  }, 120_000);
+  it("lights an LED whose cathode is on an INPUT_PULLUP key pin when pressed", async () => {
+    const circuit = structuredClone(moon.circuit);
+    circuit.title = "Key LED";
+    circuit.parts = [
+      { id: "LED1", module: "led", params: { color: "red" } },
+      { id: "R1", module: "resistor", params: { ohms: 220, tolerancePct: 5 } },
+      { id: "BTN1", module: "button", params: {} },
+    ];
+    circuit.nets = [
+      { id: "5V", kind: "power", pins: [{ part: "board", pin: "5V" }, { part: "R1", pin: "1" }] },
+      { id: "LEDK", kind: "signal", pins: [{ part: "R1", pin: "2" }, { part: "LED1", pin: "A" }] },
+      { id: "KEY", kind: "signal", pins: [{ part: "board", pin: "D2" }, { part: "LED1", pin: "K" }, { part: "BTN1", pin: "1" }] },
+      { id: "GND", kind: "ground", pins: [{ part: "board", pin: "GND" }, { part: "BTN1", pin: "3" }] },
+    ];
+    circuit.roles = [{ pin: "D2", mode: "INPUT_PULLUP", part: "BTN1", purpose: "key" }];
+    circuit.sketch = { source: "void setup(){pinMode(2,INPUT_PULLUP);} void loop(){delay(1);}" };
+    const compiled = await compileSketch({ source: circuit.sketch.source, board: circuit.board.profile });
+    if (!compiled.ok || !compiled.hex) throw new Error(`key LED compile failed: ${compiled.log}`);
+    const session = new SimSession({ circuit, hex: compiled.hex });
+    session.run(100);
+    expect(session.partState("LED1")).toBeLessThan(0.02);
+    session.setDigital("BTN1", true);
+    session.run(100);
+    expect(session.partState("LED1")).toBeGreaterThan(0.02);
+  }, 120_000);
+
   it("supports a SimSession serial round trip without RX overrun", () => {
     const session = new SimSession({ circuit: moon.circuit, hex: echoHex });
     let received = "";

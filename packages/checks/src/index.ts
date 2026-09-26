@@ -251,6 +251,13 @@ export const ELECTRICAL_RULES: readonly RuleSpec[] = [
     fix: "Add at least the module's minimum series resistor before the passive buzzer.",
   },
   {
+    ruleId: "BUZZER-ACTIVE-V",
+    fact: "buzzerActiveVoltage",
+    severity: "warning",
+    title: "This active buzzer may not receive enough voltage through its series resistor.",
+    fix: "Remove the series resistor from an active buzzer, or use a driver that can supply its rated voltage and current.",
+  },
+  {
     ruleId: "PIN-TYPE-CONFLICT",
     fact: "pinType",
     severity: "error",
@@ -735,6 +742,18 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
       pins: [branch.source?.pin ? `board.${branch.source.pin}` : "", `${branch.part.id}.P`, `${branch.part.id}.N`].filter(Boolean),
     };
     const electrical = MODULES[branch.part.module].electrical;
+    if (branch.part.module === "buzzer-active" && branch.resistorPath.length) {
+      const current = (electrical.currentMa ?? 30) / 1_000;
+      const seriesOhms = sumResistance(branch.resistorPath) + BOARD_PROFILES[circuit.board.profile].driverOhms.effective;
+      const buzzerVolts = VCC_MIN - current * seriesOhms;
+      if (buzzerVolts < 3) {
+        addFinding("BUZZER-ACTIVE-V", {
+          severity: "warning",
+          detail: `${branch.part.id} would receive about ${Math.max(0, buzzerVolts).toFixed(2)} V through ${sumResistance(branch.resistorPath).toFixed(1)} Ω of series resistance; active buzzers need about 3 V.`,
+          refs,
+        });
+      }
+    }
     if (branch.part.module === "buzzer-passive" && branch.resistorPath.length && sumResistance(branch.resistorPath) < (electrical.minSeriesOhms ?? 0)) {
       addFinding("BUZZER-SERIES-R", {
         severity: "error",
