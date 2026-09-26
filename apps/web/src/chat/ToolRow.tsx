@@ -10,20 +10,16 @@ import Collapse from "@mui/material/Collapse";
 import IconButton from "@mui/material/IconButton";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import { useChat } from "@mui/x-chat/headless";
-import type { ChatDynamicToolInvocation, ChatMessage, ChatToolInvocation } from "@mui/x-chat/types";
+import type { ToolCallMessagePartProps } from "@assistant-ui/react";
 import { CONSOLE_IDS, CONSOLE_LABELS, type Verdict } from "@vibread/core";
 import { useId, useState } from "react";
 import { VerdictChip } from "../components/VerdictChip.js";
 import { isRecord } from "../lib/guards.js";
 import { INTER_FONT, MONO_FONT } from "../theme.js";
 import { useMissionShell } from "./missionShell.js";
-import { AskUserCard } from "./AskUserCard.js";
-import { useChatThread } from "./threadContext.js";
 import { toolLabel } from "./toolLabels.js";
 import { toolSummaryOf } from "./uiMessages.js";
 
-type Invocation = ChatToolInvocation | ChatDynamicToolInvocation;
 type Verdicts = Partial<Record<(typeof CONSOLE_IDS)[number], Verdict>>;
 
 function verdictsOf(output: unknown): Verdicts | undefined {
@@ -40,73 +36,56 @@ function Json({ value }: { value: unknown }) {
   return (
     <Box
       component="pre"
-      sx={{
-        m: 0,
-        p: 1,
-        bgcolor: "action.hover",
-        borderRadius: 1,
-        fontFamily: MONO_FONT,
-        fontSize: 12,
-        maxHeight: 240,
-        overflow: "auto",
-        whiteSpace: "pre-wrap",
-        wordBreak: "break-word",
-      }}
+      sx={{ m: 0, p: 1, bgcolor: "action.hover", borderRadius: 1, fontFamily: MONO_FONT, fontSize: 12, maxHeight: 240, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-word" }}
     >
       {JSON.stringify(value, null, 2)}
     </Box>
   );
 }
 
-/** A tool call as a compact one-line row ("Checked the circuit ✓ · No problems") that expands to its details. */
-export function ToolPartCard({ invocation, message }: { invocation: Invocation; message: ChatMessage }) {
+export type ToolRowProps = Pick<ToolCallMessagePartProps, "toolName" | "toolCallId" | "args" | "result" | "isError" | "status" | "approval">;
+
+/** One tool call as a compact one-line row ("Checked the circuit ✓ · all GO") that expands to its details. */
+export function ToolRow({ toolName, toolCallId, args, result, isError, status, approval }: ToolRowProps) {
   const { detail, openPanel } = useMissionShell();
-  const { adapter } = useChatThread();
   const [open, setOpen] = useState(false);
   const detailsId = useId();
-  // MUI X Chat can create a tool part without its name when the part's first chunk arrives mid-stream (after a
-  // reconnect); the adapter remembers the name from the stored history part with the same toolCallId.
-  const toolName: string | undefined = invocation.toolName ?? adapter.toolNameOf(invocation.toolCallId);
-  const label = toolLabel(toolName, invocation.input);
-
-  if (toolName === "ask_user") return <AskUserPart invocation={invocation} message={message} />;
-
-  const running = invocation.state === "input-streaming" || invocation.state === "input-available";
-  const summary = invocation.state === "output-available" ? toolSummaryOf(invocation.output) : undefined;
+  const label = toolLabel(toolName, args);
+  const done = status.type === "complete" && !isError;
+  // Calls that waited for a permission that no longer exists (older chat history) or were denied never ran.
+  const notRun = approval !== undefined || status.type === "requires-action" || (status.type === "incomplete" && status.reason === "cancelled");
+  const failed = isError === true && !notRun;
+  const errorText = failed && isRecord(result) && typeof result.error === "string" ? result.error : undefined;
+  const summary = done ? toolSummaryOf(result) : undefined;
   // One source of truth: when the tool reports on the revision the mission detail describes, show the live console
   // reports (MissionDetail.consoles); older revisions keep the votes they got at the time.
-  const outputRevision = isRecord(invocation.output) && typeof invocation.output.revision === "number" ? invocation.output.revision : undefined;
-  const reported = invocation.state === "output-available" ? verdictsOf(invocation.output) : undefined;
+  const outputRevision = isRecord(result) && typeof result.revision === "number" ? result.revision : undefined;
+  const reported = done ? verdictsOf(result) : undefined;
   const live = reported !== undefined && outputRevision !== undefined && outputRevision === detail.revision?.n;
   const verdicts: Verdicts | undefined = live ? Object.fromEntries(detail.consoles.map((c) => [c.console, c.verdict])) : reported;
   const verdictList = verdicts ? Object.values(verdicts) : [];
   const verdictStatus =
     verdictList.length === 0 ? undefined : verdictList.every((v) => v === "GO") ? "all GO" : `${verdictList.filter((v) => v === "GO").length} of ${verdictList.length} GO`;
-  const status =
-    invocation.state === "output-available"
-      ? { icon: <CheckCircleOutlineIcon fontSize="small" sx={{ color: "success.main" }} />, text: label.done, word: verdictStatus ?? summary }
-      : invocation.state === "output-error"
-        ? {
-            icon: <ErrorOutlineIcon fontSize="small" sx={{ color: "error.main" }} />,
-            text: `Couldn't finish: ${label.active.replace(/…$/, "").replace(/^\w/, (c) => c.toLowerCase())}`,
-            word: "failed",
-          }
-        : // Calls that waited for a permission that no longer exists (older chat history) never ran.
-          invocation.state === "output-denied" || invocation.state === "approval-requested" || invocation.state === "approval-responded"
-          ? { icon: <BlockIcon fontSize="small" sx={{ color: "text.secondary" }} />, text: label.active.replace(/…$/, ""), word: "not run" }
-          : { icon: <CircularProgress size={16} aria-hidden />, text: label.active, word: undefined };
+  const view = done
+    ? { icon: <CheckCircleOutlineIcon fontSize="small" sx={{ color: "success.main" }} />, text: label.done, word: verdictStatus ?? summary }
+    : failed
+      ? { icon: <ErrorOutlineIcon fontSize="small" sx={{ color: "error.main" }} />, text: `Couldn't finish: ${label.active.replace(/…$/, "").replace(/^\w/, (c) => c.toLowerCase())}`, word: "failed" }
+      : notRun || status.type === "incomplete"
+        ? { icon: <BlockIcon fontSize="small" sx={{ color: "text.secondary" }} />, text: label.active.replace(/…$/, ""), word: "not run" }
+        : { icon: <CircularProgress size={16} aria-hidden />, text: label.active, word: undefined };
+  const running = status.type === "running";
   const opensPanel = outputRevision !== undefined && (toolName === "propose_design" || verdictList.length > 0);
 
   return (
-    <Box sx={{ my: 0.25, fontFamily: INTER_FONT }} data-tool={toolName ?? "unknown"}>
+    <Box sx={{ my: 0.25, fontFamily: INTER_FONT }} data-tool={toolName}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: 32, px: 1 }}>
-        {status.icon}
+        {view.icon}
         <Typography variant="body2" noWrap sx={{ fontWeight: 500, minWidth: 0 }} aria-live={running ? "polite" : undefined}>
-          {status.text}
+          {view.text}
         </Typography>
-        {status.word && (
+        {view.word && (
           <Typography variant="body2" noWrap sx={{ color: "text.secondary", minWidth: 0, flexShrink: 1 }}>
-            · {status.word}
+            · {view.word}
           </Typography>
         )}
         {opensPanel && (
@@ -125,9 +104,9 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
           <ChevronRightIcon fontSize="small" sx={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms" }} />
         </IconButton>
       </Box>
-      {invocation.state === "output-error" && invocation.errorText && (
+      {errorText && (
         <Alert severity="error" sx={{ mt: 0.5 }}>
-          {invocation.errorText}
+          {errorText}
         </Alert>
       )}
       <Collapse in={open} id={detailsId} unmountOnExit>
@@ -149,35 +128,22 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
             </Stack>
           )}
           <Typography variant="caption" sx={{ fontFamily: MONO_FONT, color: "text.secondary" }}>
-            tool {toolName ?? "unknown"} · call {invocation.toolCallId}
+            tool {toolName} · call {toolCallId}
           </Typography>
-          {invocation.input !== undefined && (
+          {args !== undefined && Object.keys(args).length > 0 && (
             <>
               <Typography variant="caption">What Claude asked for</Typography>
-              <Json value={invocation.input} />
+              <Json value={args} />
             </>
           )}
-          {invocation.state === "output-available" && (
+          {done && result !== undefined && (
             <>
               <Typography variant="caption">What came back</Typography>
-              <Json value={invocation.output} />
+              <Json value={result} />
             </>
           )}
         </Stack>
       </Collapse>
     </Box>
-  );
-}
-
-/** `ask_user`: the run stops after it; answering (a choice or free text) sends a normal chat message. */
-function AskUserPart({ invocation, message }: { invocation: Invocation; message: ChatMessage }) {
-  const chat = useChat();
-  const isLatest = chat.messages[chat.messages.length - 1]?.id === message.id;
-  return (
-    <AskUserCard
-      input={invocation.input}
-      answerable={isLatest && !chat.isStreaming}
-      onAnswer={(text) => void chat.sendMessage({ parts: [{ type: "text", text }] })}
-    />
   );
 }

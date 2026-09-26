@@ -28,6 +28,24 @@ export interface ChatComposerProps extends Omit<ComposerProps, "mode" | "onModeC
   label?: string;
 }
 
+/** The chat box frame and its buttons, shared by this composer and the mission thread's (chat/MissionChat.tsx). */
+export const COMPOSER_FRAME_SX = {
+  borderRadius: "18px",
+  px: 2,
+  pt: 1.5,
+  pb: 1,
+  bgcolor: "background.paper",
+  borderColor: "divider",
+  "&:focus-within": { borderColor: "text.secondary" },
+} as const;
+export const SEND_BUTTON_SX = {
+  bgcolor: "primary.main",
+  color: "primary.contrastText",
+  "&:hover": { bgcolor: "primary.dark" },
+  "&.Mui-disabled, &:disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
+} as const;
+export const STOP_BUTTON_SX = { bgcolor: "text.primary", color: "background.paper", "&:hover": { bgcolor: "text.secondary" } } as const;
+
 /**
  * The chat box (plan §3.1/§3.2): multi-line text (Enter sends, Shift+Enter adds a line), the Parts chip and the send / stop
  * button.
@@ -51,18 +69,7 @@ export function Composer(props: ChatComposerProps) {
 
   return (
     <Box>
-      <Paper
-        variant="outlined"
-        sx={{
-          borderRadius: "18px",
-          px: 2,
-          pt: 1.5,
-          pb: 1,
-          bgcolor: "background.paper",
-          borderColor: "divider",
-          "&:focus-within": { borderColor: "text.secondary" },
-        }}
-      >
+      <Paper variant="outlined" sx={COMPOSER_FRAME_SX}>
         <InputBase
           multiline
           fullWidth
@@ -93,28 +100,14 @@ export function Composer(props: ChatComposerProps) {
           <Box sx={{ flex: 1 }} />
           {running ? (
             <Tooltip title="Stop Claude">
-              <IconButton
-                aria-label="Stop Claude"
-                onClick={onStop}
-                sx={{ bgcolor: "text.primary", color: "background.paper", "&:hover": { bgcolor: "text.secondary" } }}
-              >
+              <IconButton aria-label="Stop Claude" onClick={onStop} sx={STOP_BUTTON_SX}>
                 <StopIcon fontSize="small" />
               </IconButton>
             </Tooltip>
           ) : (
             <Tooltip title={disabled ? (disabledReason ?? "Can't send right now") : "Send (Enter) · new line: Shift+Enter"}>
               <span>
-                <IconButton
-                  aria-label="Send"
-                  disabled={!canSend}
-                  onClick={send}
-                  sx={{
-                    bgcolor: "primary.main",
-                    color: "primary.contrastText",
-                    "&:hover": { bgcolor: "primary.dark" },
-                    "&.Mui-disabled": { bgcolor: "action.disabledBackground", color: "action.disabled" },
-                  }}
-                >
+                <IconButton aria-label="Send" disabled={!canSend} onClick={send} sx={SEND_BUTTON_SX}>
                   <ArrowUpwardIcon fontSize="small" />
                 </IconButton>
               </span>
