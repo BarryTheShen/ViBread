@@ -818,7 +818,12 @@ export async function evaluateRun(input: {
 
   const events = await runDiagnosisRules(signatureRecord(context.signatures));
   const primary = primaryRule(events);
-  const verdict = verdictFor(results);
+  const hello = input.lines.find((line): line is Extract<DeviceLine, { t: "hello" }> => line.t === "hello");
+  const helloMatchesPlan = hello !== undefined && hello.design === input.plan.design && hello.board === input.plan.board;
+  const executedTests = new Set(results.map((result) => result.test));
+  const plannedTestsPresent = input.plan.tests.every((test) => executedTests.has(test));
+  let verdict = verdictFor(results);
+  if (verdict === "pass" && (!helloMatchesPlan || results.length === 0 || !plannedTestsPresent)) verdict = "incomplete";
   const fallback = verdict === "pass"
     ? "All bench checks passed."
     : verdict === "incomplete"
