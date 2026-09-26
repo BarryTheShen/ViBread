@@ -71,6 +71,10 @@ jobs:
           VIBREAD_USER_DATA: ${{ runner.temp }}/vibread-smoke
           VIBREAD_SMOKE_DIR: ${{ github.workspace }}/smoke
         run: node apps/desktop/scripts/smoke-packaged.mjs
+      - name: Assert bundled omp (Linux + Windows)
+        if: runner.os == 'Linux' || runner.os == 'Windows'
+        shell: bash
+        run: node -e "const r=require('./smoke/smoke.json'); const c=r.checks.find((x)=>x.name==='VIBREAD_OMP_BIN runs --version'); if (!c?.ok) { console.error(c ?? 'missing omp smoke check'); process.exit(1); } console.log(c.detail);"
 
       - name: Collect logs
         if: always()

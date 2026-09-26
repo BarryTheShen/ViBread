@@ -12,6 +12,9 @@ export interface DesktopPaths {
   userData: string;
   data: string;
   toolchain: string;
+  /** Downloaded oh-my-pi executable directory and the platform-specific launcher path. */
+  ompDir: string;
+  ompBin: string;
   logs: string;
   /** The user's login-shell PATH, resolved once at startup (see loginShellPath). */
   userPath?: string;
@@ -20,12 +23,15 @@ export interface DesktopPaths {
 export function desktopPaths(): DesktopPaths {
   const runtime = app.isPackaged ? join(process.resourcesPath, "runtime") : join(app.getAppPath(), ".stage", "runtime");
   const userData = app.getPath("userData");
+  const ompDir = join(userData, "omp");
   return {
     runtime,
     node: join(runtime, "node", "bin", process.platform === "win32" ? "node.exe" : "node"),
     userData,
     data: join(userData, "data"),
     toolchain: join(userData, "toolchain"),
+    ompDir,
+    ompBin: join(ompDir, process.platform === "win32" ? "omp.exe" : "omp"),
     logs: join(userData, "logs"),
   };
 }
@@ -37,7 +43,8 @@ const DROP_ENV = /^(ELECTRON_|NODE_OPTIONS$|NODE_PATH$|NODE_ENV$|npm_|INIT_CWD$|
 export function childEnv(paths: DesktopPaths, extra: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) if (!DROP_ENV.test(key)) env[key] = value;
-  // VIBREAD_OMP_BIN passes through unchanged; otherwise `omp` resolves on this PATH (login shell + common dirs).
+  // VIBREAD_OMP_BIN explicitly overrides the downloaded helper; otherwise use it when setup installed it.
+  if (!env.VIBREAD_OMP_BIN?.trim() && existsSync(paths.ompBin)) env.VIBREAD_OMP_BIN = paths.ompBin;
   const pathKey = process.platform === "win32" ? (Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "Path") : "PATH";
   env[pathKey] = serverPath(paths.userPath ?? env[pathKey], homedir(), process.platform);
   const exe = process.platform === "win32" ? ".exe" : "";
