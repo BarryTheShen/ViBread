@@ -65,7 +65,7 @@ const DETAIL_LIMIT = 600;
 const TOOL_SIDE_RULES: Record<string, true> = { "STAGE-CRASH": true, "TESTS-NOT-WRITTEN": true, "COV-OUTPUT": true, "COV-INPUT": true, "COV-CLAUSE": true, "COV-CATEGORY": true };
 
 export function isToolSide(finding: Finding): boolean {
-  return TOOL_SIDE_RULES[finding.ruleId] === true || ("toolSide" in finding && finding.toolSide === true);
+  return TOOL_SIDE_RULES[finding.ruleId] === true || finding.toolSide === true;
 }
 
 interface BriefFinding {

@@ -1,6 +1,6 @@
 import { verdictOf, type Circuit, type ConsoleReport, type Finding, type Layout, type LvsResult } from "@vibread/core";
 
-import { layoutHash } from "./allocator.js";
+import { LayoutFitError, layoutHash } from "./allocator.js";
 
 export function assemblyReport(input: { circuit: Circuit; layout: Layout; lvs: LvsResult; revisionHash: string }): ConsoleReport {
   const findings: Finding[] = [];
@@ -38,6 +38,41 @@ export function assemblyReport(input: { circuit: Circuit; layout: Layout; lvs: L
       placements: input.layout.placements.length,
       jumpers: input.layout.jumpers.length,
     },
+    revisionHash: input.revisionHash,
+    at: new Date().toISOString(),
+  };
+}
+
+/**
+ * FAO report when `layoutBoard` throws `LayoutFitError`. A tool-side failure (the design is valid but ViBread cannot
+ * place it) is flagged `toolSide` so the design agent stops redesigning and tells the user instead.
+ */
+export function layoutFailureReport(input: { error: LayoutFitError; revisionHash: string }): ConsoleReport {
+  const { error } = input;
+  const finding: Finding = error.toolSide
+    ? {
+        console: "FAO",
+        ruleId: "LAYOUT-NO-FIT",
+        severity: "error",
+        title: "ViBread could not lay this circuit out on the breadboard.",
+        detail: error.message,
+        fix: "This is a ViBread limit, not a design mistake: a bigger breadboard (830 points) or fewer parts will fit; redesigning the same circuit will not help.",
+        toolSide: true,
+      }
+    : {
+        console: "FAO",
+        ruleId: "LAYOUT-DESIGN",
+        severity: "error",
+        title: "The design cannot be built as drawn.",
+        detail: error.message,
+        fix: "Change the connection named above.",
+      };
+  return {
+    console: "FAO",
+    verdict: "NO-GO",
+    summary: error.toolSide ? "ViBread could not fit this circuit on the breadboard." : "The design cannot be built as drawn.",
+    findings: [finding],
+    evidence: { fits: false, lvsClean: false },
     revisionHash: input.revisionHash,
     at: new Date().toISOString(),
   };

@@ -16,8 +16,8 @@ import { layoutHash } from "./allocator.js";
 
 function endpointText(endpoint: Jumper["from"]): string {
   if ("board" in endpoint) return `Arduino ${endpoint.board} header pin`;
-  if (endpoint.hole === "T-2" || endpoint.hole.startsWith("T-")) return `hole ${endpoint.hole} on the blue − rail (GND)`;
-  if (endpoint.hole === "T+2" || endpoint.hole.startsWith("T+")) return `hole ${endpoint.hole} on the red + rail (5 V)`;
+  if (endpoint.hole.startsWith("T-")) return `hole ${endpoint.hole} on the blue − rail (GND)`;
+  if (endpoint.hole.startsWith("T+")) return `hole ${endpoint.hole} on the red + rail (5 V)`;
   return `hole ${endpoint.hole}`;
 }
 
@@ -82,14 +82,8 @@ function placementText(part: Part, layout: Layout): { text: string; holes: strin
   return { text: `${text} Keep USB unplugged.`, holes };
 }
 
-function jumperColor(jumper: Jumper): string {
-  if (jumper.net === "GND") return "black";
-  if (jumper.net === "5V") return "red";
-  return String(jumper.color);
-}
-
 function jumperText(jumper: Jumper): string {
-  return `Connect a ${jumperColor(jumper)} wire from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. Check both printed endpoints; color is only a visual aid.`;
+  return `Connect a ${jumper.color} wire from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. Check both printed endpoints; color is only a visual aid.`;
 }
 
 function countedCallout(group: InventoryGroup): string {
@@ -129,12 +123,10 @@ function orientationText(layout: Layout): string {
   return `${board}. Rows run left to right. Columns a–e are the five-hole lines above the horizontal centre channel, and f–j are the five-hole lines below it. Top rails are T+ (5 V, red) and T− (GND, black). Read printed hole IDs, never wire color alone.`;
 }
 
+/** Arduino header → rail wires (the first thing built, before any part). */
 function railJumpers(layout: Layout): Jumper[] {
-  return layout.jumpers.filter((jumper) => {
-    const isPowerRail = jumper.net === "5V" || jumper.net === "GND";
-    const hasBoardEndpoint = "board" in jumper.from || "board" in jumper.to;
-    return isPowerRail && hasBoardEndpoint;
-  });
+  const onRail = (endpoint: Jumper["from"]) => "hole" in endpoint && /^[TB][+-]/.test(endpoint.hole);
+  return layout.jumpers.filter((jumper) => ("board" in jumper.from && onRail(jumper.to)) || ("board" in jumper.to && onRail(jumper.from)));
 }
 
 function testsForSubsection(circuit: Circuit): TestId[] {
@@ -186,7 +178,9 @@ export function buildSteps(circuit: Circuit, layout: Layout): StepList {
   push({
     kind: "rails",
     title: "Connect the top power rails",
-    text: `With USB unplugged, connect the Arduino 5 V header to T+ and GND to T−. Exact rail holes: ${rails.flatMap((jumper) => [endpointText(jumper.from), endpointText(jumper.to)]).join(", ") || "see the labelled T+2 and T−2 rails"}. Red/black colors are aids; verify the T+ and T− labels.`,
+    text: rails.length > 0
+      ? `With USB unplugged, ${rails.map((jumper) => `connect a ${jumper.color} wire from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}`).join("; then ")}. Red/black colors are aids; verify the T+ and T− labels.`
+      : "This build does not use the power rails; nothing to connect yet.",
     plug: "unplugged",
     adds: { parts: [], jumpers: rails.map((jumper) => jumper.id) },
     holes: rails.flatMap((jumper) => ["hole" in jumper.from ? jumper.from.hole : "", "hole" in jumper.to ? jumper.to.hole : ""]).filter(Boolean),
@@ -195,7 +189,7 @@ export function buildSteps(circuit: Circuit, layout: Layout): StepList {
   push({
     kind: "checkpoint",
     title: "Rail checkpoint — plug in",
-    text: "Plug in the USB cable. ViBread checks that the red + rail has 5 V and the blue − rail is ground before anything else runs. Unplug again before touching the build.",
+    text: "Plug in the USB cable. ViBread checks that the board is powered (about 5 V) before anything else runs; the red + and blue − rails get tested by the part checks that follow. Unplug again before touching the build.",
     plug: "plugged",
     adds: { parts: [], jumpers: [] },
     holes: [],

@@ -349,7 +349,8 @@ function findFloatingPins(circuit: Circuit, derived: DerivedNet[], issues: LvsIs
       // split/missing connection. Reserve floating-pin for a genuinely
       // un-netted module pin, which keeps mutant diagnostics specific.
       if (singletonPins.has(key) && !expected.has(key)) {
-        issues.push(asIssue("floating-pin", `${key} is not connected to another pin, board header, or jumper.`, { pins: [key] }));
+        // The IR itself leaves this pin unconnected (validateCircuit warns about it), so it is not a wiring error.
+        issues.push({ ...asIssue("floating-pin", `${key} is not connected to another pin, board header, or jumper.`, { pins: [key] }), severity: "warning" });
       }
     }
   }
