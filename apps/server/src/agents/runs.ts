@@ -211,6 +211,8 @@ export function createRunManager(
           usage: { input: replies.reduce((sum, r) => sum + r.usage.input, 0), output: replies.reduce((sum, r) => sum + r.usage.output, 0) },
         };
         if (run.controller.signal.aborted || last?.stopReason === "aborted") {
+          // Saved with the reply (onEnd) and seen live by anyone following the stream: the chat marks a cut-off reply.
+          writer.write({ type: "message-metadata", messageMetadata: { vibread: { stopped: true } } });
           writer.write({ type: "abort" });
           return;
         }

@@ -93,12 +93,16 @@ export function groupTimeline(events: TimelineEvent[]): TimelineItem[] {
 
 /**
  * Pre-warmed and imported designs are stored without a `revision.created` event; a row for each such revision (from
- * GET revisions) keeps the story complete: design → checks → release.
+ * GET revisions) keeps the story complete: design → checks → release. The two lists are fetched separately, so a
+ * revision newer than every event in this timeline snapshot is one the snapshot hasn't caught up with (its own
+ * `revision.created`, and the message that led to it, arrive with the next poll), not an unlogged one; inventing a row for
+ * it would sit above the just-sent message that caused it (placeTimeline sorts unlogged messages after the snapshot).
  */
 export function withRevisionEvents(events: TimelineEvent[], revisions: RevisionSummary[], missionId: string): TimelineEvent[] {
   const logged = new Set(events.flatMap((e) => (e.kind === "revision.created" && e.revision !== undefined ? [e.revision] : [])));
+  const horizon = events.reduce((latest, e) => Math.max(latest, Date.parse(e.at)), Number.NEGATIVE_INFINITY);
   const missing = revisions
-    .filter((r) => !logged.has(r.n))
+    .filter((r) => !logged.has(r.n) && Date.parse(r.createdAt) <= horizon)
     .map(
       (r): TimelineEvent => ({
         id: `revision-${r.n}`,

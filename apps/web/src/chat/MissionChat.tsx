@@ -5,6 +5,7 @@ import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import StopIcon from "@mui/icons-material/Stop";
+import StopCircleOutlinedIcon from "@mui/icons-material/StopCircleOutlined";
 import TaskAltIcon from "@mui/icons-material/TaskAlt";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
@@ -21,7 +22,7 @@ import Typography from "@mui/material/Typography";
 import { useQuery } from "@tanstack/react-query";
 import type { Channel, MissionDetail, TimelineEvent } from "@vibread/core";
 import type { UIMessage } from "ai";
-import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Markdown from "react-markdown";
 import { Link as RouterLink } from "react-router";
 import remarkGfm from "remark-gfm";
@@ -35,7 +36,7 @@ import { createMissionTransport, fetchChatHistory } from "./missionTransport.js"
 import { placeTimeline, type ChatTimeline } from "./timeline.js";
 import { TimelineRows } from "./TimelineRow.js";
 import { ToolRow } from "./ToolRow.js";
-import { recordedLabelOf } from "./uiMessages.js";
+import { isStoppedReply, recordedLabelOf } from "./uiMessages.js";
 
 /** Width of the conversation column (plan §3.2). */
 export const CHAT_MAX_WIDTH = 760;
@@ -52,6 +53,9 @@ interface ThreadValue {
   emptyInventory: boolean;
   afterMessages?: ReactNode;
   inputRef: RefObject<HTMLTextAreaElement | null>;
+  /** Replies this browser cut off with Stop, before the saved history (which marks them too) is reloaded. */
+  stoppedHere: ReadonlySet<string>;
+  markStopped(messageId: string): void;
 }
 
 const ThreadContext = createContext<ThreadValue | null>(null);
@@ -210,6 +214,9 @@ function UserMessage() {
 
 function AssistantMessage() {
   const recorded = useRecordedLabel();
+  const { chat, stoppedHere } = useThread();
+  const id = useAuiState((s) => s.message.id);
+  const stopped = stoppedHere.has(id) || isStoppedReply(chat.messages.find((m) => m.id === id)?.metadata);
   return (
     <MessagePrimitive.Root>
       <Box sx={{ my: 1.5 }} data-role="assistant">
@@ -219,6 +226,14 @@ function AssistantMessage() {
         <MessagePrimitive.GroupedParts groupBy={groupTools} indicator="empty">
           {renderAssistantPart}
         </MessagePrimitive.GroupedParts>
+        {stopped && (
+          <Stack direction="row" sx={{ alignItems: "center", gap: 0.5, mt: 0.5, color: "text.secondary", fontFamily: INTER_FONT }}>
+            <StopCircleOutlinedIcon sx={{ fontSize: 16 }} />
+            <Typography variant="caption" sx={{ fontFamily: INTER_FONT }}>
+              Stopped
+            </Typography>
+          </Stack>
+        )}
         <MessagePrimitive.Error>
           <MessageErrorText />
         </MessagePrimitive.Error>
@@ -292,7 +307,7 @@ function EmptyInventoryHint() {
 function ThreadComposer() {
   const aui = useAui();
   const { missionId, detail } = useMissionShell();
-  const { chat, canChat, hasDesign, inputRef } = useThread();
+  const { chat, canChat, hasDesign, inputRef, markStopped } = useThread();
   const empty = useAuiState((s) => s.composer.isEmpty);
   // A failed reply shows its error on the reply itself; only an error with no reply to hang it on shows here.
   const lastIsAssistant = useAuiState((s) => s.thread.messages.at(-1)?.role === "assistant");
@@ -300,7 +315,12 @@ function ThreadComposer() {
   const running = streaming || detail.agentBusy;
   const disabledReason = canChat ? undefined : "Claude isn't connected, so it can't reply. Connect it in Settings — checks, tests and building still work.";
   const stop = () => {
-    if (streaming) void chat.stop();
+    if (streaming) {
+      // This browser stops reading at once, so the server's own stopped mark on the reply never arrives on this stream.
+      const reply = chat.messages.at(-1);
+      if (reply?.role === "assistant") markStopped(reply.id);
+      void chat.stop();
+    }
     api.stopAgent(missionId).catch((error: unknown) => console.warn("Stop request failed", error));
   };
   return (
@@ -452,6 +472,8 @@ export function MissionThread({ chat: instance, history, reloadHistory, detail, 
   const m = detail.mission;
   const busy = detail.agentBusy;
   const streaming = chat.status === "submitted" || chat.status === "streaming";
+  const [stoppedHere, setStoppedHere] = useState<ReadonlySet<string>>(() => new Set());
+  const markStopped = useCallback((messageId: string) => setStoppedHere((ids) => new Set(ids).add(messageId)), []);
 
   // Runs this browser did not start (iMessage, Claude Code): follow the active stream while the server says busy, and
   // take the saved history as the truth once such a run ends.
@@ -463,7 +485,11 @@ export function MissionThread({ chat: instance, history, reloadHistory, detail, 
       void chat.resumeStream();
     }
     if (wasBusy.current && !busy && !streaming) {
-      void reloadHistory().then((saved) => saved && chat.setMessages(saved));
+      void reloadHistory().then((saved) => {
+        if (!saved) return;
+        chat.setMessages(saved);
+        setStoppedHere(new Set()); // the saved replies carry the server's own stopped mark
+      });
     }
     wasBusy.current = busy;
   }, [busy, streaming, chat, reloadHistory]);
@@ -489,8 +515,10 @@ export function MissionThread({ chat: instance, history, reloadHistory, detail, 
       emptyInventory: m.inventory.length === 0 && (m.inventoryNotes?.length ?? 0) === 0,
       afterMessages,
       inputRef,
+      stoppedHere,
+      markStopped,
     }),
-    [chat, placed, canChat, m.currentRevision, detail.revision?.author.channel, m.inventory.length, m.inventoryNotes?.length, afterMessages, inputRef],
+    [chat, placed, canChat, m.currentRevision, detail.revision?.author.channel, m.inventory.length, m.inventoryNotes?.length, afterMessages, inputRef, stoppedHere, markStopped],
   );
   return (
     <AssistantRuntimeProvider runtime={runtime}>

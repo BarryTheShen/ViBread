@@ -206,7 +206,10 @@ describe("design agent", () => {
     for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) rest += new TextDecoder().decode(chunk.value);
     expect(rest).toContain('"type":"abort"');
     expect((await runtime.missions.detail(mission.id)).agentBusy).toBe(false);
-    expect((await deps.messages.list(mission.id)).map((m) => m.role)).toEqual(["user", "assistant"]);
+    const saved = await deps.messages.list(mission.id);
+    expect(saved.map((m) => m.role)).toEqual(["user", "assistant"]);
+    // The cut-off reply keeps its text and is marked stopped, so the chat can say so after a reload.
+    expect(saved[1]).toMatchObject({ parts: expect.arrayContaining([expect.objectContaining({ type: "text", text: "Thinking" })]), metadata: { vibread: { stopped: true } } });
   });
 
   it("traces the run, every model call, and every tool call to the mission's debug log", async () => {
