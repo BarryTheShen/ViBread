@@ -27,7 +27,7 @@ hardware, a Claude credential, and accounts (Google/GitHub/Photon) — see "Need
 | 11 | Claude Code MCP + A2A | Built | `claude mcp list` → Connected; A2A ask-back → completed artifact |
 | 13 | SPICE cross-check | Built | Part of EECOM's evidence: fixed per-color diode models at three corners; red LED 13.99 mA SPICE vs 13.41 mA analytic; goldens show no deviation, a wrong Vf assumption is flagged |
 | 16 | Connect your Claude account | Built | pi-ai's Anthropic OAuth (paste-back of the code/redirect address, or its local callback) or an API key; credential stored per user in the database; every agent call runs on it through pi-ai. Tested with a stand-in token endpoint (paste, `code#state`, state mismatch, rejected code, local callback, one sign-in at a time, API key, refresh failure → server key). **Real sign-in needs you** |
-| — | Desktop app (Electron) | Built | Release `desktop-v0.1.0`: Linux x64 AppImage + .deb, Windows x64 installer, macOS arm64/x64 dmg. Each packaged app smoke-tested on its own OS on GitHub Actions (Arduino compiler download + seed + compile + screenshots; first run 161 s Linux, 177 s Windows, 232–386 s macOS); .deb install-tested with apt. Real Arduino over USB untested |
+| — | Desktop app (Electron) | Built | Numbered releases (`desktop-v0.1.N`, newest = [Latest](https://github.com/BarryTheShen/ViBread/releases/latest)) published by CI after every green build: Linux x64 AppImage + .deb, Windows x64 installer, macOS arm64/x64 dmg. Each packaged app smoke-tested on its own OS on GitHub Actions (Arduino compiler download + seed + compile + screenshots; first run 161 s Linux, 177 s Windows, 232–386 s macOS); .deb install-tested with apt. Real Arduino over USB untested |
 | — | Phone as a home-screen web app | Built | Manifest + icons; iPhone "Add to Home Screen" tip in Build Mode |
 
 Also added while integrating: human **GO for build** (Flight Director) when the agent isn't the one releasing; mission
@@ -490,7 +490,9 @@ each tool's `read-only` / `state-changing` tag:
   account through pi-ai's own Anthropic OAuth (`@earendil-works/pi-ai` 0.87.1, MIT; no auth code of ours, no helper process):
   `Models.login("anthropic", "oauth")` produces the claude.ai sign-in URL (the Connections page shows it); the user pastes the
   code or the final redirect address (`localhost:53692/callback?code=…&state=…`, or `code#state`) — so a browser on another
-  machine works — or pi-ai's local callback completes it when the browser is on the server machine. An Anthropic API key is
+  machine works — or pi-ai's local callback completes it when the browser is on the server machine. Each sign-in runs
+  pi-ai's login in its own worker thread, whose callback listener falls back to a free port when another program holds
+  53692 (paste still works; logged). An Anthropic API key is
   the other way to connect (`POST /api/connections/claude/key`). The credential is stored per user in the `claude_accounts`
   table behind pi-ai's `CredentialStore` contract (serialized writes; pi-ai refreshes the OAuth token inside them), and every
   model call — design agent, test author, RETRO, photo check, scan — goes through pi-ai with it. No files, HOME or USERPROFILE

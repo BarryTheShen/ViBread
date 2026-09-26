@@ -4,14 +4,13 @@ import { execFile } from "node:child_process";
 const SYSTEM_DIRS = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
 
 /**
- * PATH for the server child: the user's own PATH first (so `omp`, ngspice etc. resolve exactly as in their terminal),
- * then the standard system directories, then the usual per-user install locations (bun, npm-global, pipx/local).
- * Duplicates are dropped, first occurrence wins.
+ * PATH for the server child: the user's own PATH first, then standard system directories, then common per-user
+ * install locations (npm-global and local). Duplicates are dropped, first occurrence wins.
  */
 export function serverPath(userPath: string | undefined, home: string, platform: NodeJS.Platform): string {
   const delimiter = platform === "win32" ? ";" : ":";
   const sep = platform === "win32" ? "\\" : "/";
-  const userDirs = [".bun/bin", ".npm-global/bin", ".local/bin"].map((dir) => [home, ...dir.split("/")].join(sep));
+  const userDirs = [".npm-global/bin", ".local/bin"].map((dir) => [home, ...dir.split("/")].join(sep));
   const parts = [...(userPath ?? "").split(delimiter), ...(platform === "win32" ? [] : SYSTEM_DIRS), ...userDirs];
   const seen = new Set<string>();
   return parts.filter((part) => part && !seen.has(part) && seen.add(part)).join(delimiter);
