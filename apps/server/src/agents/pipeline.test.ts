@@ -1,6 +1,6 @@
 import { GOLDEN } from "@vibread/fixtures";
 import type { Actor, Circuit } from "@vibread/core";
-import { createPipeline } from "@vibread/tools";
+import { createPipeline, loadFaultDictionary } from "@vibread/tools";
 import { describe, expect, it } from "vitest";
 import { memoryStore } from "./testing.js";
 
@@ -11,11 +11,32 @@ async function evaluate(circuit: Circuit, withSuite = true) {
   const store = memoryStore();
   const mission = await store.createMission({ title: "t", brief: golden.brief, ownerId: "o", inventory: golden.inventory, mode: "review" });
   await store.createRevision(mission.id, { circuit, ...(withSuite ? { suite: golden.suite } : {}), author: AUTHOR });
-  const results = await createPipeline({ store }).evaluate(mission.id, 1);
+  const results = await createPipeline({ store, faults: false }).evaluate(mission.id, 1);
   return { store, mission, results, byConsole: Object.fromEntries(results.reports.map((r) => [r.console, r])) };
 }
 
 describe("pipeline", () => {
+  it("builds the fault dictionary in the background after returning the consoles", async () => {
+    const knob = GOLDEN.find((g) => g.key === "knob-night-light")!;
+    const store = memoryStore();
+    const mission = await store.createMission({ title: "t", brief: knob.brief, ownerId: "o", inventory: knob.inventory, mode: "review" });
+    await store.createRevision(mission.id, { circuit: knob.circuit, suite: knob.suite, author: AUTHOR });
+    const pipeline = createPipeline({ store });
+    const results = await pipeline.evaluate(mission.id, 1);
+    expect(results.artifacts["faults.json"]).toBeUndefined();
+    await pipeline.idle();
+    const revision = (await store.getRevision(mission.id, 1))!;
+    const dictionary = await loadFaultDictionary(store, revision.results.artifacts);
+    expect(dictionary?.entries.length).toBeGreaterThan(0);
+    expect(dictionary?.layoutHash).toBe(revision.results.layoutHash);
+    // Built once per revision: re-evaluating keeps the artifact and does not rebuild.
+    await pipeline.evaluate(mission.id, 1);
+    await pipeline.idle();
+    const events = await store.listEvents(mission.id);
+    expect(events.filter((e) => e.kind === "faults.ready")).toHaveLength(1);
+    expect((await store.getRevision(mission.id, 1))!.results.artifacts["faults.json"]).toBe(revision.results.artifacts["faults.json"]);
+  }, 120_000);
+
   it("evaluates the golden Moon-Phase Lamp with the real engines and stores every artifact", async () => {
     const { store, mission, results, byConsole } = await evaluate(golden.circuit);
     expect(byConsole.EECOM!.verdict).toBe("GO");

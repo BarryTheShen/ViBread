@@ -14,10 +14,17 @@ import {
 } from "@vibread/core";
 import type * as AssemblyLib from "@vibread/assembly";
 import { SYSTEM_ACTOR, crashFinding, report, statusReport, withFindings } from "./common.js";
+import { createFaultQueue, type BackgroundLog } from "./faults.js";
 
 /** Runs every deterministic console for one revision and saves RevisionResults + artifacts (local://contracts.md). */
 export interface Pipeline {
   evaluate(missionId: string, n: number): Promise<RevisionResults>;
+}
+
+/** createPipeline's result: the contract plus a barrier for background work (fault dictionaries). */
+export interface BackgroundPipeline extends Pipeline {
+  /** Resolves once every queued fault dictionary has been built or has failed. */
+  idle(): Promise<void>;
 }
 
 type Stage<T> = { ok: true; value: T; ms: number } | { ok: false; error: unknown; ms: number };
@@ -42,6 +49,8 @@ class Run {
   readonly patch: Partial<RevisionResults> = {};
   readonly reports = new Map<ConsoleId, ConsoleReport>();
   readonly extra: Record<ConsoleId, Finding[]> = { EECOM: [], GUIDO: [], FIDO: [], FAO: [], RETRO: [] };
+  /** Bench firmware HEX, kept for the background fault dictionary. */
+  benchHex?: string;
 
   constructor(
     private readonly store: MissionStore,
@@ -71,13 +80,15 @@ class Run {
  * Four independent branches run concurrently after parsing:
  *   EECOM · firmware (compile → pin modes ∥ suite → GUIDO, FIDO) · assembly (layout/LVS/FAO/steps → drawings ∥ schematic)
  *   · bench (self-test plan → bench firmware).
- * Every stage is timed and failure-isolated: a thrown stage becomes an error finding on its console.
+ * Every stage is timed and failure-isolated: a thrown stage becomes an error finding on its console. After the results
+ * are saved, the fault dictionary (`faults.json`) is queued in the background (faults.ts); `faults: false` disables it.
  *
  * Engines are imported inside their stage on purpose (not statically): a module-load failure — e.g. @tscircuit/core's
  * ESM directory-import crash outside tsx, a missing toolchain binding — must fail only that stage, never the server.
  */
-export function createPipeline(deps: { store: MissionStore }): Pipeline {
+export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog; faults?: boolean }): BackgroundPipeline {
   const { store } = deps;
+  const faultQueue = createFaultQueue({ store, ...(deps.log ? { log: deps.log } : {}) });
 
   async function eecomBranch(run: Run, circuit: Circuit, irWarnings: Finding[]): Promise<void> {
     const eecom = await run.stage("eecom", async () => (await import("@vibread/checks")).runElectricalChecks(circuit, run.hash));
@@ -230,10 +241,14 @@ export function createPipeline(deps: { store: MissionStore }): Pipeline {
         title: "The self-test firmware did not compile, so the board can't be checked safely.",
         detail: bench.value.diagnostics.map((d) => d.message).join("\n").slice(0, 2000) || bench.value.log.slice(0, 2000),
       });
-    } else await run.put("bench.hex", bench.value.hex, "text/plain");
+    } else {
+      run.benchHex = bench.value.hex;
+      await run.put("bench.hex", bench.value.hex, "text/plain");
+    }
   }
 
   return {
+    idle: () => faultQueue.idle(),
     async evaluate(missionId, n) {
       const revision = await store.getRevision(missionId, n);
       if (!revision) throw new Error(`Revision ${n} of mission ${missionId} does not exist.`);
@@ -276,6 +291,11 @@ export function createPipeline(deps: { store: MissionStore }): Pipeline {
       run.patch.artifacts = { ...revision.results.artifacts, ...run.artifacts };
 
       const saved = await store.saveResults(missionId, n, run.patch);
+      // PLAN item 14: single-fault mutants for diagnosis, built in the background so the consoles never wait for them.
+      const { layout, selftest } = run.patch;
+      if (deps.faults !== false && parsed.ok && layout && selftest && run.benchHex) {
+        faultQueue.enqueue({ missionId, n, circuit: parsed.circuit, layout, plan: selftest, benchHex: run.benchHex });
+      }
       for (const r of ordered) {
         await store.appendEvent({
           missionId,

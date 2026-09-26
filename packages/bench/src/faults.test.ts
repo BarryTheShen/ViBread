@@ -48,4 +48,28 @@ describe("shared fault catalog", () => {
       expect(ranked.slice(0, 2).map((candidate) => candidate.cause), fault).toContain(fault);
     }
   });
+  it("penalizes dictionary mutants that pass or fail a different test", () => {
+    const layout = layoutBoard(moon.circuit);
+    const plan = planSelfTest(moon.circuit, revisionHash(moon.circuit));
+    const observedRun: BenchRunResult = {
+      ...observed("led-jumpers-swapped"),
+      results: [{ test: "led.sequence", status: "fail", subjects: [], summary: "LED mismatch" }],
+    };
+    const predicted = (fault: "led-jumpers-swapped" | "output-jumper-in-rail-row" | "wrong-resistor-value", verdict: BenchRunResult["verdict"], test: BenchRunResult["results"][number]["test"], status: BenchRunResult["results"][number]["status"]) => {
+      const applied = applyFault({ circuit: moon.circuit, layout, fault });
+      return { fault, layoutHash: "mutant", description: fault, layout: applied.layout, circuit: applied.circuit, lines: [], answers: {}, result: { ...observedRun, runId: fault, verdict, results: [{ test, status, subjects: [], summary: fault }] } };
+    };
+    const dictionary = {
+      layoutHash: "base",
+      design: plan.design,
+      entries: [
+        predicted("led-jumpers-swapped", "fail", "led.sequence", "fail"),
+        predicted("output-jumper-in-rail-row", "pass", "led.sequence", "pass"),
+        predicted("wrong-resistor-value", "fail", "button.interactive", "fail"),
+      ],
+    };
+    const ranked = rankFaults({ circuit: moon.circuit, layout, plan, observed: observedRun, lines: [], dictionary });
+    expect(ranked[0]?.cause).toBe("led-jumpers-swapped");
+    expect(ranked[0]?.likelihood).toBeGreaterThan(ranked[1]?.likelihood ?? 0);
+  });
 });

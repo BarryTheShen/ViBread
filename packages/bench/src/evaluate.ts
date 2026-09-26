@@ -797,8 +797,12 @@ export async function evaluateRun(input: {
       lines: input.lines,
       dictionary: input.faultDictionary,
     });
-    const known = new Set(candidates.map((candidate) => candidate.cause));
-    candidates = [...candidates, ...dictionaryCandidates.filter((candidate) => !known.has(candidate.cause))];
+    const merged = new Map(ruleCandidates.map((candidate) => [candidate.cause, candidate]));
+    for (const candidate of dictionaryCandidates) {
+      const existing = merged.get(candidate.cause);
+      if (existing === undefined || candidate.likelihood > existing.likelihood) merged.set(candidate.cause, candidate);
+    }
+    candidates = [...merged.values()].sort((left, right) => right.likelihood - left.likelihood || left.cause.localeCompare(right.cause));
   }
   return { ...baseResult, diagnosis: { ...ruleDiagnosis, candidates } };
 }

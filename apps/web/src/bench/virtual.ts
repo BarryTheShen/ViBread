@@ -1,5 +1,5 @@
+import type { DeviceLine, Circuit } from "@vibread/core";
 import type { FaultId } from "@vibread/bench";
-import type { Circuit } from "@vibread/core";
 import type { BenchTransport } from "./runner.js";
 
 export type VirtualFault = "none" | FaultId;
@@ -17,9 +17,13 @@ export interface VirtualBenchOptions {
   onError?: (message: string) => void;
 }
 
+const HAND_ACTIONS = ["press-hold", "release", "cover", "uncover", "knob-min", "knob-max"] as const;
+type HandAction = (typeof HAND_ACTIONS)[number];
+
 export class VirtualBenchTransport implements BenchTransport {
   private readonly listeners = new Set<(data: Uint8Array) => void>();
   private readonly encoder = new TextEncoder();
+  private serialBuffer = "";
   private worker: Worker | undefined;
   private readonly onTelemetry?: (telemetry: VirtualPartTelemetry) => void;
   private readonly onError?: (message: string) => void;
@@ -31,10 +35,12 @@ export class VirtualBenchTransport implements BenchTransport {
 
   start(options: VirtualBenchOptions): void {
     this.worker?.terminate();
+    this.serialBuffer = "";
     this.worker = new Worker(new URL("./sim.worker.ts", import.meta.url), { type: "module", name: "vibread-bench-sim" });
     this.worker.onmessage = (event: MessageEvent<VirtualWorkerMessage>) => {
       const message = event.data;
       if (message.type === "serial") {
+        this.forwardVirtualHand(message.text);
         const bytes = this.encoder.encode(message.text);
         for (const listener of this.listeners) listener(bytes);
       } else if (message.type === "telemetry") {
@@ -45,6 +51,26 @@ export class VirtualBenchTransport implements BenchTransport {
     };
     this.worker.onerror = (event) => this.onError?.(event.message || "The virtual board worker stopped.");
     this.worker.postMessage({ type: "init", circuit: options.circuit, hex: options.hex, fault: options.fault });
+  }
+
+  private forwardVirtualHand(text: string): void {
+    this.serialBuffer += text;
+    const lines = this.serialBuffer.split(/\r?\n/);
+    this.serialBuffer = lines.pop() ?? "";
+    for (const raw of lines) {
+      if (raw.trim().length === 0) continue;
+      let value: unknown;
+      try {
+        value = JSON.parse(raw);
+      } catch {
+        continue;
+      }
+      if (typeof value !== "object" || value === null || !("t" in value) || value.t !== "ask") continue;
+      const ask = value as Extract<DeviceLine, { t: "ask" }>;
+      if (ask.part !== undefined && (HAND_ACTIONS as readonly string[]).includes(ask.kind)) {
+        this.worker?.postMessage({ type: "action", kind: ask.kind as HandAction, part: ask.part });
+      }
+    }
   }
 
   async write(data: Uint8Array): Promise<void> {
@@ -64,6 +90,7 @@ export class VirtualBenchTransport implements BenchTransport {
     this.worker?.postMessage({ type: "close" });
     this.worker?.terminate();
     this.worker = undefined;
+    this.serialBuffer = "";
     this.listeners.clear();
   }
 }

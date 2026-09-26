@@ -14,6 +14,7 @@ import type {
 import { MODULES } from "@vibread/core";
 import { applyCalibration, compileBenchFirmware, compileSketch } from "@vibread/firmware";
 import { calibrationMacros, evaluateRun, planSelfTest } from "@vibread/bench";
+import { loadFaultDictionary } from "@vibread/tools";
 import { runs } from "./db/schema.js";
 import type { AppContext } from "./context.js";
 
@@ -165,6 +166,8 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const body = req.body as BenchRunRequest;
     const revision = await ctx.store.getRevision(missionId, body.revision);
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
+    // PLAN item 14: rank single-fault mutants when the background fault dictionary (faults.json) is ready.
+    const faultDictionary = await loadFaultDictionary(ctx.store, revision.results.artifacts);
     const result = await evaluateRun({
       circuit: revision.circuit,
       layout: revision.results.layout,
@@ -174,6 +177,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
       kind: body.kind,
       revision: revision.n,
       runId: `run-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      ...(faultDictionary ? { faultDictionary } : {}),
     });
     await ctx.store.saveResults(missionId, revision.n, { bench: [...(revision.results.bench ?? []), result] });
     await ctx.db.insert(runs).values({ id: result.runId, missionId, revision: revision.n, kind: result.kind, result: JSON.stringify(result), createdAt: new Date() });

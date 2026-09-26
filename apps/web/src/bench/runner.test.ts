@@ -53,22 +53,22 @@ describe("BenchRunner", () => {
     transport.receive(JSON.stringify({ t: "begin", test: "button.interactive" }));
     transport.receive(JSON.stringify({
       t: "ask",
-      id: "ask-1",
+      id: "btn0-press",
       test: "button.interactive",
       kind: "press-hold",
-      choices: ["pressed", "not-pressed"],
+      choices: ["done"],
       timeoutMs: 1000,
     }));
-    expect(runner.state.asks[0]?.id).toBe("ask-1");
+    expect(runner.state.asks[0]?.id).toBe("btn0-press");
 
-    await runner.answer("ask-1", "pressed");
-    expect(transport.writes).toContain(encodeHostCommand({ c: "answer", id: "ask-1", v: "pressed" }));
-    expect(runner.state.answers).toEqual({ "ask-1": "pressed" });
+    await runner.answer("btn0-press", "done");
+    expect(transport.writes).toContain(encodeHostCommand({ c: "answer", id: "btn0-press", v: "done" }));
+    expect(runner.state.answers).toEqual({ "btn0-press": "done" });
 
     transport.receive(JSON.stringify({ t: "end", test: "button.interactive", status: "pass" }));
     transport.receive(JSON.stringify({ t: "done" }));
     expect(runner.state.phase).toBe("complete");
-    expect(runner.runRequest()).toMatchObject({ revision: 3, kind: "selftest", answers: { "ask-1": "pressed" } });
+    expect(runner.runRequest()).toMatchObject({ revision: 3, kind: "selftest", answers: { "btn0-press": "done" } });
   });
 
   it("waits for the matching hello before sending the rail command", async () => {
