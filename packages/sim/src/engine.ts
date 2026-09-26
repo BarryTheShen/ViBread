@@ -66,7 +66,12 @@ interface Branch {
   b: string;
   ohms: number;
   vf?: number;
-  active?: boolean;
+}
+
+interface DiodeBranch {
+  branch: Branch;
+  vf: number;
+  on: boolean;
 }
 
 interface SensorValues {
@@ -579,6 +584,7 @@ export class SimMachine {
 
   private updateCircuit(): void {
     const branches: Branch[] = [];
+    const diodes: DiodeBranch[] = [];
     const sources: { node: string; voltage: number; ohms: number }[] = [];
     const addBranch = (aPin: string, bPin: string, ohms: number, vf?: number, active = true): void => {
       const a = this.pinToNode.get(aPin);
@@ -609,7 +615,13 @@ export class SimMachine {
       } else if (part.module === "led") {
         const color = typeof params.color === "string" && params.color in (MODULES.led.electrical.vf ?? {}) ? params.color as keyof NonNullable<typeof MODULES.led.electrical.vf> : "red";
         const vf = MODULES.led.electrical.vf?.[color]?.typ ?? 2;
-        addBranch(`${part.id}.A`, `${part.id}.K`, 0.5, vf);
+        const a = this.pinToNode.get(`${part.id}.A`);
+        const b = this.pinToNode.get(`${part.id}.K`);
+        if (a && b) {
+          const branch: Branch = { a, b, ohms: 1_000_000, vf: 0 };
+          branches.push(branch);
+          diodes.push({ branch, vf, on: false });
+        }
       } else if (part.module === "button") {
         const pressed = this.sensors.digital.get(part.id) ?? false;
         addBranch(`${part.id}.1`, `${part.id}.3`, pressed ? 1 : 1e12);
@@ -637,7 +649,22 @@ export class SimMachine {
         }
       }
     }
-    const values = solveNodes(this.nodes, this.nodeFixed, branches, sources);
+    let values = solveNodes(this.nodes, this.nodeFixed, branches, sources);
+    for (let iteration = 0; iteration < 8; iteration += 1) {
+      let changed = false;
+      for (const diode of diodes) {
+        const voltage = (values.get(diode.branch.a) ?? 0) - (values.get(diode.branch.b) ?? 0);
+        const nextOn = diode.on ? voltage >= diode.vf - 0.01 : voltage >= diode.vf;
+        if (nextOn !== diode.on) {
+          diode.on = nextOn;
+          diode.branch.ohms = nextOn ? 0.5 : 1_000_000;
+          diode.branch.vf = nextOn ? diode.vf : 0;
+          changed = true;
+        }
+      }
+      if (!changed) break;
+      values = solveNodes(this.nodes, this.nodeFixed, branches, sources);
+    }
     this.voltages.clear();
     for (const [node, value] of values) this.voltages.set(node, value);
     this.adc.avcc = this.profile.vcc;
@@ -856,10 +883,11 @@ function executeStep(machine: SimMachine, step: ScenarioStep): { ok: boolean; me
     const start = machine.currentCycle;
     machine.run(windowMs);
     const onFraction = machine.partOnFraction(part, start);
-    const requestedFraction = state === "on" ? onFraction : 1 - onFraction;
-    const threshold = state === "on" ? "≥ 90%" : "≤ 10%";
     const ok = state === "on" ? onFraction >= 0.9 : onFraction <= 0.1;
-    const message = `${part} was ${state} for ${(requestedFraction * 100).toFixed(0)}% of the window (needed ${threshold})`;
+    const percentage = (onFraction * 100).toFixed(0);
+    const message = ok
+      ? `${part} was ${state} as expected (lit ${percentage}% of the window)`
+      : `${part} should be ${state} (lit ${state === "on" ? "≥ 90%" : "≤ 10%"} of the window) but was lit ${percentage}%`;
     return { ok, message };
   }
   if ("expect-pwm" in step) {

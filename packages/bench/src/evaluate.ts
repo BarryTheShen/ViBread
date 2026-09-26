@@ -725,6 +725,22 @@ function summaryWithAmbiguity(summary: string, candidates: BenchRunResult["diagn
   }
   return summary;
 }
+function incompleteSummary(lines: DeviceLine[], answers: Record<string, string>): string {
+  const ask = lines.find((line): line is Extract<DeviceLine, { t: "ask" }> => line.t === "ask" && answerMissing(answers[line.id]));
+  if (ask === undefined) return "The bench did not return a complete telemetry signature.";
+  const wording: Record<Extract<DeviceLine, { t: "ask" }>["kind"], string> = {
+    "press-hold": "Press the button",
+    release: "Release the button",
+    cover: "Cover the light sensor",
+    uncover: "Uncover the light sensor",
+    "knob-min": "Turn the knob down",
+    "knob-max": "Turn the knob up",
+    "which-led": "Which light is blinking",
+    "heard-beep": "Listen for the beep",
+    confirm: "Confirm the part",
+  };
+  return `Nobody answered '${wording[ask.kind]}' in time.`;
+}
 
 function verdictFor(results: BenchTestResult[]): BenchRunResult["verdict"] {
   if (results.some((result) => result.status === "fail")) return "fail";
@@ -826,6 +842,7 @@ export async function evaluateRun(input: {
     verdict,
   };
   if (verdict === "pass") return { ...baseResult, diagnosis: { ...ruleDiagnosis, attribution: "none", candidates: [] } };
+  if (verdict === "incomplete") return { ...baseResult, diagnosis: { ...ruleDiagnosis, attribution: "none", candidates: [], summary: incompleteSummary(input.lines, input.answers) } };
   let candidates = ruleCandidates;
   if (input.layout !== undefined && input.faultDictionary !== undefined) {
     const dictionaryCandidates = rankFaults({
