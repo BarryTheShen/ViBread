@@ -18,7 +18,8 @@ import type { Part, RevisionDetail } from "@vibread/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useArtifactText } from "../../api/hooks.js";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
-import { MONO_FONT } from "../../theme.js";
+import { SERIAL_LIMIT, SerialMonitor } from "../../components/SerialMonitor.js";
+
 import { BuzzerAudio, isSounding } from "../buzzerAudio.js";
 import type { LiveSimInput, LiveSimOutput } from "../liveSimProtocol.js";
 import { applyFrame, breadboardUrl, describePartState } from "../replay.js";
@@ -27,7 +28,6 @@ const FIDELITY =
   "Instruction-level ATmega328P emulation of the exact binary that will be flashed, with protocol-level part models. " +
   "Validates logic, timing, and pin configuration; does not prove current, noise, brown-out, or contact quality — the physical self-test does.";
 
-const SERIAL_LIMIT = 4000;
 const DEFAULT_LIGHT = 0.8;
 const DEFAULT_KNOB = 0.5;
 
@@ -359,16 +359,7 @@ export function TryItTab({ revision }: { revision: RevisionDetail }) {
         </Typography>
       </Paper>
       <Paper variant="outlined" sx={{ p: 1.5 }}>
-        <Typography variant="overline" sx={{ color: "text.secondary" }}>
-          Serial monitor (what the Arduino prints)
-        </Typography>
-        <Box
-          component="pre"
-          aria-label="Serial output"
-          sx={{ m: 0, mt: 0.5, p: 1, bgcolor: "code.main", borderRadius: 1, fontFamily: MONO_FONT, fontSize: 12.5, height: 120, overflow: "auto", whiteSpace: "pre-wrap" }}
-        >
-          {serial || "Nothing printed yet."}
-        </Box>
+        <SerialMonitor value={serial} />
         <Stack
           component="form"
           direction="row"
