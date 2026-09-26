@@ -431,41 +431,72 @@ export async function buildFaultDictionary(input: { circuit: Circuit; layout: La
   dictionaryCache.set(key, promise);
   return promise;
 }
-
 async function runWithSession(Session: SimSessionConstructor, circuit: Circuit, plan: SelfTestPlan, hex: string): Promise<{ lines: DeviceLine[]; answers: Record<string, string> }> {
   const session = new Session({ circuit, hex, light: { LDR1: 0.8 } });
   const decoder = new LineDecoder();
   const lines: DeviceLine[] = [];
   const answers: Record<string, string> = {};
   const answered = new Set<string>();
+  const pendingAsks: Array<Extract<DeviceLine, { t: "ask" }>> = [];
+  let done = false;
   session.onSerial((chunk) => {
     for (const decoded of decoder.push(chunk)) if (decoded.t !== "invalid") {
       lines.push(decoded);
-      if (decoded.t !== "ask" || answered.has(decoded.id)) continue;
-      if (decoded.id.endsWith("-press")) session.setDigital(decoded.part ?? "BTN1", true);
-      if (decoded.id.endsWith("-release")) session.setDigital(decoded.part ?? "BTN1", false);
-      if (decoded.id.endsWith("-cover")) session.setLight(decoded.part ?? "LDR1", 0.05);
-      if (decoded.id.endsWith("-uncover")) session.setLight(decoded.part ?? "LDR1", 0.8);
-      if (decoded.id.startsWith("pot") && decoded.id.endsWith("-min")) session.setAnalog(decoded.part ?? "POT1", 0);
-      if (decoded.id.startsWith("pot") && decoded.id.endsWith("-max")) session.setAnalog(decoded.part ?? "POT1", 1);
-      let value = "done";
-      if (decoded.kind === "which-led") {
-        session.run(plan.timing.ledPeriodMs);
-        const leds = plan.subjects.filter((subject): subject is Extract<SelfTestPlan["subjects"][number], { kind: "led" }> => subject.kind === "led");
-        const brightest = leds.reduce((best, subject) => session.partState(subject.part) > session.partState(best.part) ? subject : best, leds[0]);
-        value = brightest === undefined || session.partState(brightest.part) <= 0.02 ? "none" : String(brightest.order);
-      }
-      if (decoded.kind === "heard-beep") {
-        session.run(100);
-        value = session.partState(decoded.part ?? "BZ1") > 0 ? "yes" : "no";
-      }
-      answers[decoded.id] = value;
-      session.serialWrite(`${JSON.stringify({ c: "answer", id: decoded.id, v: value })}\n`);
-      answered.add(decoded.id);
+      if (decoded.t === "ask") pendingAsks.push(decoded);
+      if (decoded.t === "done") done = true;
     }
   });
+  const answerPending = (): void => {
+    while (pendingAsks.length > 0) {
+      const ask = pendingAsks.shift();
+      if (ask === undefined || answered.has(ask.id)) continue;
+      if (ask.id.endsWith("-press")) session.setDigital(ask.part ?? "BTN1", true);
+      if (ask.id.endsWith("-release")) session.setDigital(ask.part ?? "BTN1", false);
+      if (ask.id.endsWith("-cover")) session.setLight(ask.part ?? "LDR1", 0.05);
+      if (ask.id.endsWith("-uncover")) session.setLight(ask.part ?? "LDR1", 0.8);
+      if (ask.id.startsWith("pot") && ask.id.endsWith("-min")) session.setAnalog(ask.part ?? "POT1", 0);
+      if (ask.id.startsWith("pot") && ask.id.endsWith("-max")) session.setAnalog(ask.part ?? "POT1", 1);
+      let value = "done";
+      if (ask.kind === "which-led") {
+        const leds = plan.subjects.filter((subject): subject is Extract<SelfTestPlan["subjects"][number], { kind: "led" }> => subject.kind === "led");
+        let brightest = leds[0];
+        let brightness = 0;
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          session.run(plan.timing.ledOnMs);
+          for (const subject of leds) {
+            const value = session.partState(subject.part);
+            if (value > brightness) {
+              brightness = value;
+              brightest = subject;
+            }
+          }
+          if (brightness > 0.02) break;
+        }
+        value = brightest === undefined || brightness <= 0.02 ? "none" : String(brightest.order);
+      }
+      if (ask.kind === "heard-beep") {
+        let heard = false;
+        for (let attempt = 0; attempt < 12; attempt += 1) {
+          session.run(20);
+          if (session.partState(ask.part ?? "BZ1") > 0) {
+            heard = true;
+            break;
+          }
+        }
+        value = heard ? "yes" : "no";
+      }
+      answers[ask.id] = value;
+      session.serialWrite(`${JSON.stringify({ c: "answer", id: ask.id, v: value })}\n`);
+      answered.add(ask.id);
+    }
+  };
   session.run(100);
   session.serialWrite('{"c":"run","test":"all"}\n');
-  session.run(5_000);
+  for (let slice = 0; slice < 200 && !done; slice += 1) {
+    session.run(50);
+    answerPending();
+  }
+  if (!done) throw new Error("fault dictionary virtual bench did not finish within its bounded run window");
   return { lines, answers };
 }
+
