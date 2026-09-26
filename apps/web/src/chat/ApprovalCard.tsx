@@ -74,16 +74,16 @@ export function ApprovalCard(props: ApprovalCardProps) {
       variant="outlined"
       role="group"
       aria-label={`${heading}: ${summary}`}
-      sx={{ borderColor: decided ? "divider" : "secondary.main", borderWidth: decided ? 1 : 2, bgcolor: "background.paper", my: 1 }}
+      sx={{ borderColor: decided ? "divider" : "primary.main", borderWidth: decided ? 1 : 1.5, borderRadius: "12px", bgcolor: "background.paper", my: 1, fontFamily: "fontFamily" }}
     >
       <CardContent sx={{ pb: 1, ...(dense ? { pt: 1.5, px: 2 } : {}) }}>
         <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 1 }}>
-          {physical ? <UsbIcon color="secondary" /> : <GppMaybeIcon color="secondary" />}
-          <Typography variant="overline" sx={{ color: "secondary.main", lineHeight: 1.4 }}>
+          {physical ? <UsbIcon color="primary" fontSize="small" /> : <GppMaybeIcon color="primary" fontSize="small" />}
+          <Typography variant="body2" sx={{ color: "primary.main", fontWeight: 600 }}>
             {heading}
           </Typography>
         </Stack>
-        <Typography variant="h3" component="p" sx={{ mb: 0.5, ...(dense ? { fontSize: "1.05rem" } : {}) }}>
+        <Typography variant="subtitle1" component="p" sx={{ mb: 0.5, fontWeight: 600, ...(dense ? { fontSize: "1rem" } : {}) }}>
           {summary}
         </Typography>
         <Typography variant="body2" sx={{ color: "text.secondary" }}>
@@ -129,14 +129,10 @@ export function ApprovalCard(props: ApprovalCardProps) {
           </Button>
           {!perActionOnly && (
             <Button variant="outlined" color="primary" disabled={pending !== null} onClick={() => void decide("approve-mission")}>
-              {pending === "approve-mission"
-                ? "Allowing…"
-                : actionClass === "release"
-                  ? "Always allow releasing designs in this mission"
-                  : "Always allow design changes in this mission"}
+              {pending === "approve-mission" ? "Allowing…" : "Allow for this mission"}
             </Button>
           )}
-          <Button variant="outlined" color="error" disabled={pending !== null} onClick={() => void decide("deny")}>
+          <Button variant="text" color="inherit" disabled={pending !== null} onClick={() => void decide("deny")}>
             {pending === "deny" ? "Saying no…" : "Deny"}
           </Button>
           {physical && (

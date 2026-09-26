@@ -25,13 +25,13 @@ export function SchematicTab({ revision }: { revision: RevisionDetail }) {
   return (
     <Stack sx={{ gap: 2 }}>
       <Box>
-        <Typography variant="h3" component="h2">
+        <Typography variant="h6" component="h2">
           {circuit.title}
         </Typography>
         <Typography sx={{ color: "text.secondary" }}>{circuit.summary}</Typography>
       </Box>
       {url ? (
-        <Paper variant="outlined" sx={{ p: 1, bgcolor: "#0a0f14" }}>
+        <Paper variant="outlined" sx={{ p: 1, bgcolor: "canvas.main" }}>
           <SvgArtifact url={url} label={`Schematic of ${circuit.title}`} />
         </Paper>
       ) : (

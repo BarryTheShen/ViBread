@@ -18,6 +18,7 @@ export const missions = sqliteTable("missions", {
   mode: text("mode").notNull(),
   phase: text("phase").notNull(),
   inventory: text("inventory").notNull(),
+  inventoryNotes: text("inventoryNotes"),
   currentRevision: integer("currentRevision"),
   releasedRevision: integer("releasedRevision"),
   snapshot: text("snapshot"),
@@ -153,6 +154,45 @@ export const pairedDevices = sqliteTable("paired_devices", {
   lastSeenAt: timestamp("lastSeenAt"),
   userAgent: text("userAgent"),
 });
+export const partTypes = sqliteTable("part_types", {
+  id: text("id").primaryKey(),
+  ownerId: text("ownerId").notNull(),
+  json: text("json").notNull(),
+  createdAt: timestamp("createdAt").notNull(),
+  updatedAt: timestamp("updatedAt").notNull(),
+});
+
+export const inventoryItems = sqliteTable("inventory_items", {
+  id: text("id").primaryKey(),
+  ownerId: text("ownerId").notNull(),
+  typeId: text("typeId").notNull(),
+  identity: text("identity").notNull(),
+  values: text("values").notNull(),
+  quantity: integer("quantity").notNull(),
+  status: text("status").notNull(),
+  source: text("source").notNull(),
+  candidates: text("candidates"),
+  photoUrl: text("photoUrl"),
+  note: text("note"),
+  createdAt: timestamp("createdAt").notNull(),
+  updatedAt: timestamp("updatedAt").notNull(),
+}, (table) => ({
+  ownerIdentity: uniqueIndex("inventory_items_owner_identity_uidx").on(table.ownerId, table.identity),
+}));
+
+export const inventoryScans = sqliteTable("inventory_scans", {
+  id: text("id").primaryKey(),
+  ownerId: text("ownerId").notNull(),
+  status: text("status").notNull(),
+  photos: text("photos").notNull(),
+  analyzed: text("analyzed"),
+  observations: text("observations"),
+  items: text("items"),
+  error: text("error"),
+  createdAt: timestamp("createdAt").notNull(),
+  updatedAt: timestamp("updatedAt").notNull(),
+});
+
 
 
 

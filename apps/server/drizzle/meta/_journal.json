@@ -43,6 +43,13 @@
       "when": 1790445914429,
       "tag": "0005_normal_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1790452627061,
+      "tag": "0006_mature_charles_xavier",
+      "breakpoints": true
     }
   ]
 }

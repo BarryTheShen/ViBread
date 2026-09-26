@@ -13,7 +13,7 @@ import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middlew
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { AgentTurnResult, Actor, ApprovalRequest, InventoryItem, MissionDetail, ToolDef } from "@vibread/core";
-import { invokeTool } from "@vibread/tools";
+import { createUserTools, invokeTool } from "@vibread/tools";
 import type { AppContext } from "../context.js";
 import { oauthClient } from "../db/schema.js";
 
@@ -235,7 +235,8 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
           title,
           mode,
           owner: actor,
-          inventory: (inventory ?? []) as InventoryItem[],
+          // No parts given → MissionService copies the owner's inventory (plan §5.4).
+          ...(inventory ? { inventory: inventory as InventoryItem[] } : {}),
         });
         return toolCallResult(mission);
       },
@@ -294,6 +295,20 @@ function registerToolDefs(server: McpServer, ctx: AppContext, request: Request, 
   }
 }
 
+/** User-level read tools (no missionId): the authenticated user's own data only, e.g. vibread_get_inventory. */
+function registerUserTools(server: McpServer, ctx: AppContext, request: Request, scopes: string[]): void {
+  if (!hasScope(scopes, "circuits:read")) return;
+  for (const def of createUserTools({ inventory: ctx.inventory })) {
+    server.registerTool(def.name, { title: def.title, description: def.description, inputSchema: {} }, async () => {
+      try {
+        return toolCallResult(await def.handler({ ownerId: authUserId(request) }, {}));
+      } catch (error) {
+        return toolCallResult(error instanceof Error ? error.message : String(error), true);
+      }
+    });
+  }
+}
+
 function createMcpServer(ctx: AppContext, request: Request): McpServer {
   const server = new McpServer(
     { name: "vibread", version: MCP_VERSION },
@@ -302,6 +317,7 @@ function createMcpServer(ctx: AppContext, request: Request): McpServer {
   const scopes = requestedScopes(request);
   registerToolDefs(server, ctx, request, scopes);
   registerMissionTools(server, ctx, request, scopes);
+  registerUserTools(server, ctx, request, scopes);
   return server;
 }
 function webRequestFor(request: Request): globalThis.Request {
@@ -556,7 +572,7 @@ function createA2aExecutor(ctx: AppContext): AgentExecutor {
       let result: AgentTurnResult;
 
       if (!missionId) {
-        const mission = await ctx.missions.create({ brief: textOf(incoming), inventory: [], owner: actor, mode: "review" });
+        const mission = await ctx.missions.create({ brief: textOf(incoming), owner: actor, mode: "review" });
         missionId = mission.id;
       }
       result = await ctx.missions.say(missionId, textOf(incoming), actor);

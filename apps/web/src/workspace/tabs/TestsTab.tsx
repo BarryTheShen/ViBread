@@ -47,7 +47,7 @@ export function TestsTab({ revision, recording }: { revision: RevisionDetail; re
   return (
     <Stack sx={{ gap: 2 }}>
       <Box>
-        <Typography variant="h3" component="h2">
+        <Typography variant="h6" component="h2">
           Simulation tests
         </Typography>
         <Typography sx={{ color: "text.secondary" }}>

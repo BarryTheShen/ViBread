@@ -6,6 +6,7 @@ import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { ClientFactory, ClientFactoryOptions, JsonRpcTransportFactory } from "@a2a-js/sdk/client";
 import { AgentCard, Role, TaskState, type Task } from "@a2a-js/sdk";
+import { BUILT_IN_PART_TYPES } from "@vibread/core";
 import { mountA2a, mountMcp } from "./index.js";
 
 interface TestServer {
@@ -97,6 +98,17 @@ function testContext() {
     },
     missions,
     broker: { async evaluate() { return { outcome: "bench-click" }; } },
+    inventory: {
+      async entries(ownerId: string) {
+        const at = "2026-09-26T00:00:00.000Z";
+        if (ownerId === "u1") return [{ id: "e1", typeId: "led", values: { color: "red" }, quantity: 3, status: "ready", source: "typed", createdAt: at, updatedAt: at }];
+        if (ownerId === "u2") return [{ id: "e2", typeId: "servo", values: {}, quantity: 1, status: "ready", source: "typed", note: "u2-private", createdAt: at, updatedAt: at }];
+        return [];
+      },
+      async types() {
+        return BUILT_IN_PART_TYPES;
+      },
+    },
   };
 }
 
@@ -130,7 +142,7 @@ describe("MCP and A2A mounts", () => {
     const client = new McpClient({ name: "vitest", version: "1" });
     await client.connect(transport);
     const listed = await client.listTools();
-    expect(listed.tools.map((tool) => tool.name)).toEqual(["echo_read", "vibread_list_missions", "vibread_status"]);
+    expect(listed.tools.map((tool) => tool.name)).toEqual(["echo_read", "vibread_list_missions", "vibread_status", "vibread_get_inventory"]);
     const echo = await client.callTool({ name: "echo_read", arguments: { missionId: "m1", value: "ok" } });
     expect(echo.isError).not.toBe(true);
     expect(echo.content).toEqual([{ type: "text", text: '{"echoed":"ok"}' }]);
@@ -141,6 +153,30 @@ describe("MCP and A2A mounts", () => {
     const writeTools = await writeClient.listTools();
     expect(writeTools.tools.map((tool) => tool.name)).toEqual(["write_only", "vibread_create_mission", "vibread_say", "vibread_continue_task"]);
     await writeClient.close();
+  });
+
+  it("a read-scoped token lists and calls vibread_get_inventory, and sees only its own user's parts", async () => {
+    const { baseUrl } = await openServer();
+    const call = async (token: string) => {
+      const client = new McpClient({ name: `inventory-${token}`, version: "1" });
+      await client.connect(new StreamableHTTPClientTransport(new URL(`${baseUrl}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }));
+      const names = (await client.listTools()).tools.map((tool) => tool.name);
+      const result = names.includes("vibread_get_inventory") ? await client.callTool({ name: "vibread_get_inventory", arguments: {} }) : undefined;
+      await client.close();
+      return { names, result };
+    };
+    const u1 = await call("read");
+    expect(u1.result?.isError).not.toBe(true);
+    const u1Text = (u1.result?.content as { text: string }[])[0]!.text;
+    const u1Inventory = JSON.parse(u1Text) as { groups: { typeId: string; total: number; support: string }[] };
+    expect(u1Inventory.groups.map((g) => [g.typeId, g.total, g.support])).toEqual([["led", 3, "full"]]);
+    expect(u1Text).not.toContain("u2-private");
+    expect(u1Text).not.toContain("servo");
+
+    const u2 = await call("other");
+    expect(JSON.parse((u2.result?.content as { text: string }[])[0]!.text).groups.map((g: { typeId: string }) => g.typeId)).toEqual(["servo"]);
+    // Write-only tokens don't get the read tool.
+    expect((await call("write")).names).not.toContain("vibread_get_inventory");
   });
 
   it("does not let another bearer user reuse an MCP session", async () => {

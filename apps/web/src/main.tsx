@@ -1,13 +1,13 @@
-import "@fontsource/roboto/400.css";
-import "@fontsource/roboto/500.css";
-import "@fontsource/roboto/700.css";
+import "@fontsource-variable/inter";
+import "@fontsource/lora/400.css";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/600.css";
 import Box from "@mui/material/Box";
 import CircularProgress from "@mui/material/CircularProgress";
 import CssBaseline from "@mui/material/CssBaseline";
-import { ThemeProvider } from "@mui/material/styles";
+import InitColorSchemeScript from "@mui/material/InitColorSchemeScript";
 import useMediaQuery from "@mui/material/useMediaQuery";
+import { ThemeProvider } from "@mui/material/styles";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { lazy, StrictMode, Suspense, useMemo } from "react";
 import { createRoot } from "react-dom/client";
@@ -18,10 +18,13 @@ import { SignInRequired, useProviders } from "./components/SignIn.js";
 import { authClient } from "./api/auth.js";
 import { HttpError } from "./api/client.js";
 import { createMissionTheme } from "./theme.js";
+import AppShell from "./shell/AppShell.js";
 
-const HomePage = lazy(() => import("./pages/HomePage.js"));
+const NewMissionPage = lazy(() => import("./pages/NewMissionPage.js"));
 const MissionPage = lazy(() => import("./pages/MissionPage.js"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage.js"));
+const InventoryPage = lazy(() => import("./inventory/InventoryPage.js"));
+const PhoneScanPage = lazy(() => import("./inventory/PhoneScanPage.js"));
 const OAuthLoginPage = lazy(() => import("./pages/OAuthLoginPage.js"));
 const OAuthConsentPage = lazy(() => import("./pages/OAuthConsentPage.js"));
 const BenchPage = lazy(() => import("./bench/BenchPage.js"));
@@ -76,12 +79,19 @@ const router = createBrowserRouter([
     element: <Shell />,
     errorElement: <RouteError />,
     children: [
-      { path: "/", element: <HomePage /> },
-      { path: "/m/:missionId", element: <MissionPage /> },
-      { path: "/m/:missionId/bench", element: <BenchPage /> },
+      {
+        element: <AppShell />,
+        children: [
+          { path: "/", element: <NewMissionPage /> },
+          { path: "/m/:missionId", element: <MissionPage /> },
+          { path: "/m/:missionId/bench", element: <BenchPage /> },
+          { path: "/inventory", element: <InventoryPage /> },
+          { path: "/settings", element: <SettingsPage /> },
+        ],
+      },
       { path: "/b", element: <BuildModePage /> },
       { path: "/b/:missionId", element: <BuildModePage /> },
-      { path: "/settings", element: <SettingsPage /> },
+      { path: "/scan/:scanId", element: <PhoneScanPage /> },
       { path: "/login", element: <OAuthLoginPage /> },
       { path: "/consent", element: <OAuthConsentPage /> },
       { path: "*", element: <RouteError notFound /> },
@@ -93,8 +103,9 @@ function App() {
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)", { noSsr: true });
   const theme = useMemo(() => createMissionTheme(reducedMotion), [reducedMotion]);
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
+    <ThemeProvider theme={theme} defaultMode="system">
+      <InitColorSchemeScript attribute="data" defaultMode="system" />
+      <CssBaseline enableColorScheme />
       <QueryClientProvider client={queryClient}>
         <RouterProvider router={router} />
       </QueryClientProvider>

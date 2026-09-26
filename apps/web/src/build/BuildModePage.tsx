@@ -14,6 +14,7 @@ import {
   Divider,
   MobileStepper,
   Paper,
+  Skeleton,
   Stack,
   ToggleButton,
   ToggleButtonGroup,
@@ -37,6 +38,7 @@ import {
 import { useNavigate, useParams } from "react-router";
 import {
   BuildApiError,
+  createInventoryScan,
   fetchBuildState,
   fetchPhoneMissions,
   postBuildStep,
@@ -131,7 +133,7 @@ function PlugBanner({ plug, reducedMotion }: { plug: BuildStep["plug"]; reducedM
         borderRadius: 3,
         borderWidth: 2,
         borderColor: plugged ? "success.main" : "warning.main",
-        bgcolor: plugged ? "rgba(62, 189, 126, 0.1)" : "rgba(244, 180, 0, 0.1)",
+        bgcolor: "background.paper",
         transition: reducedMotion ? "none" : "border-color 180ms ease, background-color 180ms ease",
       }}
     >
@@ -152,67 +154,118 @@ function PlugBanner({ plug, reducedMotion }: { plug: BuildStep["plug"]; reducedM
     </Paper>
   );
 }
+function preloadImage(url?: string): void {
+  if (!url) return;
+  const image = new window.Image();
+  image.src = url;
+  void image.decode().catch(() => undefined);
+}
 
-function StepImage({ step }: { step: BuildStep }) {
+
+function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: boolean }) {
   const [imageView, setImageView] = useState<ImageView>("focused");
+  const [displayedUrl, setDisplayedUrl] = useState<string | undefined>(() => step.focusImageUrl ?? step.imageUrl);
+  const [loading, setLoading] = useState(Boolean(step.focusImageUrl ?? step.imageUrl));
   const [failed, setFailed] = useState(false);
+  const loadId = useRef(0);
   const hasWholeBoard = Boolean(step.focusImageUrl && step.imageUrl);
   const showWholeBoard = imageView === "whole";
-  const imageUrl = showWholeBoard ? step.imageUrl : step.focusImageUrl ?? step.imageUrl;
+
+  const requestImage = (url?: string) => {
+    const requestId = ++loadId.current;
+    setLoading(Boolean(url));
+    setFailed(false);
+    if (!url) {
+      setDisplayedUrl(undefined);
+      setLoading(false);
+      return;
+    }
+    const image = new window.Image();
+    image.decoding = "async";
+    image.src = url;
+    void image.decode().then(
+      () => {
+        if (requestId === loadId.current) {
+          setDisplayedUrl(url);
+          setLoading(false);
+        }
+      },
+      () => {
+        if (requestId !== loadId.current) return;
+        if (step.imageUrl && url !== step.imageUrl) {
+          setImageView("whole");
+          requestImage(step.imageUrl);
+        } else {
+          setFailed(true);
+          setLoading(false);
+        }
+      },
+    );
+  };
 
   useEffect(() => {
     setImageView("focused");
-    setFailed(false);
+    requestImage(step.focusImageUrl ?? step.imageUrl);
+    return () => {
+      loadId.current += 1;
+    };
   }, [step.n, step.focusImageUrl, step.imageUrl]);
-
-  if (!imageUrl || failed) {
-    return (
-      <Box
-        role="img"
-        aria-label={`Illustration for step ${step.n} is unavailable`}
-        sx={{
-          minHeight: 150,
-          display: "grid",
-          placeItems: "center",
-          bgcolor: "rgba(255,255,255,0.04)",
-          color: "text.secondary",
-        }}
-      >
-        <Stack spacing={0.75} sx={{ alignItems: "center" }}>
-          <ImageNotSupportedOutlined aria-hidden="true" />
-          <Typography variant="caption">Step illustration unavailable</Typography>
-        </Stack>
-      </Box>
-    );
-  }
 
   const handleImageError = () => {
     if (!showWholeBoard && hasWholeBoard) {
       setImageView("whole");
+      requestImage(step.imageUrl);
       return;
     }
     setFailed(true);
+    setLoading(false);
   };
 
   const handleImageViewChange = (_event: MouseEvent<HTMLElement>, next: ImageView | null) => {
-    if (next) setImageView(next);
+    if (next) {
+      setImageView(next);
+      requestImage(next === "whole" ? step.imageUrl : step.focusImageUrl ?? step.imageUrl);
+    }
   };
 
   return (
     <Box>
-      <CardMedia
-        component="img"
-        image={imageUrl}
-        alt={`${showWholeBoard ? "Whole board" : "Focused step"} illustration for step ${step.n}: ${step.title}`}
-        onError={handleImageError}
+      <Box
+        role="img"
+        aria-label={`${showWholeBoard ? "Whole board" : "Focused step"} illustration for step ${step.n}: ${step.title}`}
+        aria-busy={loading}
         sx={{
-          display: "block",
+          position: "relative",
           width: "100%",
-          maxHeight: 270,
-          objectFit: "contain",
-          bgcolor: "rgba(255,255,255,0.04)",
+          aspectRatio: "4 / 3",
+          overflow: "hidden",
+          bgcolor: "canvas.main",
         }}
-      />
+      >
+        <Skeleton
+          variant="rectangular"
+          animation={reducedMotion ? false : "pulse"}
+          sx={{ position: "absolute", inset: 0, width: "100%", height: "100%", bgcolor: "action.hover" }}
+        />
+        {displayedUrl && !failed && (
+          <CardMedia
+            component="img"
+            image={displayedUrl}
+            alt={`${showWholeBoard ? "Whole board" : "Focused step"} illustration for step ${step.n}: ${step.title}`}
+            onError={handleImageError}
+            sx={{ position: "absolute", inset: 0, zIndex: 1, width: "100%", height: "100%", objectFit: "contain" }}
+          />
+        )}
+        {(!displayedUrl || failed) && !loading && (
+          <Stack
+            spacing={0.75}
+            sx={{ position: "absolute", inset: 0, zIndex: 2, alignItems: "center", justifyContent: "center", color: "text.secondary" }}
+          >
+            <ImageNotSupportedOutlined aria-hidden="true" />
+            <Typography variant="caption">Step illustration unavailable</Typography>
+          </Stack>
+        )}
+      </Box>
       {hasWholeBoard && (
         <Box sx={{ display: "flex", justifyContent: "flex-end", px: 1.5, pt: 1 }}>
           <ToggleButtonGroup
@@ -251,7 +304,7 @@ function FinishedBuild({ total, onReview }: { total: number; onReview: () => voi
       component="section"
       aria-label="Build complete"
       variant="outlined"
-      sx={{ p: 2.5, borderRadius: 3, borderWidth: 2, borderColor: "success.main", bgcolor: "rgba(62, 189, 126, 0.1)" }}
+      sx={{ p: 2.5, borderRadius: 3, borderWidth: 2, borderColor: "success.main", bgcolor: "action.hover" }}
     >
       <Stack spacing={1.25} sx={{ alignItems: "flex-start" }}>
         <CheckCircleOutlined color="success" sx={{ fontSize: 38 }} aria-hidden="true" />
@@ -288,7 +341,7 @@ function StepCard({ step, total, reducedMotion }: { step: BuildStep; total: numb
         transition: reducedMotion ? "none" : "box-shadow 180ms ease",
       }}
     >
-      <StepImage key={step.n} step={step} />
+      <StepImage step={step} reducedMotion={reducedMotion} />
       <CardContent sx={{ p: { xs: 2, sm: 2.5 }, "&:last-child": { pb: { xs: 2, sm: 2.5 } } }}>
         <Typography variant="overline" color="primary.main" sx={{ fontWeight: 800, letterSpacing: "0.1em" }}>
           Step {step.n} of {total}
@@ -345,7 +398,7 @@ function StepCard({ step, total, reducedMotion }: { step: BuildStep; total: numb
             component="section"
             aria-label="Checkpoint"
             variant="outlined"
-            sx={{ mt: 2, p: 1.5, borderRadius: 2.5, bgcolor: "rgba(96, 165, 250, 0.08)" }}
+            sx={{ mt: 2, p: 1.5, borderRadius: 2.5, bgcolor: "action.hover" }}
           >
             <Stack direction="row" spacing={1} sx={{ alignItems: "flex-start" }}>
               <FactCheckOutlined aria-hidden="true" color="info" sx={{ mt: 0.15 }} />
@@ -415,7 +468,7 @@ function RecordedPhotoResult({ example }: { example: RecordedPhoto }) {
         component="img"
         image={example.imageUrl}
         alt={`Recorded example image for step ${example.step}: ${example.stepTitle}`}
-        sx={{ width: "100%", maxHeight: 270, objectFit: "contain", borderRadius: 2, bgcolor: "rgba(255,255,255,0.04)" }}
+        sx={{ width: "100%", maxHeight: 270, objectFit: "contain", borderRadius: 2, bgcolor: "canvas.main" }}
       />
       {example.photoWasRender && (
         <Typography variant="caption" color="text.secondary">
@@ -464,6 +517,14 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
   const safeActiveStep = Math.min(Math.max(activeStep, 0), Math.max(steps.length - 1, 0));
   const lastStepNumber = steps[steps.length - 1]?.n;
   const currentStepNumber = steps[safeActiveStep]?.n;
+  useEffect(() => {
+    for (const index of [safeActiveStep - 1, safeActiveStep, safeActiveStep + 1]) {
+      const candidate = steps[index];
+      if (!candidate) continue;
+      preloadImage(candidate.focusImageUrl);
+      preloadImage(candidate.imageUrl);
+    }
+  }, [safeActiveStep, steps]);
 
   useEffect(() => {
     setActiveStep(initialStep);
@@ -536,6 +597,16 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
     setPhotoResult(null);
     photoMutation.mutate({ step: step.n, file });
   };
+  const handleStepDone = () => {
+    if (stepMutation.isPending) return;
+    const previousStep = safeActiveStep;
+    const nextStep = Math.min(previousStep + 1, steps.length - 1);
+    if (nextStep !== previousStep) setActiveStep(nextStep);
+    stepMutation.mutate(step.n, {
+      onError: () => setActiveStep(previousStep),
+    });
+  };
+
 
   return (
     <Stack spacing={1.5}>
@@ -556,7 +627,7 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
             type="button"
             size="small"
             onClick={() => setActiveStep((index) => Math.max(index - 1, 0))}
-            disabled={safeActiveStep === 0}
+            disabled={stepMutation.isPending || safeActiveStep === 0}
             startIcon={<KeyboardArrowLeft />}
             sx={{ minWidth: 84, minHeight: 44 }}
           >
@@ -568,7 +639,7 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
             type="button"
             size="small"
             onClick={() => setActiveStep((index) => Math.min(index + 1, steps.length - 1))}
-            disabled={safeActiveStep === steps.length - 1}
+            disabled={stepMutation.isPending || safeActiveStep === steps.length - 1}
             endIcon={<KeyboardArrowRight />}
             sx={{ minWidth: 84, minHeight: 44 }}
           >
@@ -584,7 +655,7 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
         variant="contained"
         size="large"
         fullWidth
-        onClick={() => stepMutation.mutate(step.n)}
+        onClick={handleStepDone}
         disabled={stepMutation.isPending}
         aria-busy={stepMutation.isPending}
         sx={{ minHeight: 52, borderRadius: 2.5, fontWeight: 800 }}
@@ -645,6 +716,17 @@ function PhoneBuildChooser({
   error: unknown;
   onSelect: (missionId: string) => void;
 }) {
+  const navigate = useNavigate();
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const scanMutation = useMutation({
+    mutationFn: () => createInventoryScan(),
+    onSuccess: ({ id }) => navigate(`/scan/${encodeURIComponent(id)}`),
+  });
+  const canOpenBuild = !loading && !error && Boolean(missions?.length);
+  const continueBuilding = () => {
+    if (missions?.length === 1) onSelect(missions[0].id);
+    else setPickerOpen(true);
+  };
   return (
     <Box
       component="main"
@@ -658,6 +740,42 @@ function PhoneBuildChooser({
           <Typography component="h1" variant="h4" sx={{ fontWeight: 900 }}>
             Choose a build
           </Typography>
+          <Stack spacing={1}>
+            <Button
+              type="button"
+              variant="contained"
+              onClick={continueBuilding}
+              disabled={!canOpenBuild}
+              sx={{ minHeight: 52, borderRadius: 2.5, fontWeight: 800 }}
+            >
+              Continue building
+            </Button>
+            <Button
+              type="button"
+              variant="outlined"
+              onClick={() => scanMutation.mutate()}
+              disabled={scanMutation.isPending}
+              aria-busy={scanMutation.isPending}
+              sx={{ minHeight: 52, borderRadius: 2.5, fontWeight: 800 }}
+            >
+              {scanMutation.isPending ? "Starting scan…" : "Scan parts"}
+            </Button>
+            <Button
+              type="button"
+              variant="outlined"
+              onClick={continueBuilding}
+              disabled={!canOpenBuild}
+              sx={{ minHeight: 52, borderRadius: 2.5, fontWeight: 800 }}
+            >
+              Check this step
+            </Button>
+          </Stack>
+          {scanMutation.error && (
+            <Alert severity="error" icon={<CloudOffOutlined />}>
+              <AlertTitle>Scan could not start</AlertTitle>
+              {errorMessage(scanMutation.error)}
+            </Alert>
+          )}
           {loading && (
             <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 3 }}>
               <Stack spacing={1.25} sx={{ alignItems: "center" }}>
@@ -677,7 +795,7 @@ function PhoneBuildChooser({
               Nothing to build yet — press GO for build on the laptop.
             </Alert>
           )}
-          {!loading && !error && missions && missions.length > 1 && (
+          {!loading && !error && pickerOpen && missions && missions.length > 1 && (
             <Stack component="ul" spacing={1.25} sx={{ p: 0, m: 0, listStyle: "none" }}>
               {missions.map((mission) => (
                 <Paper component="li" key={mission.id} variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
@@ -728,9 +846,9 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
   });
   const phoneMissionsQuery = useQuery({
     queryKey: ["phone-builds"],
-    queryFn: ({ signal }: { signal: AbortSignal }) => fetchPhoneMissions(signal),
+    queryFn: () => fetchPhoneMissions(),
     enabled: missionId.length === 0,
-    retry: false,
+    retry: 1,
   });
 
   useEffect(() => {

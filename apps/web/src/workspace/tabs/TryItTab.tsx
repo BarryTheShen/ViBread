@@ -145,7 +145,7 @@ export function TryItTab({ revision }: { revision: RevisionDetail }) {
     <Stack sx={{ gap: 1.5 }}>
       <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap" }}>
         <Box sx={{ flex: 1, minWidth: 220 }}>
-          <Typography variant="h3" component="h2">
+          <Typography variant="h6" component="h2">
             Try it before you build it
           </Typography>
           <Typography variant="body2" sx={{ color: "text.secondary" }}>
@@ -157,7 +157,7 @@ export function TryItTab({ revision }: { revision: RevisionDetail }) {
         </Button>
       </Stack>
       {error && <Alert severity="error">The simulator stopped: {error}. Press Reset to start again.</Alert>}
-      <Paper variant="outlined" sx={{ p: 1, bgcolor: "#0a0f14" }}>
+      <Paper variant="outlined" sx={{ p: 1, bgcolor: "canvas.main" }}>
         {board ? (
           <SvgArtifact ref={onSvgMounted} url={board} label="Live breadboard simulation" />
         ) : (
@@ -240,7 +240,7 @@ export function TryItTab({ revision }: { revision: RevisionDetail }) {
         <Box
           component="pre"
           aria-label="Serial output"
-          sx={{ m: 0, mt: 0.5, p: 1, bgcolor: "#060a0e", borderRadius: 1, fontFamily: MONO_FONT, fontSize: 12.5, height: 120, overflow: "auto", whiteSpace: "pre-wrap" }}
+          sx={{ m: 0, mt: 0.5, p: 1, bgcolor: "code.main", borderRadius: 1, fontFamily: MONO_FONT, fontSize: 12.5, height: 120, overflow: "auto", whiteSpace: "pre-wrap" }}
         >
           {serial || "Nothing printed yet."}
         </Box>

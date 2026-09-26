@@ -4,7 +4,7 @@ import type { ChatMessageChunk, ChatStreamEnvelope } from "@mui/x-chat/types";
 import type { ApprovalDecision, ApprovalView } from "@vibread/core";
 import type { UIMessage } from "ai";
 import { api, apiFetch, getJson, HttpError } from "../api/client.js";
-import { decisionOf, normalizeChunks, toChatMessages, toUserUiMessage } from "./uiMessages.js";
+import { decisionOf, normalizeChunks, rememberToolCalls, toChatMessages, toUserUiMessage, type ToolCallRegistry } from "./uiMessages.js";
 
 type ChunkStream = ReadableStream<ChatMessageChunk | ChatStreamEnvelope>;
 
@@ -15,6 +15,8 @@ export interface MissionChatAdapter extends ChatAdapter {
   decide(approvalId: string, decision: ApprovalDecision): Promise<ApprovalView>;
   /** Subscribe to approval decisions made from this browser. */
   onApprovalDecided(listener: (view: ApprovalView) => void): () => void;
+  /** Tool name of a call seen in the loaded history or the streams (a part can arrive without one). */
+  toolNameOf(toolCallId: string): string | undefined;
 }
 
 const RESUME_PLACEHOLDER = { id: "vibread-resume", role: "user", parts: [] } as const;
@@ -36,6 +38,7 @@ const FRIENDLY_ERRORS: Record<string, string> = {
 export function createMissionChatAdapter(missionId: string): MissionChatAdapter {
   const chatPath = api.chatPath(missionId);
   const listeners = new Set<(view: ApprovalView) => void>();
+  const toolCalls: ToolCallRegistry = new Map();
   let markHistoryLoaded: () => void = () => {};
   const historyLoaded = new Promise<void>((resolve) => {
     markHistoryLoaded = resolve;
@@ -65,7 +68,7 @@ export function createMissionChatAdapter(missionId: string): MissionChatAdapter 
     const body = res.body;
     const decoder = createAiSdkAdapter({ stream: () => body });
     const stream = await decoder.sendMessage({ message: { ...RESUME_PLACEHOLDER, parts: [] }, messages: [], signal });
-    return stream.pipeThrough(normalizeChunks<ChatMessageChunk | ChatStreamEnvelope>());
+    return stream.pipeThrough(normalizeChunks<ChatMessageChunk | ChatStreamEnvelope>(toolCalls));
   }
 
   async function decide(approvalId: string, decision: ApprovalDecision): Promise<ApprovalView> {
@@ -77,6 +80,7 @@ export function createMissionChatAdapter(missionId: string): MissionChatAdapter 
   return {
     historyLoaded,
     decide,
+    toolNameOf: (toolCallId) => toolCalls.get(toolCallId)?.toolName,
     onApprovalDecided(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
@@ -84,14 +88,16 @@ export function createMissionChatAdapter(missionId: string): MissionChatAdapter 
     async listMessages({ conversationId }) {
       try {
         const history = await getJson<UIMessage[]>(chatPath);
-        return { messages: toChatMessages(history, conversationId), hasMore: false };
+        const messages = toChatMessages(history, conversationId);
+        rememberToolCalls(messages, toolCalls);
+        return { messages, hasMore: false };
       } finally {
         markHistoryLoaded();
       }
     },
     async sendMessage(input) {
       const stream = await sender.sendMessage(input);
-      return stream.pipeThrough(normalizeChunks<ChatMessageChunk | ChatStreamEnvelope>());
+      return stream.pipeThrough(normalizeChunks<ChatMessageChunk | ChatStreamEnvelope>(toolCalls));
     },
     reconnectToStream: ({ signal }) => openActiveStream(signal),
     async addToolApprovalResponse(input) {

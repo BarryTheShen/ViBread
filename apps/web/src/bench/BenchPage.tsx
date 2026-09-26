@@ -675,10 +675,10 @@ export default function BenchPage(): ReactElement | null {
   const timedOutPrompt = timedOutAsk ? promptTitle(timedOutAsk, loaded.plan, promptFor(timedOutAsk, loaded.plan).title) : "a self-test prompt";
 
   return (
-    <Box sx={{ minHeight: "100vh", p: { xs: 2, md: 4 }, background: "radial-gradient(circle at 80% 0%, rgba(57,91,148,.24), transparent 38%)" }}>
+    <Box sx={{ minHeight: "100%", p: { xs: 2, md: 4 }, bgcolor: "background.default", color: "text.primary" }}>
       <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 3, alignItems: { sm: "center" }, justifyContent: "space-between" }}>
         <Box>
-          <Button component={Link} to={`/m/${missionId}`} sx={{ ...actionButtonSx, mb: 1 }}>← Mission control</Button>
+          <Button component={Link} to={`/m/${missionId}`} sx={{ ...actionButtonSx, mb: 1 }}>← Back to conversation</Button>
           <Typography variant="h3" sx={{ fontWeight: 800, letterSpacing: "-.03em" }}>Bench / Verify</Typography>
           <Typography color="text.secondary">Mission Control for your breadboard · {loaded.revision.circuit.title}</Typography>
         </Box>
@@ -720,7 +720,7 @@ export default function BenchPage(): ReactElement | null {
               </Stack>
             )}
             {mode === "physical" && (
-              <Paper variant="outlined" sx={{ mt: 2, p: 2, background: "rgba(30,48,78,.35)" }}>
+              <Paper variant="outlined" sx={{ mt: 2, p: 2 }}>
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ alignItems: "center" }}>
                   <Box aria-hidden sx={{ width: 104, height: 64, border: "2px solid", borderColor: "primary.main", borderRadius: 2, p: 1, position: "relative" }}>
                     <Typography sx={{ fontFamily: "monospace", fontSize: 12, textAlign: "center" }}>USB ↔ Arduino</Typography>
@@ -810,7 +810,7 @@ export default function BenchPage(): ReactElement | null {
                   {pendingAsks.map((ask) => {
                     const prompt = promptFor(ask, loaded.plan);
                     const hint = mode === "virtual" ? virtualPromptHint(ask) : undefined;
-                    return <Paper key={ask.id} sx={{ p: 2.5, border: "2px solid", borderColor: "secondary.main", background: "rgba(101,78,163,.15)" }}>
+                    return <Paper key={ask.id} sx={{ p: 2.5, border: "2px solid", borderColor: "secondary.main", bgcolor: "background.paper" }}>
                       <Typography variant="h6" sx={{ fontWeight: 700 }}>{promptTitle(ask, loaded.plan, prompt.title)}</Typography>
                       <Typography color="text.secondary" sx={{ mb: 2 }}>{hint ? `${hint} Tap Done to continue.` : prompt.body}</Typography>
                       <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
@@ -823,14 +823,14 @@ export default function BenchPage(): ReactElement | null {
               {mode === "virtual" && (
                 <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }}>
                   <Typography variant="subtitle2">Virtual board — watch the lights here</Typography>
-                  <Box sx={{ mt: 1, maxHeight: 360, overflow: "auto", "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3 } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
+                  <Box sx={{ mt: 1, p: 1, bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", maxHeight: 360, overflow: "auto", "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3 } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
                 </Paper>
               )}
               {remoteAnswer && <Alert severity="info" sx={{ mt: 2 }}>Answered from iMessage by {remoteAnswer.by}: {remoteAnswer.value}</Alert>}
               {runnerState?.done && <Alert severity="info" sx={{ mt: 2 }}>All device tests finished. Preparing the Houston diagnosis…</Alert>}
               <Divider sx={{ my: 2 }} />
               <Typography variant="subtitle2">Live line log</Typography>
-              <Box component="pre" ref={logRef} onScroll={(event) => { const element = event.currentTarget; setLogPinned(element.scrollHeight - element.scrollTop - element.clientHeight < 32); }} aria-live="polite" sx={{ maxHeight: 220, overflow: "auto", p: 1.5, mt: 1, borderRadius: 1, bgcolor: "#0b1322", color: "#a9c8f2", fontFamily: "monospace", fontSize: 12, whiteSpace: "pre-wrap" }}>{allLines.length > 0 ? allLines.join("\n") : "Waiting for NDJSON…"}</Box>
+              <Box component="pre" ref={logRef} onScroll={(event) => { const element = event.currentTarget; setLogPinned(element.scrollHeight - element.scrollTop - element.clientHeight < 32); }} aria-live="polite" sx={{ maxHeight: 220, overflow: "auto", p: 1.5, mt: 1, borderRadius: 1, bgcolor: "background.default", color: "text.secondary", fontFamily: "monospace", fontSize: 12, whiteSpace: "pre-wrap" }}>{allLines.length > 0 ? allLines.join("\n") : "Waiting for NDJSON…"}</Box>
             </CardContent>
           </Card>
         )}
@@ -853,7 +853,7 @@ export default function BenchPage(): ReactElement | null {
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography variant="subtitle2" sx={{ mb: 1 }}>Highlighted breadboard artifact</Typography>
-                  <Box sx={{ "@keyframes vb-wire-pulse": { to: { strokeDashoffset: -32 } }, "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3, filter: "drop-shadow(0 0 5px rgba(255,107,107,.8))" }, "& .vb-hl path, & .vb-hl .wire-path": { stroke: "#ff6b6b !important", strokeWidth: 6, strokeDasharray: "14 8", animation: reducedMotion ? "none" : "vb-wire-pulse 1s linear infinite" } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
+                  <Box sx={{ "@keyframes vb-wire-pulse": { to: { strokeDashoffset: -32 } }, "& svg": { display: "block", width: "100%", height: "auto", bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3, filter: "drop-shadow(0 0 5px rgba(255,107,107,.8))" }, "& .vb-hl path, & .vb-hl .wire-path": { stroke: "#ff6b6b !important", strokeWidth: 6, strokeDasharray: "14 8", animation: reducedMotion ? "none" : "vb-wire-pulse 1s linear infinite" } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
                 </Box>
               </Stack>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>

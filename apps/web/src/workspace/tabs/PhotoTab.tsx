@@ -28,7 +28,7 @@ export function PhotoTab({ revision }: { revision: RevisionDetail }) {
   }
   return (
     <Stack sx={{ gap: 2 }}>
-      <Typography variant="h3" component="h2">
+      <Typography variant="h6" component="h2">
         Latest photo check · step {latest.step}
       </Typography>
       <Alert severity="info">

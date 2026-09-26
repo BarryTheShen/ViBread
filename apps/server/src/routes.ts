@@ -12,14 +12,15 @@ import type {
   Revision,
   RevisionResults,
 } from "@vibread/core";
-import { MODULES } from "@vibread/core";
+import { MODULES, normalizeObservation, parsePartsText } from "@vibread/core";
+import type { CatalogView, InventoryEntry, InventoryUpsertRequest, PartType, ScanAcceptRequest, ScanItem } from "@vibread/core";
 import { applyCalibration, compileBenchFirmware, compileSketch, uploadCommand } from "@vibread/firmware";
 import { calibrationMacros, evaluateRun, planSelfTest } from "@vibread/bench";
 import { loadFaultDictionary } from "@vibread/tools";
 import { runs } from "./db/schema.js";
 import { SqlApprovalBroker } from "./services/approvals.js";
+import { SqlMissionStore } from "./store/missions.js";
 import type { AppContext } from "./context.js";
-
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
 interface WebUser {
   id: string;
@@ -71,19 +72,137 @@ export function mountApi(app: Express, ctx: AppContext): void {
   router.get("/modules", (_req, res) => {
     res.json(Object.values(MODULES).map((module) => ({ key: module.key, name: module.name, description: module.description, category: module.category })));
   });
+  router.get("/catalog", async (req, res) => {
+    const user = actorUser(res, ctx);
+    res.json(await ctx.catalog.view(user.id));
+  });
+  router.post("/catalog/types", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const type = req.body as PartType;
+    if (!type || typeof type.name !== "string" || typeof type.category !== "string") throw httpError(400, "INVALID_PART_TYPE", "part type is invalid");
+    res.status(201).json(await ctx.catalog.upsert(user.id, type));
+  });
+  router.patch("/catalog/types/:id", async (req, res) => {
+    const user = actorUser(res, ctx);
+    res.json(await ctx.catalog.update(user.id, String(req.params.id), req.body as Partial<PartType>));
+  });
+  router.delete("/catalog/types/:id", async (req, res) => {
+    const user = actorUser(res, ctx);
+    await ctx.catalog.remove(user.id, String(req.params.id), req.query.force === "true");
+    res.json({ ok: true });
+  });
+  router.get("/inventory", async (req, res) => {
+    const user = actorUser(res, ctx);
+    res.json(await ctx.inventory.view(user.id));
+  });
+  router.post("/inventory/items", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const body = req.body as InventoryUpsertRequest;
+    if (!body || !Array.isArray(body.items)) throw httpError(400, "INVALID_INVENTORY", "items are required");
+    res.status(201).json(await ctx.inventory.upsert(user.id, body));
+  });
+  router.patch("/inventory/items/:id", async (req, res) => {
+    const user = actorUser(res, ctx);
+    res.json(await ctx.inventory.update(user.id, String(req.params.id), req.body as Partial<InventoryEntry>));
+  });
+  router.delete("/inventory/items/:id", async (req, res) => {
+    const user = actorUser(res, ctx);
+    await ctx.inventory.remove(user.id, String(req.params.id));
+    res.json({ ok: true });
+  });
+  router.post("/inventory/parse", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const body = req.body as { text?: unknown };
+    if (typeof body.text !== "string" || body.text.trim().length === 0) throw httpError(400, "INVALID_TEXT", "text is required");
+    res.json({ lines: parsePartsText(body.text, await ctx.inventory.types(user.id)) });
+  });
+  router.post("/inventory/scans", async (req, res) => {
+    const user = actorUser(res, ctx);
+    res.status(201).json(await ctx.scans.create(user.id));
+  });
+  router.post("/inventory/scans/:id/photos", upload.single("photo"), async (req, res) => {
+    const user = actorUser(res, ctx);
+    if (!req.file) throw httpError(400, "PHOTO_REQUIRED", "multipart photo is required");
+    let jpeg: Buffer;
+    try {
+      let input = new Uint8Array(req.file.buffer);
+      if (req.file.mimetype === "image/heic" || req.file.mimetype === "image/heif" || /\.hei[cf]$/i.test(req.file.originalname)) input = new Uint8Array(await heifToJpeg(input));
+      jpeg = await sharp(input).rotate().resize({ width: 2576, height: 2576, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
+    } catch {
+      throw httpError(400, "bad_image", "photo is not a valid image");
+    }
+    const hash = await ctx.store.putArtifact(jpeg, "image/jpeg");
+    res.json(await ctx.scans.addPhoto(user.id, String(req.params.id), hash));
+  });
+  router.post("/inventory/scans/:id/analyze", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const scanId = String(req.params.id);
+    const hashes = await ctx.scans.photoHashes(user.id, scanId);
+    const photos: Buffer[] = [];
+    for (const hash of hashes) {
+      const artifact = await ctx.store.getArtifact(hash);
+      if (!artifact) throw httpError(404, "PHOTO_NOT_FOUND", "scan photo not found");
+      photos.push(Buffer.from(artifact.data));
+    }
+    const types = await ctx.inventory.types(user.id);
+    const identified = await ctx.runtime.scan.identifyParts({ ownerId: user.id, photos, types });
+    const analyzed: Array<{ hash: string; width: number; height: number }> = [];
+    for (const image of identified.analyzed) {
+      const hash = await ctx.store.putArtifact(image.jpeg, "image/jpeg");
+      analyzed.push({ hash, width: image.width, height: image.height });
+    }
+    const inventory = await ctx.inventory.entries(user.id);
+    const items: ScanItem[] = identified.observations.map((observation, index) => {
+      const normalized = normalizeObservation(observation, types);
+      const existing = normalized.typeId ? inventory.find((entry) => entry.typeId === normalized.typeId) : undefined;
+      return { ...normalized, index, cropUrl: `/api/inventory/scans/${scanId}/crops/${index}`, ...(existing ? { existing: { entryId: existing.id, quantity: existing.quantity } } : {}) };
+    });
+    res.json(await ctx.scans.analyze(user.id, scanId, { observations: identified.observations, analyzed, items }, types, inventory));
+  });
+  router.get("/inventory/scans/:id", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const scan = await ctx.scans.get(user.id, String(req.params.id));
+    if (!scan) throw httpError(404, "SCAN_NOT_FOUND", "scan not found");
+    const connectedAccount = await ctx.claudeAccounts.endpointFor(user.id, ctx.config.fastModel).catch(() => undefined);
+    const claude = connectedAccount || ctx.config.anthropicApiKey ? "connected" : "missing";
+    res.json({ ...scan, claude });
+  });
+  router.get("/inventory/scans/:id/crops/:index", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const scanId = String(req.params.id);
+    const index = parseNonNegativeInt(req.params.index);
+    const observations = await ctx.scans.observations(user.id, scanId);
+    const analyzed = await ctx.scans.analyzed(user.id, scanId);
+    const observation = observations[index];
+    const image = observation ? analyzed[observation.photoIndex] : undefined;
+    if (!observation || !image) throw httpError(404, "CROP_NOT_FOUND", "scan crop not found");
+    const artifact = await ctx.store.getArtifact(image.hash);
+    if (!artifact) throw httpError(404, "PHOTO_NOT_FOUND", "scan image not found");
+    const crop = await ctx.runtime.scan.cutCrop(Buffer.from(artifact.data), observation.box);
+    res.setHeader("Content-Type", "image/jpeg");
+    res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+    res.send(Buffer.from(crop));
+  });
+  router.post("/inventory/scans/:id/accept", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const body = req.body as ScanAcceptRequest;
+    if (!body || !Array.isArray(body.items)) throw httpError(400, "INVALID_SCAN_ACCEPT", "items are required");
+    res.json(await ctx.scans.accept(user.id, String(req.params.id), body.items, ctx.inventory));
+  });
   router.get("/missions", async (_req, res) => {
     const user = actorUser(res, ctx);
     res.json(await ctx.missions.list(user.id));
   });
   router.post("/missions", async (req, res) => {
     const user = actorUser(res, ctx);
-    const body = req.body as { brief?: unknown; inventory?: unknown; mode?: unknown; title?: unknown };
-    if (typeof body.brief !== "string" || body.brief.trim().length === 0 || !Array.isArray(body.inventory)) {
-      throw httpError(400, "INVALID_REQUEST", "brief and inventory are required");
+    const body = req.body as { brief?: unknown; inventory?: unknown; inventoryEntryIds?: unknown; mode?: unknown; title?: unknown };
+    if (typeof body.brief !== "string" || body.brief.trim().length === 0 || (body.inventory !== undefined && !Array.isArray(body.inventory)) || (body.inventoryEntryIds !== undefined && (!Array.isArray(body.inventoryEntryIds) || body.inventoryEntryIds.some((id) => typeof id !== "string")))) {
+      throw httpError(400, "INVALID_REQUEST", "brief and optional inventoryEntryIds or inventory are required");
     }
     const mission = await ctx.missions.create({
       brief: body.brief,
-      inventory: body.inventory as Mission["inventory"],
+      ...(Array.isArray(body.inventory) ? { inventory: body.inventory as Mission["inventory"] } : {}),
+      ...(Array.isArray(body.inventoryEntryIds) ? { inventoryEntryIds: body.inventoryEntryIds as string[] } : {}),
       mode: isPermissionMode(body.mode) ? body.mode : undefined,
       title: typeof body.title === "string" ? body.title : undefined,
       owner: { kind: "human", id: user.id, name: user.name, channel: "web" },
@@ -95,10 +214,27 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.patch("/missions/:id", async (req, res) => {
     const user = actorUser(res, ctx);
-    const body = req.body as { mode?: unknown };
-    if (!isPermissionMode(body.mode)) throw httpError(400, "INVALID_MODE", "mode is invalid");
-    const mission = await ctx.missions.setMode(String(req.params.id), body.mode, { kind: "human", id: user.id, name: user.name, channel: "web" });
+    const body = (req.body ?? {}) as { title?: unknown; mode?: unknown };
+    const missionId = String(req.params.id);
+    if (body.title !== undefined && (typeof body.title !== "string" || body.title.trim().length < 1 || body.title.trim().length > 80)) {
+      throw httpError(400, "INVALID_TITLE", "title must be 1–80 characters");
+    }
+    if (body.mode !== undefined && !isPermissionMode(body.mode)) throw httpError(400, "INVALID_MODE", "mode is invalid");
+    if (body.title === undefined && body.mode === undefined) throw httpError(400, "INVALID_REQUEST", "title or mode is required");
+    if (body.mode !== undefined) {
+      await ctx.missions.setMode(missionId, body.mode, { kind: "human", id: user.id, name: user.name, channel: "web" });
+    }
+    if (body.title !== undefined) await ctx.store.updateMission(missionId, { title: body.title.trim() });
+    const mission = await ctx.store.getMission(missionId);
+    if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
     res.json(toSummary(mission));
+  });
+  router.delete("/missions/:id", async (req, res) => {
+    const missionId = String(req.params.id);
+    const mission = await ctx.store.getMission(missionId);
+    if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
+    (ctx.store as SqlMissionStore).deleteMission(missionId);
+    res.json({ ok: true });
   });
   router.get("/missions/:id/timeline", async (req, res) => {
     res.json(await ctx.missions.events(String(req.params.id), typeof req.query.after === "string" ? req.query.after : undefined));
@@ -555,6 +691,11 @@ function eventStepNumber(data: unknown): number | undefined {
 function parsePositiveInt(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);
   if (!Number.isInteger(n) || n < 1) throw httpError(400, "INVALID_NUMBER", "expected a positive integer");
+  return n;
+}
+function parseNonNegativeInt(value: unknown): number {
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(n) || n < 0) throw httpError(400, "INVALID_NUMBER", "expected a non-negative integer");
   return n;
 }
 interface HttpError extends Error {

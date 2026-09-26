@@ -113,12 +113,15 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
     defineTool({
       name: "get_inventory",
       title: "Your parts",
-      description: "The parts the user has on hand for this mission (module keys, counts, params).",
+      description:
+        "The parts this mission may use (copied from the user's inventory when it started): module keys, counts, params, " +
+        "labels and pinouts for modelled/basic parts, plus parts the user owns that ViBread can't design with.",
       actionClass: "read-only",
       input: z.object({}),
       handler: async (ctx) => {
-        const { inventory } = await requireMission(store, ctx.missionId);
-        return { summary: inventory.map((i) => `${i.count}× ${i.module}`).join(", ") || "No parts listed", inventory };
+        const { inventory, inventoryNotes } = await requireMission(store, ctx.missionId);
+        const summary = inventory.map((i) => `${i.count}× ${i.label ?? i.module}`).join(", ") || "No parts listed";
+        return { summary, inventory, ...(inventoryNotes?.length ? { alsoOwns: inventoryNotes } : {}) };
       },
     }),
     defineTool({

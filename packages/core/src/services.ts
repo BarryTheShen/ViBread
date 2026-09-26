@@ -42,7 +42,15 @@ export interface ToolRegistry {
 
 /** Persistence (apps/server implements it on Drizzle + better-sqlite3). */
 export interface MissionStore {
-  createMission(input: { title: string; brief: string; ownerId: string; inventory: InventoryItem[]; mode: PermissionMode }): Promise<Mission>;
+  createMission(input: {
+    title: string;
+    brief: string;
+    ownerId: string;
+    inventory: InventoryItem[];
+    /** List-only parts the owner has, as text lines for the design agent (Mission.inventoryNotes). */
+    inventoryNotes?: string[];
+    mode: PermissionMode;
+  }): Promise<Mission>;
   getMission(id: string): Promise<Mission | null>;
   listMissions(ownerId: string): Promise<Mission[]>;
   updateMission(id: string, patch: Partial<Pick<Mission, "title" | "mode" | "phase" | "currentRevision" | "releasedRevision" | "inventory">>): Promise<Mission>;
@@ -95,7 +103,18 @@ export interface AgentTurnResult {
 
 /** Server facade used by the REST routes, CAPCOM (iMessage), /mcp, and /a2a. Implemented in apps/server. */
 export interface MissionService {
-  create(input: { brief: string; inventory: InventoryItem[]; mode?: PermissionMode; owner: Actor; title?: string }): Promise<Mission>;
+  /**
+   * Explicit `inventory` wins; when omitted, the owner's ready inventory entries (all, or only `inventoryEntryIds`) are
+   * copied in through each part type's mapping (CreateMissionRequest in api.ts).
+   */
+  create(input: {
+    brief: string;
+    inventory?: InventoryItem[];
+    inventoryEntryIds?: string[];
+    mode?: PermissionMode;
+    owner: Actor;
+    title?: string;
+  }): Promise<Mission>;
   list(ownerId: string): Promise<MissionSummary[]>;
   detail(missionId: string): Promise<MissionDetail>;
   setMode(missionId: string, mode: PermissionMode, actor: Actor): Promise<Mission>;

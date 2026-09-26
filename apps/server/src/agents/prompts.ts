@@ -57,9 +57,18 @@ function lightTable(): string {
     .join(", ");
 }
 
-function inventoryLines(inventory: InventoryItem[]): string {
-  if (!inventory.length) return "(the user listed no parts — ask what they have, or design with common starter-kit parts and say so)";
-  return inventory.map((i) => `- ${i.count}× ${i.module}${i.params ? ` ${JSON.stringify(i.params)}` : ""}${i.note ? ` — ${i.note}` : ""}`).join("\n");
+function inventoryLines(inventory: InventoryItem[], notes: string[] = []): string {
+  const lines = inventory.map((i) => {
+    const params = i.params && Object.keys(i.params).length ? ` ${JSON.stringify(i.params)}` : "";
+    const label = i.label ? ` — the user's part "${i.label}": copy this label into the circuit part` : "";
+    const pinout = i.pinout?.length
+      ? `; pinout (copy it into the part's "pinout" exactly): ${JSON.stringify(i.pinout.map((p) => ({ id: p.id, name: p.name, etype: p.etype })))}`
+      : "";
+    return `- ${i.count}× ${i.module}${params}${label}${pinout}${i.note ? ` — ${i.note}` : ""}`;
+  });
+  if (!lines.length) lines.push("(no designable parts listed — ask what they have, or design with common starter-kit parts and say so)");
+  if (notes.length) lines.push("", "Also owns (ViBread can't design with these — mention them only if relevant, never use them):", ...notes.map((n) => `- ${n}`));
+  return lines.join("\n");
 }
 
 function revisionLines(revision: Revision | null): string {
@@ -87,9 +96,11 @@ ${revisionLines(revision)}
 Released build target: ${mission.releasedRevision ?? "none"}.
 
 # Parts the user has
-${inventoryLines(mission.inventory)}
+${inventoryLines(mission.inventory, mission.inventoryNotes)}
 Use ONLY these parts, and never more of a part than the count listed (params must match, e.g. LED colors, resistor
-values). If the brief truly needs something they don't have, say so plainly and call add_part (the user must approve) before
+values). Parts marked "modelled as" are the user's own part designed as the library part it behaves like: use that
+module, and set the circuit part's "label" to the user's name for it so the build steps show the real part. Generic parts
+must use module "generic", the listed pinout (copied exactly into the part's "pinout"), and params {role, description}. If the brief truly needs something they don't have, say so plainly and call add_part (the user must approve) before
 designing with it.
 ViBread can't build motors, servos, relays, mains, or anything that needs its own power supply: the checks and the
 simulator don't cover them, so never add_part or design them (not as "generic" either). If the brief needs one, say so

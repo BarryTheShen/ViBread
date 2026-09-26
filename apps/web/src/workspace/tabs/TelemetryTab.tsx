@@ -67,7 +67,7 @@ function RunCard({ run }: { run: BenchRunResult }) {
   return (
     <Paper variant="outlined" sx={{ p: 2 }}>
       <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap", mb: 1 }}>
-        <Typography variant="h3" component="h3" sx={{ flex: 1 }}>
+        <Typography variant="h6" component="h3" sx={{ flex: 1 }}>
           {KIND[run.kind]} · design r{run.revision}
         </Typography>
         <Chip icon={verdict.icon} color={verdict.color} label={verdict.label} />
@@ -131,7 +131,7 @@ export function TelemetryTab({ missionId, revision }: { missionId: string; revis
   return (
     <Stack sx={{ gap: 2 }}>
       <Stack direction="row" sx={{ gap: 1, alignItems: "center" }}>
-        <Typography variant="h3" component="h2" sx={{ flex: 1 }}>
+        <Typography variant="h6" component="h2" sx={{ flex: 1 }}>
           Bench results
         </Typography>
         <Button component={RouterLink} to={`/m/${missionId}/bench`} variant="outlined" startIcon={<UsbIcon />}>

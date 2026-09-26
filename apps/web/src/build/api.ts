@@ -60,6 +60,18 @@ export function fetchPhoneMissions(signal?: AbortSignal): Promise<PhoneMission[]
     signal,
   });
 }
+export interface InventoryScanStart {
+  id: string;
+}
+
+export function createInventoryScan(signal?: AbortSignal): Promise<InventoryScanStart> {
+  return requestJson<InventoryScanStart>("/api/inventory/scans", {
+    method: "POST",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+}
+
 
 export function fetchBuildState(missionId: string, signal?: AbortSignal): Promise<BuildState> {
   return requestJson<BuildState>(missionUrl(missionId, "/build"), {

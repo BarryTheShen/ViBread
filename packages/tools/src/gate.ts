@@ -3,6 +3,7 @@ import {
   hashJson,
   type ApprovalBroker,
   type ApprovalRequest,
+  type InventoryItem,
   type MissionStore,
   type PermissionMode,
   type Revision,
@@ -13,7 +14,20 @@ import {
 import { BENCH_ACTIONS, BENCH_ACTION_TEXT, ToolInputError, allGo, type BenchAction } from "./common.js";
 
 /** Plain-language approval card text for a tool call (PLAN §5.8 "Approval card"). */
-export function describeAction(def: ToolDef, input: unknown, nextRevision: number): { summary: string; consequence: string } {
+/** True when the mission's parts list already has this module (and, when given, the same identifying params). */
+function inMissionInventory(inventory: InventoryItem[], module: unknown, params: unknown): boolean {
+  const wanted = (params ?? {}) as Record<string, unknown>;
+  return inventory.some(
+    (item) => item.module === module && Object.entries(wanted).every(([key, value]) => item.params?.[key] === undefined || item.params[key] === value),
+  );
+}
+
+export function describeAction(
+  def: ToolDef,
+  input: unknown,
+  nextRevision: number,
+  context: { inventory?: InventoryItem[] } = {},
+): { summary: string; consequence: string } {
   const args = (input ?? {}) as Record<string, unknown>;
   switch (def.name) {
     case "propose_design": {
@@ -28,11 +42,15 @@ export function describeAction(def: ToolDef, input: unknown, nextRevision: numbe
         summary: `Release revision ${String(args.revision)} for building`,
         consequence: `Revision ${String(args.revision)}'s breadboard steps and firmware become what you build and flash.`,
       };
-    case "add_part":
+    case "add_part": {
+      const owned = context.inventory ? inMissionInventory(context.inventory, args.module, args.params) : true;
       return {
-        summary: `Add ${String(args.count)}× ${String(args.module)} to your parts list`,
-        consequence: "The design may then use a part you need to have on hand.",
+        summary: `Add ${String(args.count)}× ${String(args.module)} to your parts list${owned ? "" : " — not in your inventory"}`,
+        consequence: owned
+          ? "The design may then use a part you need to have on hand."
+          : "You don't have this part in your inventory. Approve only if you have it (then add it to your inventory) or will get it.",
       };
+    }
     case "request_bench_action": {
       const text = BENCH_ACTION_TEXT[args.action as BenchAction] ?? String(args.action);
       return { summary: `Bench: ${text}`, consequence: "Runs only when you click Start at the bench that holds the USB cable." };
@@ -98,7 +116,7 @@ export async function evaluatePolicy(input: {
   if (!mission) throw new ToolInputError(`Mission ${ctx.missionId} does not exist.`, 404);
   if (def.actionClass === "read-only") return { outcome: "approved", mode: mission.mode };
   const { latest, target, revisionHash } = await boundRevision(store, def, ctx.missionId, args);
-  const { summary, consequence } = describeAction(def, args, (latest?.n ?? 0) + 1);
+  const { summary, consequence } = describeAction(def, args, (latest?.n ?? 0) + 1, { inventory: mission.inventory });
   const decision = await broker.evaluate({
     missionId: ctx.missionId,
     mode: mission.mode,
