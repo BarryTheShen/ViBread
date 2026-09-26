@@ -68,8 +68,8 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 
 ### 3. Other devices and the bench
 
-- **Phone (Build Mode):** the server listens on all interfaces, so on the same Wi-Fi open `http://<laptop-ip>:8787`, or scan
-  the QR code in the workspace's Steps tab (set `PUBLIC_URL=http://<laptop-ip>:8787` so the QR code points there).
+- **Phone (Build Mode):** the server finds the first non-internal Wi-Fi IPv4 address when `PUBLIC_URL` is left unset; scan the QR
+  code in the workspace's Steps tab. Set `VIBREAD_PHONE_URL=http://<laptop-ip>:8787` if automatic discovery is not right.
 - **Bench (Arduino over USB):** open the bench on the laptop the board is plugged into, at `http://localhost:8787` (Web
   Serial needs localhost or HTTPS). On a remote server, forward the port: `ssh -L 8787:<server>:8787 <host>`.
 - **Development mode** (hot reload): `npm run dev:server` (port 8787) and `npm run dev:web` (http://localhost:5173, proxies
@@ -93,6 +93,7 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 | Variable | Meaning |
 |---|---|
 | `PORT`, `HOST`, `PUBLIC_URL` | Listen address (default `0.0.0.0:8787`) and the public origin used in links, QR codes, OAuth metadata and the `claude mcp add` command |
+| `VIBREAD_PHONE_URL` | Phone/QR origin override; when unset, an HTTP localhost `PUBLIC_URL` uses the first non-internal LAN IPv4 address |
 | `DATA_DIR` | SQLite database, artifacts and generated secrets (default `./data`, relative to the repo root) |
 | `ANTHROPIC_API_KEY` | ViBread's server key for the agents (design, test author, RETRO, photo check). Users can instead connect their own Claude account (below). Without either, everything except the agents works and the chat says Claude is not connected |
 | `VIBREAD_MODEL`, `VIBREAD_FAST_MODEL` | Default `claude-opus-5-5`, `claude-sonnet-5` |

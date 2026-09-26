@@ -1,14 +1,15 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import { fileURLToPath } from "node:url";
-
 const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
 export interface ServerConfig {
   port: number;
   host: string;
   publicUrl: string;
+  phoneUrl: string;
   dataDir: string;
   singleOperator: boolean;
   google?: { clientId: string; clientSecret: string };
@@ -23,6 +24,9 @@ export interface ServerConfig {
 }
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const port = parsePort(env.PORT);
+  const publicUrl = trimUrl(env.PUBLIC_URL ?? `http://localhost:${port}`);
+  validatePublicUrl(publicUrl);
+  const phoneUrl = derivePhoneUrl({ publicUrl, port, configured: env.VIBREAD_PHONE_URL });
   // Relative DATA_DIR values resolve against the repo root, so the server (cwd apps/server) and root scripts share one store.
   const dataDir = resolve(REPO_ROOT, env.DATA_DIR ?? "./data");
   mkdirSync(dataDir, { recursive: true });
@@ -39,7 +43,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   return {
     port,
     host: env.HOST ?? "0.0.0.0",
-    publicUrl: (env.PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/$/, ""),
+    publicUrl,
+    phoneUrl,
     dataDir,
     singleOperator: !google && !github,
     google,
@@ -60,6 +65,46 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       home: resolve(dataDir, "claude-accounts"),
     },
   };
+}
+
+export interface PhoneUrlInputs {
+  publicUrl: string;
+  port: number;
+  configured?: string;
+}
+
+export function derivePhoneUrl(
+  input: PhoneUrlInputs,
+  interfaces: NodeJS.Dict<NetworkInterfaceInfo[]> = networkInterfaces(),
+): string {
+  const configured = input.configured?.trim();
+  if (configured) return trimUrl(configured);
+  const publicOrigin = new URL(input.publicUrl);
+  if (publicOrigin.protocol === "https:" || !isLoopback(publicOrigin.hostname)) return input.publicUrl;
+  for (const entries of Object.values(interfaces)) {
+    for (const entry of entries ?? []) {
+      const family = entry.family;
+      if (family === "IPv4" && !entry.internal && !entry.address.startsWith("169.254.")) {
+        return `http://${entry.address}:${input.port}`;
+      }
+    }
+  }
+  return input.publicUrl;
+}
+
+function trimUrl(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+function isLoopback(hostname: string): boolean {
+  return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "::1" || hostname === "[::1]";
+}
+
+function validatePublicUrl(publicUrl: string): void {
+  const parsed = new URL(publicUrl);
+  if (parsed.protocol === "http:" && !isLoopback(parsed.hostname)) {
+    throw new Error("PUBLIC_URL must be https:// (or localhost). For phones on your Wi-Fi, leave PUBLIC_URL unset — ViBread finds your LAN address — or set VIBREAD_PHONE_URL.");
+  }
 }
 
 function parsePort(raw: string | undefined): number {
