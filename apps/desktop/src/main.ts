@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, type MenuItemConstructorOptions } from "electron";
 import QRCode from "qrcode";
+import { loginShellPath } from "./path-env.js";
 import { desktopPaths, openLog, type DesktopPaths } from "./runtime.js";
 import { installSerial, type SerialState } from "./serial.js";
 import { ServerProcess, type ServerInfo } from "./server.js";
@@ -40,7 +41,7 @@ if (!SMOKE && !app.requestSingleInstanceLock()) {
 }
 
 async function boot(): Promise<void> {
-  paths = desktopPaths();
+  paths = { ...desktopPaths(), userPath: await loginShellPath() };
   mkdirSync(paths.logs, { recursive: true });
   server = new ServerProcess(paths, getApiKey);
   server.on("failed", (message: string) => {

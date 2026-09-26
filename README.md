@@ -40,19 +40,27 @@ USB bench works the same on every OS). How it works inside: [HOW-IT-WORKS.md](HO
 
 | OS | Download ([release desktop-v0.1.0](https://github.com/BarryTheShen/ViBread/releases/tag/desktop-v0.1.0)) | First launch if unsigned-app warnings appear |
 |---|---|---|
-| Linux x64 | [`ViBread-0.1.0-linux-x86_64.AppImage`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-linux-x86_64.AppImage) or [`.deb`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-linux-amd64.deb) | AppImage: `chmod +x ViBread-*.AppImage` then run it (needs FUSE — present on desktop distros; else `sudo apt install libfuse2` or run with `APPIMAGE_EXTRACT_AND_RUN=1`). Deb: `sudo apt install ./ViBread-*.deb`, then *ViBread* in the app menu |
+| Linux x64 | [`.deb`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-linux-amd64.deb) (recommended on Ubuntu/Debian, required for the full sandbox on Ubuntu 24.04+) or [`ViBread-0.1.0-linux-x86_64.AppImage`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-linux-x86_64.AppImage) (any distro) | Deb: `sudo apt install ./ViBread-*.deb`, then *ViBread* in the app menu. AppImage: `chmod +x ViBread-*.AppImage` then run it (needs FUSE's `fusermount3`, present on desktop distros; without FUSE run it with `APPIMAGE_EXTRACT_AND_RUN=1`) |
 | Windows 10/11 x64 | [`ViBread-0.1.0-win-x64.exe`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-win-x64.exe) (installer) | SmartScreen: **More info → Run anyway** |
 | macOS (Apple silicon / Intel) | [`ViBread-0.1.0-mac-arm64.dmg`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-mac-arm64.dmg) / [`-mac-x64.dmg`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-mac-x64.dmg) | Drag to Applications, open once, then **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine /Applications/ViBread.app`) |
 
 - **First launch** shows a setup window: it downloads the Arduino toolchain (arduino-cli 1.5.1 + AVR core 1.8.8 +
   ArduinoJson 7.4.2, SHA-256 checked, ~150 MB) and builds the example missions — about 2–3 minutes, internet needed
   once. Later launches start in ~10 s. The download is ~160–200 MB; installed size ~600 MB plus the toolchain.
+- **Chromium sandbox on Linux:** Ubuntu 23.10+ blocks unprivileged user namespaces (AppArmor), which Electron's
+  sandbox normally uses. The `.deb` installs the setuid `chrome-sandbox` helper, so the sandbox keeps working there. The
+  AppImage can't ship a setuid helper: its launcher tests `unshare -Ur true` and, when namespaces are blocked, starts
+  with `--no-sandbox` by itself, so it opens instead of failing with "No usable sandbox" (the window only ever loads
+  ViBread's own local server). For the full Chromium sandbox on Ubuntu 24.04+, use the `.deb`.
 - **USB on Linux:** add yourself to the serial group once and log out/in: `sudo usermod -aG dialout $USER` (Arch:
   `uucp`). Then the bench's *Choose filtered USB port* picks the Arduino automatically (or asks when several are plugged in).
 - **Phones:** menu **ViBread → Show phone link / QR** (same Wi-Fi). Allow ViBread through the firewall when your OS
   asks (Windows/macOS prompt on first phone connection; private networks only).
-- **AI agents:** menu **ViBread → Set Anthropic API key…** (stored encrypted in the system keychain), or connect a
-  Claude account in Settings.
+- **AI agents:** menu **ViBread → Set Anthropic API key…**, or connect a Claude account in Settings. The key is
+  encrypted with the OS keychain (macOS Keychain, Windows DPAPI, GNOME Keyring/KWallet on Linux); on a Linux desktop
+  without a keyring it is stored obfuscated, not encrypted, in `settings.json` (readable only by your user), and the
+  key window says so. *Connect your Claude account* finds `omp` on your login-shell `PATH` (plus `~/.bun/bin`,
+  `~/.npm-global/bin`, `~/.local/bin`), or set `VIBREAD_OMP_BIN`.
 - **Your data** lives in `~/.config/ViBread` (Linux), `%APPDATA%\ViBread` (Windows), `~/Library/Application Support/ViBread`
   (macOS): `data/` (missions), `toolchain/`, `logs/server.log`, `logs/setup.log`. Menu: *Open data folder*, *Open logs*,
   *Reset example missions*.
