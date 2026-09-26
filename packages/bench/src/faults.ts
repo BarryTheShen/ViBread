@@ -455,6 +455,10 @@ async function runWithSession(Session: SimSessionConstructor, circuit: Circuit, 
         const brightest = leds.reduce((best, subject) => session.partState(subject.part) > session.partState(best.part) ? subject : best, leds[0]);
         value = brightest === undefined || session.partState(brightest.part) <= 0.02 ? "none" : String(brightest.order);
       }
+      if (decoded.kind === "heard-beep") {
+        session.run(100);
+        value = session.partState(decoded.part ?? "BZ1") > 0 ? "yes" : "no";
+      }
       answers[decoded.id] = value;
       session.serialWrite(`${JSON.stringify({ c: "answer", id: decoded.id, v: value })}\n`);
       answered.add(decoded.id);
