@@ -83,6 +83,6 @@ describe("CAPCOM timeline alerts", () => {
 
   it("builds phone-reachable CAPCOM links from phoneUrl", () => {
     expect(capcomLinkUrl("http://192.168.1.24:8787/")).toBe("http://192.168.1.24:8787/");
-    expect(capcomLinkUrl("https://vibread.example")).toBe("https://vibread.example/");
+    expect(capcomLinkUrl("https://vibread.example", "pair-token/")).toBe("https://vibread.example/?pair=pair-token%2F");
   });
 });
