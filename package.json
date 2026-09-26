@@ -23,6 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "22.20.4",
+    "@vibread/fixtures": "0.1.0",
     "tsx": "4.23.15",
     "typescript": "5.9.3",
     "vitest": "5.0.2"

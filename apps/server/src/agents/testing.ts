@@ -6,6 +6,7 @@ import {
   sha256Hex,
   type ApprovalBroker,
   type ApprovalRequest,
+  type ClaudeAccountView,
   type Mission,
   type MissionPhase,
   type MissionStore,
@@ -16,6 +17,7 @@ import type { LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4Stream
 import type { UIMessage } from "ai";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import pino from "pino";
+import type { ClaudeAccountService, ClaudeEndpoint } from "../claude/accounts.js";
 import type { AgentDeps, MissionEvent, MissionMachine } from "./deps.js";
 import type { AgentModels } from "./models.js";
 
@@ -272,7 +274,40 @@ export function jsonModel(values: unknown[] | ((options: LanguageModelV4CallOpti
 }
 
 export function mockModels(design: LanguageModelV4, fast: LanguageModelV4): AgentModels {
-  return { design: () => design, fast: () => fast, designId: "mock-design", fastId: "mock-fast" };
+  return {
+    design: async () => ({ model: design, modelId: "mock-design", credential: { kind: "server-key" } }),
+    fast: async () => ({ model: fast, modelId: "mock-fast", credential: { kind: "server-key" } }),
+  };
+}
+
+/**
+ * ClaudeAccountService fake: `accounts` maps user id → the gateway endpoint (and email) their connected account serves.
+ * Users not in the map are "not connected", so endpointFor returns undefined and the server key is the fallback.
+ */
+export function fakeClaudeAccounts(accounts: Record<string, { endpoint: ClaudeEndpoint; email?: string }> = {}): ClaudeAccountService & { endpointCalls: { userId: string; model: string }[] } {
+  const endpointCalls: { userId: string; model: string }[] = [];
+  const view = async (userId: string): Promise<ClaudeAccountView> => {
+    const account = accounts[userId];
+    return account
+      ? { available: true, connected: true, using: "claude-account", ...(account.email ? { email: account.email } : {}) }
+      : { available: false, connected: false, using: "none" };
+  };
+  const unsupported = async (): Promise<never> => {
+    throw new Error("fakeClaudeAccounts: sign-in is not available in tests");
+  };
+  return {
+    endpointCalls,
+    view,
+    start: unsupported,
+    complete: unsupported,
+    cancel: unsupported,
+    disconnect: view,
+    async endpointFor(userId, model) {
+      endpointCalls.push({ userId, model });
+      return accounts[userId]?.endpoint;
+    },
+    async stop() {},
+  };
 }
 
 export function testDeps(): AgentDeps & { broker: MemoryBroker; machine: RecordingMachine } {
@@ -289,11 +324,13 @@ export function testDeps(): AgentDeps & { broker: MemoryBroker; machine: Recordi
       fastModel: "mock-fast",
       approvalSecret: "test-approval-secret-0000000000000000000000",
       capcom: { provider: "off" },
+      claudeAccounts: { ompBin: "omp-not-installed", home: "/tmp/vb-agents/omp-home", brokerPort: 1 },
     },
     log: pino({ level: process.env.LOG_LEVEL ?? "silent" }),
     store,
     broker: memoryBroker(),
     machine: recordingMachine(store),
     messages: memoryMessages(),
+    claudeAccounts: fakeClaudeAccounts(),
   };
 }

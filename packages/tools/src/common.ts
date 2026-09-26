@@ -17,7 +17,7 @@ export const SYSTEM_ACTOR: Actor = { kind: "system", id: "pipeline", name: "ViBr
 export class ClaudeNotConnectedError extends Error {
   readonly code = "claude_not_connected";
   readonly status = 503;
-  constructor(message = "Claude is not connected: the server has no ANTHROPIC_API_KEY, so the AI agents can't run. Set it and restart the server.") {
+  constructor(message = "Claude is not connected: connect your Claude account in Settings, or set ANTHROPIC_API_KEY on the server.") {
     super(message);
     this.name = "ClaudeNotConnectedError";
   }

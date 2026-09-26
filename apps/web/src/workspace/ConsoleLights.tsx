@@ -14,7 +14,7 @@ import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import Typography from "@mui/material/Typography";
 import { CONSOLE_IDS, CONSOLE_LABELS, type ConsoleId, type ConsoleReport, type Finding } from "@vibread/core";
-import { useState, type ReactElement } from "react";
+import { useState, type ReactElement, type ReactNode } from "react";
 import { VERDICT_STYLE, VerdictChip } from "../components/VerdictChip.js";
 import { MONO_FONT } from "../theme.js";
 
@@ -25,7 +25,7 @@ const SEVERITY_ICON: Record<Finding["severity"], ReactElement> = {
 };
 
 /** Go/No-Go console strip: plain label first, console name as flavor, verdict as text + icon. */
-export function ConsoleLights({ reports }: { reports: ConsoleReport[] }) {
+export function ConsoleLights({ reports, action }: { reports: ConsoleReport[]; action?: ReactNode }) {
   const [openId, setOpenId] = useState<ConsoleId | null>(null);
   const byId = new Map(reports.map((r) => [r.console, r]));
   const open = openId ? byId.get(openId) : undefined;
@@ -68,6 +68,7 @@ export function ConsoleLights({ reports }: { reports: ConsoleReport[] }) {
           </ButtonBase>
         );
       })}
+      {action && <Box sx={{ display: "flex", alignItems: "center", pl: 1, borderLeft: 1, borderColor: "divider" }}>{action}</Box>}
       <Dialog open={openId !== null} onClose={() => setOpenId(null)} maxWidth="sm" fullWidth>
         {openId && (
           <>

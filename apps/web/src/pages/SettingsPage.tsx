@@ -35,6 +35,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router";
 import { authClient } from "../api/auth.js";
+import { ClaudeAccountSection } from "./ClaudeAccountSection.js";
 import { useConnections, useImessageCode, useMe, useMintToken, useRevokeToken } from "../api/hooks.js";
 import { useDefaultMode } from "../lib/prefs.js";
 import { agoLabel, expiryLabel, useNow } from "../lib/time.js";
@@ -304,6 +305,7 @@ export default function SettingsPage() {
       </AppBar>
       <Container maxWidth="md" sx={{ py: 4, display: "flex", flexDirection: "column", gap: 3 }}>
         <AccountSection />
+        <ClaudeAccountSection />
         <ClaudeCodeSection />
         <ImessageSection />
         <Section title="Default permission mode" id="mode-heading">

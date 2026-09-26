@@ -3,6 +3,8 @@ import type {
   ApprovalDecision,
   ApprovalView,
   BuildState,
+  ClaudeAccountView,
+  ClaudeLoginStart,
   ConnectionsView,
   CreateMissionRequest,
   ImessageLinkCode,
@@ -92,6 +94,13 @@ export const api = {
   build: (id: string, signal?: AbortSignal) => getJson<BuildState>(`${m(id)}/build`, signal),
   decideApproval: (approvalId: string, decision: ApprovalDecision) =>
     sendJson<ApprovalView>("POST", `/api/approvals/${encodeURIComponent(approvalId)}`, { decision }),
+  release: (id: string, revision: number, acknowledgeMissingReview: boolean) =>
+    sendJson<MissionDetail>("POST", `${m(id)}/release`, { revision, ...(acknowledgeMissingReview ? { acknowledgeMissingReview: true } : {}) }),
+  confirm: (id: string) => sendJson<MissionDetail>("POST", `${m(id)}/confirm`, {}),
+  claudeStart: () => sendJson<ClaudeLoginStart>("POST", "/api/connections/claude/start", {}),
+  claudeComplete: (loginId: string, code: string) => sendJson<ClaudeAccountView>("POST", "/api/connections/claude/complete", { loginId, code }),
+  claudeCancel: (loginId: string) => sendJson<ClaudeAccountView>("POST", "/api/connections/claude/cancel", { loginId }),
+  claudeDisconnect: () => sendJson<ClaudeAccountView>("DELETE", "/api/connections/claude"),
   stopAgent: (id: string) => sendJson<{ ok: true }>("POST", `${m(id)}/chat/stop`),
   chatPath: (id: string) => `${m(id)}/chat`,
   connections: (signal?: AbortSignal) => getJson<ConnectionsView>("/api/connections", signal),

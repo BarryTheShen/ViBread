@@ -270,7 +270,7 @@ describe("design agent", () => {
 
   it("surfaces a typed error when Claude is not connected", async () => {
     const deps = testDeps();
-    const runtime = createAgentRuntime({ ...deps, models: anthropicModels({ model: "claude-opus-5-5", fastModel: "claude-sonnet-5" }) });
+    const runtime = createAgentRuntime({ ...deps, models: anthropicModels({ config: { model: "claude-opus-5-5", fastModel: "claude-sonnet-5" } }) });
     const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
     const base = await serve(runtime);
     const response = await fetch(`${base}/api/missions/${mission.id}/chat`, {

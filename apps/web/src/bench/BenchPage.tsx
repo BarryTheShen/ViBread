@@ -457,7 +457,7 @@ export default function BenchPage(): ReactElement {
             <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ justifyContent: "space-between", alignItems: { md: "center" } }}>
               <Box>
                 <Typography variant="h5" sx={{ fontWeight: 700 }}>Choose your bench</Typography>
-                <Typography color="text.secondary" sx={{ mt: 0.5 }}>Physical actions stay behind an explicit click in this page. Virtual mode runs the same NDJSON firmware loop in a Web Worker.</Typography>
+                <Typography color="text.secondary" sx={{ mt: 0.5 }}>Physical actions stay behind an explicit click in this page. "Try without a board" runs the same self-test on a simulated Arduino, so you can practise before plugging anything in.</Typography>
               </Box>
               <Stack direction="row" spacing={1}>
                 <Button variant={mode === "virtual" ? "contained" : "outlined"} onClick={() => setMode("virtual")} sx={actionButtonSx}>Try without a board</Button>
@@ -592,7 +592,7 @@ export default function BenchPage(): ReactElement {
                 </Box>
               </Stack>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
-                <Button variant="outlined" onClick={() => { setRun(undefined); setActiveStep(3); }} sx={actionButtonSx}>Fix wiring and rerun</Button>
+                <Button variant="outlined" onClick={() => { setRun(undefined); setActiveStep(3); }} sx={actionButtonSx}>{run.verdict === "pass" ? "Run the self-test again" : "Fix wiring and rerun"}</Button>
                 {run.verdict === "pass" && <Button variant="contained" onClick={() => void flashApp()} disabled={Boolean(busy)} sx={actionButtonSx}>{mode === "virtual" ? "Continue to celebration" : "Flash app firmware with calibration"}</Button>}
               </Stack>
             </CardContent>

@@ -28,6 +28,8 @@ import { ApprovalCard } from "../chat/ApprovalCard.js";
 import { MissionChat, useMissionChatAdapter } from "../chat/MissionChat.js";
 import { ArtifactTabs } from "../workspace/ArtifactTabs.js";
 import { ConsoleLights } from "../workspace/ConsoleLights.js";
+import { FlightDirector } from "../workspace/FlightDirector.js";
+import { MissionComplete } from "../workspace/MissionComplete.js";
 import { MissionContext } from "../workspace/missionContext.js";
 import { MODE_HELP, ModeSelect, PHYSICAL_NOTE } from "../workspace/ModeSelect.js";
 import { PHASE_COPY, PhaseDrawer } from "../workspace/PhaseDrawer.js";
@@ -105,7 +107,7 @@ export default function MissionPage() {
               </Typography>
               <Typography variant="caption" sx={{ color: "text.secondary" }} noWrap>
                 Now: {PHASE_COPY[m.phase].label}
-                {m.releasedRevision ? ` · building design r${m.releasedRevision}` : m.currentRevision ? ` · design r${m.currentRevision}` : ""}
+                {m.releasedRevision ? ` · ${m.phase === "DONE" || m.phase === "LAUNCH" ? "built" : "building"} design r${m.releasedRevision}` : m.currentRevision ? ` · design r${m.currentRevision}` : ""}
               </Typography>
             </Box>
             <Box sx={{ flex: 1 }} />
@@ -187,6 +189,11 @@ export default function MissionPage() {
                 ))}
               </Box>
             )}
+            <MissionComplete
+              missionId={missionId}
+              phase={m.phase}
+              onTellAgent={() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message the agent"]')?.focus()}
+            />
             <Box sx={{ flex: 1, minHeight: 0 }}>
               <MissionChat
                 missionId={missionId}
@@ -208,7 +215,7 @@ export default function MissionPage() {
             <ArtifactTabs missionId={missionId} detail={detail} />
           </Box>
         </Box>
-        <ConsoleLights reports={detail.consoles} />
+        <ConsoleLights reports={detail.consoles} action={<FlightDirector missionId={missionId} detail={detail} />} />
       </Box>
       <Snackbar open={notice !== null} autoHideDuration={4000} onClose={() => setNotice(null)} message={notice ?? ""} />
     </MissionContext.Provider>

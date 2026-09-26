@@ -41,7 +41,7 @@ export function PhaseDrawer({ missionId, phase, timeline }: { missionId: string;
       <List dense>
         {MISSION_PHASES.map((p, i) => {
           if (p === "DEBUG" && phase !== "DEBUG") return null;
-          const state = i < currentIndex ? "done" : i === currentIndex ? "current" : "next";
+          const state = i < currentIndex || phase === "DONE" ? "done" : i === currentIndex ? "current" : "next";
           return (
             <ListItem key={p} aria-current={state === "current" ? "step" : undefined} sx={{ py: 0.25 }}>
               <ListItemIcon sx={{ minWidth: 34 }}>

@@ -97,6 +97,28 @@ export function useSetMode(id: string) {
   });
 }
 
+/** Human "GO for build": releases a revision as the build target. */
+export function useRelease(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ revision, acknowledgeMissingReview }: { revision: number; acknowledgeMissingReview: boolean }) =>
+      api.release(id, revision, acknowledgeMissingReview),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.mission(id) });
+      void qc.invalidateQueries({ queryKey: queryKeys.missions });
+    },
+  });
+}
+
+/** "Yes — mission complete" (USER_CONFIRMED). */
+export function useConfirmMission(id: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => api.confirm(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.mission(id) }),
+  });
+}
+
 export function useStopAgent(id: string) {
   const qc = useQueryClient();
   return useMutation({
