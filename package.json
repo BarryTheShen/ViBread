@@ -20,6 +20,7 @@
     "start": "npm start -w @vibread/server",
     "postinstall": "cd packages/assembly/schematic-runtime && npm install --no-audit --no-fund --install-links=false",
     "seed": "tsx --env-file-if-exists=.env scripts/seed-golden.ts",
+    "fault-table": "tsx packages/bench/scripts/fault-table.ts",
     "desktop": "npm run build && npm start -w @vibread/desktop",
     "desktop:dist": "npm run build && npm run dist -w @vibread/desktop"
   },

@@ -422,18 +422,7 @@ export async function buildFaultDictionary(input: { circuit: Circuit; layout: La
       } catch {
         continue;
       }
-      let run = await runWithSession(SimSession, applied.circuit, input.plan, input.hex);
-      if (fault === "output-jumper-in-rail-row") {
-        const output = applied.circuit.parts.find((part) => part.module === "led" || part.module === "buzzer-active" || part.module === "buzzer-passive");
-        const role = output === undefined ? undefined : roleForPart(applied.circuit, output.id);
-        const net = role === undefined ? undefined : applied.circuit.nets.find((candidate) => candidate.id === role.net);
-        if (output !== undefined && net?.kind !== undefined) {
-          const level = net.kind === "power" ? 1 : net.kind === "ground" ? 0 : undefined;
-          if (level !== undefined && role !== undefined && !run.lines.some((line) => line.t === "stuck" && line.pin === role.pin)) {
-            run = { ...run, lines: [...run.lines, { t: "stuck", pin: role.pin, level }] };
-          }
-        }
-      }
+      const run = await runWithSession(SimSession, applied.circuit, input.plan, input.hex);
       const result = await evaluateRun({ circuit: input.circuit, layout: applied.layout, plan: input.plan, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: `fault-${fault}` });
       entries.push({ fault, layoutHash: layoutHash(applied.layout), description: applied.description, layout: applied.layout, circuit: applied.circuit, lines: run.lines, answers: run.answers, result });
     }

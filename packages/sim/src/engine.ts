@@ -258,6 +258,7 @@ export class SimMachine {
   private readonly voltages: VoltageMap = new Map();
   private readonly portListeners: Array<() => void> = [];
   private readonly rxQueue: number[] = [];
+  private physicalPinSyncPending = false;
   private lastAccountingCycle = 0;
   private nextTraceCycle = Math.round((TRACE_PERIOD_MS / 1000) * CLOCK_HZ);
   private nextModeCycle = 0;
@@ -302,6 +303,7 @@ export class SimMachine {
     this.buildBoardIndex();
     for (const port of Object.values(this.ports)) {
       const listener = () => {
+        this.physicalPinSyncPending = true;
         this.accountTo(this.cpu.cycles);
         this.updateCircuit();
         this.captureTrace(true);
@@ -367,6 +369,10 @@ export class SimMachine {
       avrInstruction(this.cpu);
       this.cpu.tick();
       this.pumpRx();
+      if (this.physicalPinSyncPending) {
+        this.syncPhysicalPinRegisters();
+        this.physicalPinSyncPending = false;
+      }
       this.captureTraceIfDue();
       this.observeModesIfDue();
       guard += 1;
@@ -379,6 +385,14 @@ export class SimMachine {
   pinLevel(pin: string): Logic | null {
     const mapping = this.boardPins.get(pin);
     if (!mapping) return null;
+    const config = portConfig(mapping.pin.port as PortName);
+    const mask = 1 << mapping.bit;
+    if (this.cpu.data[config.DDR] & mask) {
+      const node = this.boardNode(mapping.pin);
+      if (node && this.voltages.has(node)) return (this.voltages.get(node) ?? 0) >= this.profile.logic.vihMin ? 1 : 0;
+      const state = mapping.port.pinState(mapping.bit);
+      return state === PinState.High ? 1 : 0;
+    }
     const state = mapping.port.pinState(mapping.bit);
     if (state === PinState.High) return 1;
     if (state === PinState.Low) return 0;
@@ -685,6 +699,17 @@ export class SimMachine {
       this.inputValues.set(pin.name, input);
       this.ports[pin.port].setPin(pin.bit, input === 1);
     }
+    for (const pin of this.profile.pins) {
+      if (!pin.port || pin.bit === undefined || !pin.digital) continue;
+      const config = portConfig(pin.port);
+      const mask = 1 << pin.bit;
+      if (!(this.cpu.data[config.DDR] & mask)) continue;
+      const node = this.boardNode(pin);
+      const voltage = node ? this.voltages.get(node) : undefined;
+      if (voltage === undefined) continue;
+      const pinValue = voltage >= this.profile.logic.vihMin ? this.cpu.data[config.PIN] | mask : this.cpu.data[config.PIN] & ~mask;
+      this.cpu.data[config.PIN] = pinValue;
+    }
     this.updatePartReadings(branches, values);
     this.observeModesIfDue(true);
   }
@@ -760,6 +785,20 @@ export class SimMachine {
         this.partValueSegments.set(part, valueSegments);
       }
       this.lastAccountingCycle = target;
+    }
+  }
+
+  private syncPhysicalPinRegisters(): void {
+    for (const pin of this.profile.pins) {
+      if (!pin.port || pin.bit === undefined || !pin.digital) continue;
+      const config = portConfig(pin.port);
+      const mask = 1 << pin.bit;
+      if (!(this.cpu.data[config.DDR] & mask)) continue;
+      const node = this.boardNode(pin);
+      const voltage = node ? this.voltages.get(node) : undefined;
+      if (voltage === undefined) continue;
+      if (voltage >= this.profile.logic.vihMin) this.cpu.data[config.PIN] |= mask;
+      else this.cpu.data[config.PIN] &= ~mask;
     }
   }
 
