@@ -11,6 +11,7 @@ import CardMedia from "@mui/material/CardMedia";
 import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
 import Divider from "@mui/material/Divider";
+import Link from "@mui/material/Link";
 import MobileStepper from "@mui/material/MobileStepper";
 import Paper from "@mui/material/Paper";
 import Skeleton from "@mui/material/Skeleton";
@@ -89,6 +90,10 @@ function errorMessage(error: unknown): string {
 }
 function isUnauthorized(error: unknown): boolean {
   return error instanceof BuildApiError && (error.status === 401 || error.code === "UNAUTHORIZED");
+}
+
+function isClientError(error: unknown): boolean {
+  return error instanceof BuildApiError && error.status >= 400 && error.status < 500;
 }
 
 function ageLabel(updatedAt: number, now: number): string {
@@ -845,7 +850,7 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
     queryKey: buildQueryKey(missionId),
     queryFn: ({ signal }: { signal: AbortSignal }) => fetchBuildState(missionId, signal),
     enabled: missionId.length > 0,
-    refetchInterval: POLL_INTERVAL_MS,
+    refetchInterval: (currentQuery) => (isClientError(currentQuery.state.error) ? false : POLL_INTERVAL_MS),
     refetchIntervalInBackground: true,
     retry: false,
   });
@@ -979,18 +984,28 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
           )}
 
           {query.error && !build && (
-            <Alert severity="error" icon={<CloudOffOutlined />}>
-              <AlertTitle>Build steps unavailable</AlertTitle>
-              {errorMessage(query.error)}
-              <Button
-                type="button"
-                onClick={() => void query.refetch()}
-                variant="outlined"
-                sx={{ display: "block", mt: 1.5, minHeight: 46 }}
-              >
-                Try again
-              </Button>
-            </Alert>
+            isClientError(query.error) ? (
+              <Alert severity="warning" icon={<CloudOffOutlined />}>
+                <AlertTitle>Build unavailable</AlertTitle>
+                This build isn't on this computer any more — scan the QR code on the laptop again.
+                <Link href="/b" underline="hover" sx={{ display: "block", mt: 1.25, width: "fit-content" }}>
+                  Back to phone home
+                </Link>
+              </Alert>
+            ) : (
+              <Alert severity="error" icon={<CloudOffOutlined />}>
+                <AlertTitle>Build steps unavailable</AlertTitle>
+                {errorMessage(query.error)}
+                <Button
+                  type="button"
+                  onClick={() => void query.refetch()}
+                  variant="outlined"
+                  sx={{ display: "block", mt: 1.5, minHeight: 46 }}
+                >
+                  Try again
+                </Button>
+              </Alert>
+            )
           )}
 
           {build && <BuildChecklist missionId={missionId} build={build} />}

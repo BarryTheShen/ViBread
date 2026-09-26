@@ -2,6 +2,14 @@ import { formatOhms, type FieldValue, type PartField, type PartType, type ScanIt
 
 export type FieldValues = Record<string, FieldValue>;
 
+const OPTION_LABELS: Record<string, string> = { "uno-r3": "Uno R3" };
+
+/** Render a choice's unit and known human label while preserving its raw stored value. */
+export function choiceOptionLabel(field: PartField, option: string): string {
+  const label = OPTION_LABELS[option] ?? option;
+  return `${label}${field.unit ? ` ${field.unit}` : ""}`;
+}
+
 /** Build a controlled form state from a PartField list, preserving any known values. */
 export function valuesForFields(fields: PartField[], existing: FieldValues = {}): FieldValues {
   const values: FieldValues = {};
@@ -37,6 +45,7 @@ export function parseFieldValue(field: PartField, raw: string | boolean): FieldV
 export function formatFieldValue(field: PartField, value: FieldValue | undefined): string {
   if (value === undefined || value === "") return "—";
   if (field.kind === "boolean") return value ? "Yes" : "No";
+  if (field.kind === "choice" && typeof value === "string") return choiceOptionLabel(field, value);
   if (field.kind === "number" && field.unit === "Ω" && typeof value === "number") return formatOhms(value);
   return `${String(value)}${field.unit ? ` ${field.unit}` : ""}`;
 }

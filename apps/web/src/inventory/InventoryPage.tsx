@@ -114,6 +114,21 @@ function filterLabel(filter: Filter): string {
   if (filter === "in-use") return "In use";
   return "Not usable in designs";
 }
+function compareInventoryEntries(a: InventoryRow, b: InventoryRow, typeById: Map<string, PartType>): number {
+  const aType = typeById.get(a.typeId);
+  const bType = typeById.get(b.typeId);
+  const typeOrder = (aType?.name ?? a.typeId).localeCompare(bType?.name ?? b.typeId);
+  if (typeOrder !== 0) return typeOrder;
+  const numericField = (type: PartType | undefined, entry: InventoryRow): number | undefined => {
+    const field = type?.fields.find((candidate) => candidate.kind === "number" && typeof entry.values[candidate.key] === "number");
+    const value = field ? entry.values[field.key] : undefined;
+    return typeof value === "number" ? value : undefined;
+  };
+  const aNumber = numericField(aType, a);
+  const bNumber = numericField(bType, b);
+  if (aNumber !== undefined && bNumber !== undefined && aNumber !== bNumber) return aNumber - bNumber;
+  return formatEntryLabel(aType, a.values).localeCompare(formatEntryLabel(bType, b.values));
+}
 
 export default function InventoryPage() {
   const catalog = useCatalog();
@@ -155,7 +170,7 @@ export default function InventoryPage() {
       const category = categoryOf(typeById.get(entry.typeId));
       (groups[category] ??= []).push(entry);
     }
-    return (Object.keys(groups) as PartCategory[]).sort((a, b) => CATEGORY_LABELS[a].localeCompare(CATEGORY_LABELS[b])).map((category) => ({ category, entries: groups[category] ?? [] }));
+    return (Object.keys(groups) as PartCategory[]).sort((a, b) => CATEGORY_LABELS[a].localeCompare(CATEGORY_LABELS[b])).map((category) => ({ category, entries: (groups[category] ?? []).sort((a, b) => compareInventoryEntries(a, b, typeById)) }));
   }, [filtered, typeById]);
 
   const openEditorFromScan = (item: ScanItem) => {

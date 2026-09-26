@@ -13,7 +13,7 @@ import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import type { FieldValue, PartField } from "@vibread/core";
-import { parseFieldValue } from "./forms.js";
+import { choiceOptionLabel, parseFieldValue } from "./forms.js";
 
 export interface FieldValuesFormProps {
   fields: PartField[];
@@ -23,10 +23,7 @@ export interface FieldValuesFormProps {
   compact?: boolean;
 }
 
-/** Render a choice's unit wherever the option is shown, while preserving its raw stored value. */
-export function choiceOptionLabel(field: PartField, option: string): string {
-  return `${option}${field.unit ? ` ${field.unit}` : ""}`;
-}
+export { choiceOptionLabel } from "./forms.js";
 
 /** Explain package/appearance fields without implying they change the circuit. */
 export function fieldHelperText(field: PartField): string | undefined {
