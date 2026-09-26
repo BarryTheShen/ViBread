@@ -3,12 +3,11 @@ import { createServer, type Server } from "node:http";
 import pino from "pino";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
-import { toNodeHandler } from "better-auth/node";
-import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
+import { ClientFactory, ClientFactoryOptions, JsonRpcTransportFactory } from "@a2a-js/sdk/client";
+import { AgentCard, Role } from "@a2a-js/sdk";
 import { createAppContext, type AppContextHandle } from "../context.js";
 import { loadConfig } from "../config.js";
-import { mountMcp } from "./index.js";
+import { mountA2a, mountMcp } from "./index.js";
 
 interface RunningOAuthTest {
   server: Server;
@@ -65,8 +64,8 @@ async function startOAuthTest(): Promise<{ baseUrl: string; context: AppContextH
   });
   const baseUrl = `http://127.0.0.1:${port}`;
   mountMcp(app, ctx, auth);
+  mountA2a(app, ctx, auth);
   const handle = { server, context };
-  running.push(handle);
   return { baseUrl, context };
 }
 

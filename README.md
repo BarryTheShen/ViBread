@@ -51,26 +51,38 @@ Tests: `npm test` (vitest; compiles firmware and runs the simulator, ~30 s). Typ
 |---|---|
 | `PORT`, `HOST`, `PUBLIC_URL` | Listen address (default `0.0.0.0:8787`) and the public origin used in links, OAuth metadata and the `claude mcp add` command |
 | `DATA_DIR` | SQLite database, artifacts and generated secrets (default `./data`, relative to the repo root) |
-| `ANTHROPIC_API_KEY` | Enables the agents (design, test author, RETRO, photo check). Without it, everything except the agents works and the chat says Claude is not connected |
+| `ANTHROPIC_API_KEY` | ViBread's server key for the agents (design, test author, RETRO, photo check). Users can instead connect their own Claude account (below). Without either, everything except the agents works and the chat says Claude is not connected |
 | `VIBREAD_MODEL`, `VIBREAD_FAST_MODEL` | Default `claude-opus-5-5`, `claude-sonnet-5` |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in; without them the server runs in single-operator mode (no sign-in) |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub sign-in; when configured, single-operator mode is disabled and the login page offers GitHub alongside Google |
 | `BETTER_AUTH_SECRET`, `VIBREAD_APPROVAL_SECRET` | Generated and stored in `DATA_DIR` when unset |
 | `CAPCOM_PROVIDER` | `off` (default), `terminal` (local test chat), or `cloud` (iMessage) with `PHOTON_PROJECT_ID`, `PHOTON_PROJECT_SECRET`, `CAPCOM_NUMBER`; `CAPCOM_ALLOW_OFF_HOURS=1` disables the quiet-hours guard |
 | `VIBREAD_ARDUINO_CLI`, `VIBREAD_ARDUINO_CONFIG`, `VIBREAD_COMPILE_TIMEOUT_MS` | Override the toolchain location / compile timeout |
 | `VIBREAD_NO_STATIC=1` | Don't serve `apps/web/dist` |
+| `VIBREAD_OMP_BIN`, `VIBREAD_CLAUDE_BROKER_PORT` | oh-my-pi CLI used for "Connect your Claude account" (default `omp` on `PATH`) and its auth-broker port (default 18765, loopback only) |
 
 ## Using it
 
 1. **Home** — describe the circuit and tap the parts you own. Pick a permission mode.
 2. **Mission workspace** — chat with the agent; tool cards show each check; approval cards ask before a design becomes
    the build target (Review) or before every change (Ask). Tabs: Schematic, Steps, Code, Tests, Try it, Replay,
-   Telemetry, Photo. The console bar shows EECOM · GUIDO · FIDO · FAO · RETRO.
+   Telemetry, Photo. The console bar shows EECOM · GUIDO · FIDO · FAO · RETRO, and **GO for build** (you are the Flight
+   Director) releases the design as the build target once the checks are GO.
 3. **Build Mode on the phone** — scan the QR code in the Steps tab (`/b/<mission>`): one step at a time, focused picture,
    exact holes, plug state, "I did this", "Check with camera".
 4. **Bench** (`/m/<mission>/bench`, Chrome/Edge) — connect the board, flash safe firmware, rail checkpoint, self-test with
    on-screen prompts, diagnosis with the suspect holes highlighted, then flash the app firmware with the light-sensor
    calibration. "Try without a board" runs the same firmware in a simulated board, with injectable wiring faults.
    Fallback flashing: `arduino-cli upload --input-file <hex> -p <port> -b arduino:avr:uno` with the HEX from the revision.
+
+### Connect your Claude account
+
+Settings → **Connect your Claude account** lets your own Claude account power your missions instead of ViBread's key. It
+runs oh-my-pi's Claude sign-in (`omp login anthropic`, needs the `omp` CLI on the server): open the claude.ai link, approve,
+then paste the code Claude shows — or the address of the page that fails to load (`localhost:54545/…`) — into ViBread. If
+your browser runs on the server machine, the sign-in finishes by itself. The grant is kept by an oh-my-pi auth broker under
+`DATA_DIR/claude-accounts` (never your own `~/.omp`), and your agent calls go through an oh-my-pi auth gateway restricted to
+your account. Disconnect removes it. When your account can't serve the model, ViBread falls back to its server key. Note:
+Anthropic's terms restrict using Claude.ai login in third-party apps — see PLAN.md §9.
 
 ### Claude Code (MCP) and other agents (A2A)
 

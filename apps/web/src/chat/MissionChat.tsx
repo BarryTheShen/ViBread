@@ -5,6 +5,7 @@ import Typography from "@mui/material/Typography";
 import { ChatBox } from "@mui/x-chat";
 import { useChat, useChatStore, type ChatPartRendererMap } from "@mui/x-chat/headless";
 import { processStream } from "@mui/x-chat-headless/stream";
+import type { Channel } from "@vibread/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createMissionChatAdapter, type MissionChatAdapter } from "./missionAdapter.js";
 import { ToolPartCard } from "./ToolPartCard.js";
@@ -92,8 +93,14 @@ function BriefKickoff({ adapter, brief, agentBusy }: { adapter: MissionChatAdapt
   return null;
 }
 
-/** Shown in the empty chat of a mission whose design was prepared ahead of time (seeded / pre-warmed). */
-function PrewarmedNotice() {
+/** Empty-chat card for a mission whose design came from somewhere other than this chat. */
+function DesignOriginNotice({ channel }: { channel?: Channel }) {
+  const text =
+    channel === "mcp"
+      ? "Claude Code designed this over MCP — ask ViBread's agent anything about it, or keep working from Claude Code."
+      : channel === "a2a"
+        ? "Another agent designed this — ask ViBread's agent anything about it."
+        : "This design was prepared ahead of time — ask the agent anything about it.";
   return (
     <Paper variant="outlined" role="note" sx={{ p: 2, maxWidth: 440, borderColor: "primary.main", bgcolor: "rgba(125, 211, 252, 0.06)" }}>
       <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 0.5 }}>
@@ -102,7 +109,7 @@ function PrewarmedNotice() {
           ViBread
         </Typography>
       </Stack>
-      <Typography sx={{ fontWeight: 600 }}>This design was prepared ahead of time — ask the agent anything about it.</Typography>
+      <Typography sx={{ fontWeight: 600 }}>{text}</Typography>
       <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
         Its checks, tests, and build steps are ready in the panel on the right.
       </Typography>
@@ -127,6 +134,7 @@ export function MissionChat({
   adapter,
   brief,
   hasDesign,
+  designChannel,
   isNewMission,
   onApprovalIdsChange,
 }: {
@@ -136,6 +144,8 @@ export function MissionChat({
   brief: string;
   /** Follow-up suggestions only make sense once a design exists. */
   hasDesign: boolean;
+  /** Channel of the latest revision author (who designed it), for the empty-chat card. */
+  designChannel?: Channel;
   /** Phase BRIEF/CLARIFY and no revision yet: the only case where the brief is auto-sent (history must also be empty). */
   isNewMission: boolean;
   onApprovalIdsChange(ids: string[]): void;
@@ -148,7 +158,8 @@ export function MissionChat({
       partRenderers={partRenderers}
       features={{ conversationList: false, conversationHeader: false, attachments: false, suggestions: hasDesign, scrollToBottom: true }}
       suggestions={hasDesign ? SUGGESTIONS : []}
-      slots={{ messageAvatar: null, ...(hasDesign ? { emptyState: PrewarmedNotice } : {}) }}
+      slots={{ messageAvatar: null, ...(hasDesign ? { emptyState: DesignOriginNotice } : {}) }}
+      slotProps={{ emptyState: { channel: designChannel } }}
       sx={{ height: "100%", minHeight: 0, bgcolor: "transparent" }}
       localeText={{
         composerInputPlaceholder: "Tell the agent what to change, or ask why…",

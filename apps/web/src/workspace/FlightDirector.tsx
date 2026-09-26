@@ -17,7 +17,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useState } from "react";
 import { Link as RouterLink } from "react-router";
 import { HttpError } from "../api/client.js";
-import { useRelease } from "../api/hooks.js";
+import { useConnections, useRelease } from "../api/hooks.js";
 
 const REQUIRED: ConsoleId[] = ["EECOM", "GUIDO", "FIDO", "FAO"];
 
@@ -45,6 +45,7 @@ export function releaseReadiness(detail: MissionDetail): {
 /** Flight Director's "GO for build" on the console bar: the human release of a revision as the build target. */
 export function FlightDirector({ missionId, detail }: { missionId: string; detail: MissionDetail }) {
   const release = useRelease(missionId);
+  const connections = useConnections();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [toastOpen, setToastOpen] = useState(false);
   const state = releaseReadiness(detail);
@@ -69,11 +70,19 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
       },
     );
 
+  // FIDO waits for tests the (AI) test author writes; without any Claude credential that never happens by itself.
+  const fidoPending = detail.consoles.find((c) => c.console === "FIDO")?.verdict === "PENDING";
+  const noAgent = connections.data?.claude?.using === "none";
+  const testsBlocked = state.blocking.includes("FIDO") && fidoPending;
   const reason = state.revision === undefined
     ? "There's no design yet."
-    : state.blocking.length > 0
-      ? `Waiting for GO from: ${state.blocking.join(", ")}.`
-      : "Every check says GO.";
+    : testsBlocked && noAgent
+      ? "Simulation tests (FIDO) haven't been written yet: an AI agent writes them, and no Claude account or key is connected. Connect one in Settings → Connect your Claude account."
+      : testsBlocked
+        ? "Simulation tests (FIDO) are still being written for this design."
+        : state.blocking.length > 0
+          ? `Waiting for GO from: ${state.blocking.join(", ")}.`
+          : "Every check says GO.";
 
   return (
     <>
@@ -99,6 +108,11 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
             </Button>
           </span>
         </Tooltip>
+      )}
+      {!state.released && testsBlocked && noAgent && (
+        <Button component={RouterLink} to="/settings" size="small" aria-label="Connect Claude in Settings so the tests can be written" sx={{ flexShrink: 0, whiteSpace: "nowrap" }}>
+          Connect Claude
+        </Button>
       )}
       {release.isError && !confirmOpen && (
         <Snackbar open autoHideDuration={6000} onClose={() => release.reset()} message={`Couldn't release: ${release.error.message}`} />

@@ -942,10 +942,29 @@ export async function runElectricalChecks(circuit: Circuit, revisionHash: string
   return reportFromFindings("EECOM", revisionHash, findings, facts.evidence);
 }
 
-function compileFinding(compile: CompileResult): Finding[] {
+interface CompileWarningCounts {
+  sketch: number;
+  other: number;
+}
+
+interface CompileFindingResult {
+  findings: Finding[];
+  warningCounts: CompileWarningCounts;
+}
+
+function isSketchDiagnostic(file: string | undefined): boolean {
+  if (!file) return false;
+  const normalized = file.replaceAll("\\", "/").toLowerCase();
+  const basename = normalized.slice(normalized.lastIndexOf("/") + 1);
+  if (/(^|\/)(?:cores|libraries|framework|toolchain)\//.test(normalized)) return false;
+  return basename.endsWith(".ino") || basename === "sketch.cpp";
+}
+
+function compileFinding(compile: CompileResult): CompileFindingResult {
   const findings: Finding[] = [];
   const errors = compile.diagnostics.filter((diagnostic) => diagnostic.severity === "error");
   const warnings = compile.diagnostics.filter((diagnostic) => diagnostic.severity === "warning");
+  const sketchWarnings = warnings.filter((diagnostic) => isSketchDiagnostic(diagnostic.file));
   if (!compile.ok || errors.length) {
     findings.push({
       console: "GUIDO",
@@ -956,18 +975,19 @@ function compileFinding(compile: CompileResult): Finding[] {
       fix: "Fix the compiler errors, then compile again before flashing.",
     });
   }
-  if (warnings.length) {
+  if (sketchWarnings.length) {
     findings.push({
       console: "GUIDO",
       ruleId: "FW-WARNING",
       severity: "warning",
-      title: "The compiler reported a warning.",
-      detail: warnings.map((diagnostic) => diagnostic.message).join("; "),
-      fix: "Review the warning and remove it where practical.",
+      title: "The sketch compiler reported a warning.",
+      detail: sketchWarnings.map((diagnostic) => diagnostic.message).join("; "),
+      fix: "Review the warning in your sketch and remove it where practical.",
     });
   }
-  return findings;
+  return { findings, warningCounts: { sketch: sketchWarnings.length, other: warnings.length - sketchWarnings.length } };
 }
+
 
 /** Compare compile output and simulator-observed pin modes with the circuit IR. */
 export function runFirmwareChecks(input: {
@@ -976,7 +996,8 @@ export function runFirmwareChecks(input: {
   pinModes: PinModeObservation[];
   revisionHash: string;
 }): ConsoleReport {
-  const findings = compileFinding(input.compile);
+  const compileReport = compileFinding(input.compile);
+  const findings = compileReport.findings;
   const sizes = input.compile.sizes;
   if (sizes) {
     const flashRatio = sizes.flashBytes / Math.max(1, sizes.flashMax);
@@ -1005,9 +1026,13 @@ export function runFirmwareChecks(input: {
     }
   }
   findings.sort((a, b) => a.ruleId.localeCompare(b.ruleId) || (a.refs?.pins?.[0] ?? "").localeCompare(b.refs?.pins?.[0] ?? ""));
+  const compilerWarnings = {
+    sketchWarnings: compileReport.warningCounts.sketch,
+    otherWarnings: compileReport.warningCounts.other,
+  };
   const evidence = sizes
-    ? { flashBytes: sizes.flashBytes, flashMax: sizes.flashMax, ramBytes: sizes.ramBytes, ramMax: sizes.ramMax, observedPinModes: input.pinModes }
-    : { observedPinModes: input.pinModes };
+    ? { flashBytes: sizes.flashBytes, flashMax: sizes.flashMax, ramBytes: sizes.ramBytes, ramMax: sizes.ramMax, observedPinModes: input.pinModes, compilerWarnings }
+    : { observedPinModes: input.pinModes, compilerWarnings };
   return reportFromFindings("GUIDO", input.revisionHash, findings, evidence);
 }
 

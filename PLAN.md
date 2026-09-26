@@ -446,10 +446,14 @@ each tool's `read-only` / `state-changing` tag:
 - **Anthropic:** one server-side API key (secrets only, never in the browser), per-user usage caps; data-retention disclosure in the
   README.
 - **Connect your Claude account (item 16, built last — team lead's call):** the user authenticates ViBread with their Claude
-  account through OAuth, the way omp (oh-my-pi) does, reusing omp's auth setup in the backend (`@oh-my-pi/pi-ai` 18.3.2, MIT;
-  needs Bun ≥ 1.3.14). Tokens are stored per user on the server only and refreshed there; that user's agent calls use them instead
-  of the server key. This authorizes ViBread to use the account; it is not a ViBread sign-in (sign-in stays Google). The detailed
-  design is done when the item starts.
+  account through OAuth, the way omp (oh-my-pi) does, by running omp's own auth setup in the backend (the `omp` 18.3.2 CLI, MIT;
+  no auth code of ours): `omp login anthropic` performs the Claude account OAuth (the Connections page shows the sign-in URL; the
+  user pastes the code or final redirect address, or the local :54545 callback completes it when the browser is on the server
+  machine) and saves the grant into an `omp auth-broker` that holds and refreshes it; one `omp auth-gateway` per connected user,
+  restricted to that user's account with an account-pool file, serves an Anthropic Messages endpoint that the AI SDK provider
+  calls (`baseURL` + bearer). All omp state lives under `DATA_DIR/claude-accounts` (its own HOME), never the operator's `~/.omp`.
+  Per mission: the owner's connected account first, else the server key (automatic fallback when the account can't serve the
+  model), else "Claude is not connected". This authorizes ViBread to use the account; it is not a ViBread sign-in.
 
 ### 5.12 Photon CAPCOM (research/08, audit/A4)
 
@@ -495,7 +499,7 @@ channel can resume a mission.
 | Bench | webserial-flasher 1.0.1 (MIT), `@types/w3c-web-serial` |
 | Rendering | `@wokwi/elements` 1.9.2 (MIT), `@resvg/resvg-js` 2.6.2 (MPL-2.0), sharp 0.35.4 (Apache-2.0) |
 | UI | `@mui/material` / `@mui/icons-material` 9.4.0, `@mui/x-chat` 9.0.0-alpha.18, `@mui/x-charts` / `x-data-grid` 9.14.0 (MIT, Community), React 19.3, Vite 8.3.1, react-router 8, `@tanstack/react-query` 5, react-markdown 10.1, react-syntax-highlighter 16.1 |
-| Claude account (item 16) | `@oh-my-pi/pi-ai` 18.3.2 (MIT; Bun ≥ 1.3.14) — omp's provider and OAuth layer |
+| Claude account (item 16) | `omp` 18.3.2 CLI (MIT): `login anthropic`, `auth-broker serve`, `auth-gateway serve` |
 | Network | the chosen stable tunnel (cloudflared 2026.9.3 via Cloudflare's `any` apt repo, ngrok, or Tailscale) |
 
 Avoided on purpose: Claude Agent SDK (terms, §5.2) · MUI X Pro/Premium (commercial) · tscircuit packages without a license

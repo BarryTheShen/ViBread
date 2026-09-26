@@ -1,5 +1,5 @@
-import { CONSOLE_LABELS, type Actor, type Mission, type MissionDetail, type MissionService, type MissionStore, type ApprovalBroker, type ToolRegistry } from "@vibread/core";
-import { DETERMINISTIC_CONSOLES, ToolInputError, invokeTool, reviewRevision, type RegistryHooks } from "@vibread/tools";
+import { CONSOLE_LABELS, type Actor, type ApprovalBroker, type ConsoleId, type Mission, type MissionDetail, type MissionService, type MissionStore, type Revision, type ToolRegistry, type Verdict } from "@vibread/core";
+import { DETERMINISTIC_CONSOLES, TestsNotWrittenError, ToolInputError, invokeTool, reviewRevision, type DesignOps, type RegistryHooks } from "@vibread/tools";
 import type { ApprovalLinks } from "./approval-links.js";
 import type { RunManager } from "./runs.js";
 
@@ -25,6 +25,7 @@ export function createHumanRelease(deps: {
   store: MissionStore;
   broker: ApprovalBroker;
   tools: ToolRegistry;
+  design: DesignOps;
   missions: MissionService;
   runs: RunManager;
   links: ApprovalLinks;
@@ -32,7 +33,7 @@ export function createHumanRelease(deps: {
   /** Some credential (owner's Claude account or server key) can run the reviewer for this owner. */
   claudeConnected(ownerId: string): Promise<boolean>;
 }): (input: ReleaseInput) => Promise<MissionDetail> {
-  const { store, broker, tools, missions, runs, links } = deps;
+  const { store, broker, tools, design, missions, runs, links } = deps;
 
   async function requireMission(missionId: string): Promise<Mission> {
     const mission = await store.getMission(missionId);
@@ -41,18 +42,39 @@ export function createHumanRelease(deps: {
   }
 
   return async function release(input) {
-    const { missionId, revision: n, actor } = input;
+    const { missionId, actor } = input;
     const mission = await requireMission(missionId);
-    const found = await store.getRevision(missionId, n);
-    if (!found) throw new ToolInputError(`Revision ${n} does not exist.`, 404);
-    if (mission.releasedRevision === n) return missions.detail(missionId);
+    const requested = await store.getRevision(missionId, input.revision);
+    if (!requested) throw new ToolInputError(`Revision ${input.revision} does not exist.`, 404);
+    if (mission.releasedRevision === requested.n) return missions.detail(missionId);
 
-    const blocking = DETERMINISTIC_CONSOLES.map((id) => ({ id, verdict: found.results.reports.find((r) => r.console === id)?.verdict ?? "PENDING" })).filter(
-      (c) => c.verdict !== "GO",
-    );
-    if (blocking.length) {
-      throw conflict("not_all_go", `Revision ${n} isn't GO yet: ${blocking.map((c) => `${CONSOLE_LABELS[c.id]} (${c.id}) ${c.verdict}`).join(", ")}.`);
+    const blockingIn = (revision: Revision, skipFido: boolean): { id: ConsoleId; verdict: Verdict }[] =>
+      DETERMINISTIC_CONSOLES.filter((id) => !(skipFido && id === "FIDO"))
+        .map((id) => ({ id, verdict: revision.results.reports.find((r) => r.console === id)?.verdict ?? "PENDING" }))
+        .filter((c) => c.verdict !== "GO");
+    const notGo = (revision: Revision, blocking: { id: ConsoleId; verdict: Verdict }[]) =>
+      conflict("not_all_go", `Revision ${revision.n} isn't GO yet: ${blocking.map((c) => `${CONSOLE_LABELS[c.id]} (${c.id}) ${c.verdict}`).join(", ")}.`);
+
+    // A revision saved while no credential was available has no independent tests (FIDO PENDING): write them now,
+    // record them as revision n+1 (same circuit; the suite is part of the revision hash) and release that one.
+    let found = requested;
+    const early = blockingIn(found, !found.suite);
+    if (early.length) throw notGo(found, early);
+    if (!found.suite) {
+      const suite = await design.suiteFor(mission, found.circuit).catch((error: unknown) => {
+        if (error instanceof TestsNotWrittenError) {
+          throw conflict(
+            "tests_missing",
+            "The simulation tests haven't been written yet because Claude isn't connected — connect your Claude account in Settings (or set ANTHROPIC_API_KEY), then press GO for build again.",
+          );
+        }
+        throw error;
+      });
+      found = await design.recordSuite(mission, found, suite);
     }
+    const n = found.n;
+    const blocking = blockingIn(found, false);
+    if (blocking.length) throw notGo(found, blocking);
 
     // RETRO: run it now if it never ran for this revision, or if it was skipped and Claude is connected now.
     let retro = found.results.reports.find((r) => r.console === "RETRO" && r.revisionHash === found.hash);

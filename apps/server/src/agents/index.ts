@@ -1,5 +1,14 @@
 import type { ConsoleReport, MissionDetail, MissionService, PhotoCheckResult, ToolRegistry } from "@vibread/core";
-import { ToolInputError, createPipeline, createToolRegistry, reviewRevision, type BackgroundPipeline, type Pipeline } from "@vibread/tools";
+import {
+  ToolInputError,
+  createDesignOps,
+  createPipeline,
+  createToolRegistry,
+  reviewRevision,
+  type BackgroundPipeline,
+  type Pipeline,
+  type RegistryHooks,
+} from "@vibread/tools";
 import type { Express } from "express";
 import { mountChat } from "./chat.js";
 import type { AgentDeps } from "./deps.js";
@@ -48,10 +57,7 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
   const reviewer = createRetroReviewer({ models, store: deps.store });
   const links = createApprovalLinks({ messages: deps.messages });
 
-  const tools = createToolRegistry({
-    store: deps.store,
-    pipeline,
-    hooks: {
+  const hooks: RegistryHooks = {
       writeTests: author.write,
       review: reviewer.review,
       onEvaluated: async (missionId, revision) => {
@@ -62,8 +68,10 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
       onReleased: async (missionId, n) => {
         await sendMachine(deps, missionId, { type: "RELEASED", revision: n });
       },
-    },
-  });
+  };
+  // One DesignOps for the tools and the human release: they share the test-author suite cache.
+  const design = createDesignOps({ store: deps.store, pipeline, hooks });
+  const tools = createToolRegistry({ store: deps.store, pipeline, hooks, design });
 
   const runs = createRunManager({ ...deps, models, tools, links, sendMachine: (id, event) => sendMachine(deps, id, event) });
   const missions = createMissionService({ ...deps, bus, runs, links, sendMachine: (id, event) => sendMachine(deps, id, event) });
@@ -73,7 +81,7 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
       () => true,
       () => false,
     );
-  const release = createHumanRelease({ store: deps.store, broker: deps.broker, tools, missions, runs, links, review: reviewer.review, claudeConnected });
+  const release = createHumanRelease({ store: deps.store, broker: deps.broker, tools, design, missions, runs, links, review: reviewer.review, claudeConnected });
 
   return {
     missions,

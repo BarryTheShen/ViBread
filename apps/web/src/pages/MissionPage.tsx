@@ -201,6 +201,7 @@ export default function MissionPage() {
                 adapter={adapter}
                 brief={m.brief}
                 hasDesign={m.currentRevision !== undefined}
+                designChannel={detail.revision?.author.channel}
                 // The server moves a fresh mission BRIEF → CLARIFY on creation (BRIEF_RECEIVED); either way no design exists yet.
                 isNewMission={(m.phase === "BRIEF" || m.phase === "CLARIFY") && m.currentRevision === undefined}
                 onApprovalIdsChange={setChatApprovalIds}
