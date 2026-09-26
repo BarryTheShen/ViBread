@@ -31,7 +31,7 @@ export class ApprovalNotFoundError extends Error {
   }
 }
 
-function summary(mission: Mission): MissionSummary {
+function summary(mission: Mission, agentBusy = false): MissionSummary {
   return {
     id: mission.id,
     title: mission.title,
@@ -40,6 +40,7 @@ function summary(mission: Mission): MissionSummary {
     ...(mission.currentRevision !== undefined ? { currentRevision: mission.currentRevision } : {}),
     ...(mission.releasedRevision !== undefined ? { releasedRevision: mission.releasedRevision } : {}),
     updatedAt: mission.updatedAt,
+    ...(agentBusy ? { agentBusy: true } : {}),
   };
 }
 
@@ -114,7 +115,7 @@ export function createMissionService(
     },
 
     async list(ownerId) {
-      return (await store.listMissions(ownerId)).map(summary);
+      return (await store.listMissions(ownerId)).map((mission) => summary(mission, runs.active(mission.id) !== undefined));
     },
 
     async detail(missionId) {

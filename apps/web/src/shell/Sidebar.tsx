@@ -94,12 +94,15 @@ function MissionItem({ mission, collapsed }: { mission: MissionSummary; collapse
   const location = useLocation();
   const active = location.pathname === `/m/${mission.id}`;
   const dot = PHASE_DOTS[mission.phase];
+  const statusLabel = (mission.phase === "BRIEF" || mission.phase === "CLARIFY" || mission.phase === "DESIGN")
+    ? (mission.agentBusy ? "Designing…" : "Waiting for you")
+    : dot.label;
   const item = (
     <ListItemButton
       component={RouterLink}
       to={`/m/${encodeURIComponent(mission.id)}`}
       selected={active}
-      aria-label={`${mission.title} · ${dot.label}`}
+      aria-label={`${mission.title} · ${statusLabel}`}
       sx={{
         minHeight: 42,
         px: collapsed ? 1.5 : 1.75,
@@ -116,14 +119,14 @@ function MissionItem({ mission, collapsed }: { mission: MissionSummary; collapse
       {!collapsed && (
         <ListItemText
           primary={mission.title || "Untitled mission"}
-          secondary={dot.label}
+          secondary={statusLabel}
           slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.9rem" } }, secondary: { noWrap: true, sx: { color: "text.secondary", fontSize: "0.72rem" } } }}
           sx={{ minWidth: 0, ml: 1 }}
         />
       )}
     </ListItemButton>
   );
-  return collapsed ? <Tooltip title={`${mission.title} · ${dot.label}`} placement="right">{item}</Tooltip> : item;
+  return collapsed ? <Tooltip title={`${mission.title} · ${statusLabel}`} placement="right">{item}</Tooltip> : item;
 }
 
 function MissionGroup({ title, missions, collapsed }: { title: string; missions: MissionSummary[]; collapsed: boolean }) {

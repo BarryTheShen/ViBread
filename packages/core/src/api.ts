@@ -93,6 +93,7 @@ export interface MissionSummary {
   currentRevision?: number;
   releasedRevision?: number;
   updatedAt: string;
+  agentBusy?: boolean;
 }
 
 export interface ApprovalView {
