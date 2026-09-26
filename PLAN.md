@@ -1,9 +1,40 @@
-# ViBread — Build Plan (for review)
+# ViBread — Build Plan
 
 > HackWashU Fall Build Challenge, Sep 25–27 2026 · Main track + Photon bonus track.
 > Hard deadline: **Sun Sep 27, 12:00 PM CT** (Devpost). Plan written Sat Sep 26, ≈01:00 CT → ~35 h of wall clock.
 > Evidence: [`research/`](research/) (technology research, sources inline) and [`research/audit/`](research/audit/)
 > (hands-on verification of every package and claim used below: installs, type checks, offline smokes).
+
+## Build status — Sat Sep 26, ≈04:00 CT (overnight build)
+
+Everything on the ranked list (§4, items 1–16) is built, committed, and tested in the container: 22 test files / 99 tests
+(`npm test`, ~30 s), typecheck and web build clean. What is **not** verified yet needs something only the team has: real
+hardware, a Claude credential, and accounts (Google/GitHub/Photon) — see "Needs you" below.
+
+| # | Item | State | Proof (live unless noted) |
+|---|---|---|---|
+| 1 | Core v0 | Built | Virtual board: bench firmware (Eta template) in the simulator, safe idle → rails → read-before-drive self-test → diagnosis. LED pulses measured ≤ 4.02 ms, 1.1 % duty. **Real board untested** |
+| 2 | Workspace + agents + test author + RETRO | Built | MUI workspace/approval cards/modes verified in the browser. Agents verified with the AI SDK mock model (approvals signed, exactly-once, tamper rejected). A **real Claude** (Opus 5.5 via oh-my-pi) designed a night light through `/mcp` on the first try: EECOM/GUIDO/FAO GO. ViBread's own agents not yet run on a real model |
+| 3, 10 | CAPCOM (iMessage) | Built | Terminal provider: link code → brief → status → poll fallback. **Cloud iMessage untested** (no Photon project) |
+| 4 | Photo check | Built | Upload → HEIC/JPEG → per-part advisory answers (mock model). Real vision untested |
+| 5 | Checks (EECOM/GUIDO) | Built | Rule tests for every broken variant; 220 Ω/red worst case 16.5 mA; core warnings filtered |
+| 6, 12 | Schematic, replay, live "Try it" | Built | tscircuit (isolated runtime) SVG/PNG; replay; real-time sim in a worker: button presses step the moon phases exactly as the tests say |
+| 7 | Layout + LVS + steps | Built | Moon lamp: 15 jumpers, 33 steps, plug state on every step, phone focus crops; bb-400 fits |
+| 8, 14 | Verification + fault dictionary | Built | Golden → "Houston, we are GO"; button-in-GND-row, swapped LED jumpers, missing divider resistor each diagnosed with the right top candidate and highlighted holes; simulated single-fault dictionary merged into ranking |
+| 9, 15 | Sign-in, OAuth 2.1, A2A | Built | Single-operator mode live. OAuth 2.1 (DCR + PKCE + consent + token → MCP tools) end to end in a regression test; real Claude Code 2.1.283 connects with the bearer command. Google/GitHub are config-gated (redirects tested, no real client yet) |
+| 11 | Claude Code MCP + A2A | Built | `claude mcp list` → Connected; A2A ask-back → completed artifact |
+| 13 | SPICE cross-check | Built | ngspice red LED 13.40 mA vs analytic 13.41 mA |
+| 16 | Connect your Claude account | Built | oh-my-pi `login anthropic` + auth-broker + per-user auth-gateway; real claude.ai sign-in page reached from Settings, bogus code rejected, fallback to server key tested with a protocol fake. **Real sign-in needs you** |
+
+Also added while integrating: human **GO for build** (Flight Director) when the agent isn't the one releasing; mission
+completion (LAUNCH → "Does it work?" → DONE); the independent tests get written on GO for build once a credential exists.
+
+**Needs you (in order):**
+1. **A Claude credential:** Settings → *Connect your Claude account* (paste the code), or put `ANTHROPIC_API_KEY` in `.env`. Then
+   run one design from Home and watch: design agent → approval card → test author → RETRO → GO for build.
+2. **The board:** Chrome/Edge on the bench laptop → Bench → *Use USB board*: safe firmware flash (webserial-flasher), rails,
+   self-test, calibration, app flash. Fallback: `arduino-cli upload`. Tell the build which board/USB chip you have (§10 Q1).
+3. **Hostname + accounts:** stable HTTPS host (§10 Q3), Google/GitHub OAuth clients, Photon project + `HACKWITHPHOTON`.
 
 ## 0. TL;DR
 

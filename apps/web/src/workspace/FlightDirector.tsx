@@ -48,6 +48,8 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
   const connections = useConnections();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [toastOpen, setToastOpen] = useState(false);
+  // The server may write missing tests and release them as the next revision, so show what it actually released.
+  const [releasedN, setReleasedN] = useState<number | undefined>(undefined);
   const state = releaseReadiness(detail);
   const phoneUrl = `${window.location.origin}/b/${missionId}`;
 
@@ -56,8 +58,9 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
     release.mutate(
       { revision: state.revision, acknowledgeMissingReview },
       {
-        onSuccess: () => {
+        onSuccess: (released) => {
           setConfirmOpen(false);
+          setReleasedN(released.mission.releasedRevision);
           setToastOpen(true);
         },
         // The server is the authority on whether RETRO voted; if it says the review is missing, ask the person.
@@ -74,11 +77,15 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
   const fidoPending = detail.consoles.find((c) => c.console === "FIDO")?.verdict === "PENDING";
   const noAgent = connections.data?.claude?.using === "none";
   const testsBlocked = state.blocking.includes("FIDO") && fidoPending;
+  // With a Claude credential the server writes the missing tests itself when GO is pressed.
+  const onlyTestsMissing = testsBlocked && state.blocking.length === 1;
   const reason = state.revision === undefined
     ? "There's no design yet."
     : testsBlocked && noAgent
       ? "Simulation tests (FIDO) haven't been written yet: an AI agent writes them, and no Claude account or key is connected. Connect one in Settings → Connect your Claude account."
-      : testsBlocked
+      : onlyTestsMissing
+        ? "The simulation tests aren't written yet. Press GO for build and the agent writes and runs them first (this can take a minute)."
+        : testsBlocked
         ? "Simulation tests (FIDO) are still being written for this design."
         : state.blocking.length > 0
           ? `Waiting for GO from: ${state.blocking.join(", ")}.`
@@ -100,8 +107,10 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
               color="success"
               size="large"
               startIcon={<FlightTakeoffIcon />}
-              disabled={!state.allRequiredGo || release.isPending}
-              onClick={() => (state.retroMissing ? setConfirmOpen(true) : go(false))}
+              disabled={!(state.allRequiredGo || (onlyTestsMissing && !noAgent)) || release.isPending}
+              // When tests are missing but a credential exists, the review can only run after the server writes the tests:
+              // send GO directly; a later retro_missing answer still opens the dialog.
+              onClick={() => (state.retroMissing && !onlyTestsMissing ? setConfirmOpen(true) : go(false))}
               sx={{ minHeight: 48, fontWeight: 800, whiteSpace: "nowrap" }}
             >
               {release.isPending ? "Releasing…" : state.revision !== undefined ? `GO for build · r${state.revision}` : "GO for build"}
@@ -115,7 +124,7 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
         </Button>
       )}
       {release.isError && !confirmOpen && (
-        <Snackbar open autoHideDuration={6000} onClose={() => release.reset()} message={`Couldn't release: ${release.error.message}`} />
+        <Snackbar open autoHideDuration={6000} onClose={() => release.reset()} message={release.error instanceof HttpError && release.error.code === "tests_missing" ? release.error.message : `Couldn't release: ${release.error.message}`} />
       )}
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>GO for build without the independent review?</DialogTitle>
@@ -154,7 +163,7 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
               <QRCodeSVG value={phoneUrl} size={88} title="QR code for Build Mode on your phone" />
             </Box>
             <Box>
-              <Typography sx={{ fontWeight: 700 }}>GO for build! Design r{state.revision} is the build target.</Typography>
+              <Typography sx={{ fontWeight: 700 }}>GO for build! Design r{releasedN ?? state.revision} is the build target.</Typography>
               <Stack direction="row" sx={{ gap: 1, mt: 1, flexWrap: "wrap" }}>
                 <Button component={RouterLink} to={`/b/${missionId}`} variant="contained" size="small" startIcon={<PhoneIphoneIcon />} sx={{ bgcolor: "#fff", color: "#03170a", "&:hover": { bgcolor: "#e6f4ea" } }}>
                   Open Build Mode on your phone

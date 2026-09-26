@@ -158,7 +158,7 @@ describe("human release (GO for build)", () => {
 
     await runtime.release({ missionId: mission.id, revision: 1, actor: FLIGHT });
     expect(authorCalls(fast)).toBe(1); // cached: the author is not paid twice
-    expect((await deps.store.getRevision(mission.id, 2))!.suite).toEqual(golden.suite);
+    expect((await deps.store.getRevision(mission.id, 2))!.suite).toEqual({ ...golden.suite, author: "test-author" });
   }, 60_000);
 
   it("run_scenarios without a credential says the tests haven't been written", async () => {
