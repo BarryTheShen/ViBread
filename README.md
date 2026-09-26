@@ -38,11 +38,11 @@ only request them.
 Download, double-click, done: no Node.js, npm or terminal, and no browser choice (the app has Chromium built in, so the
 USB bench works the same on every OS). How it works inside: [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
 
-| OS | Download ([all builds](https://github.com/BarryTheShen/ViBread/releases?q=desktop)) | First launch if unsigned-app warnings appear |
+| OS | Download ([release desktop-v0.1.0](https://github.com/BarryTheShen/ViBread/releases/tag/desktop-v0.1.0)) | First launch if unsigned-app warnings appear |
 |---|---|---|
-| Linux x64 | `ViBread-0.1.0-linux-x86_64.AppImage` or `.deb` | AppImage: `chmod +x ViBread-*.AppImage` then run it (needs FUSE — present on desktop distros; else `sudo apt install libfuse2` or run with `APPIMAGE_EXTRACT_AND_RUN=1`). Deb: `sudo apt install ./ViBread-*.deb`, then *ViBread* in the app menu |
-| Windows 10/11 x64 | `ViBread-0.1.0-win-x64.exe` (installer) | SmartScreen: **More info → Run anyway** |
-| macOS (Apple silicon / Intel) | `ViBread-0.1.0-mac-arm64.dmg` / `-mac-x64.dmg` | Drag to Applications, open once, then **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine /Applications/ViBread.app`) |
+| Linux x64 | [`ViBread-0.1.0-linux-x86_64.AppImage`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-linux-x86_64.AppImage) or [`.deb`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-linux-amd64.deb) | AppImage: `chmod +x ViBread-*.AppImage` then run it (needs FUSE — present on desktop distros; else `sudo apt install libfuse2` or run with `APPIMAGE_EXTRACT_AND_RUN=1`). Deb: `sudo apt install ./ViBread-*.deb`, then *ViBread* in the app menu |
+| Windows 10/11 x64 | [`ViBread-0.1.0-win-x64.exe`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-win-x64.exe) (installer) | SmartScreen: **More info → Run anyway** |
+| macOS (Apple silicon / Intel) | [`ViBread-0.1.0-mac-arm64.dmg`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-mac-arm64.dmg) / [`-mac-x64.dmg`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-mac-x64.dmg) | Drag to Applications, open once, then **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine /Applications/ViBread.app`) |
 
 - **First launch** shows a setup window: it downloads the Arduino toolchain (arduino-cli 1.5.1 + AVR core 1.8.8 +
   ArduinoJson 7.4.2, SHA-256 checked, ~150 MB) and builds the example missions — about 2–3 minutes, internet needed
