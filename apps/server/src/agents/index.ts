@@ -49,10 +49,10 @@ export interface AgentRuntime {
 }
 
 /**
- * Composes the agent side of the server: deterministic pipeline, tool registry (single source for AI SDK + MCP), the
- * design agent run manager, independent test author, RETRO reviewer, photo check, and the MissionService facade.
- * `models` and `pipeline` are injectable for tests (AI SDK mock models, a recording pipeline); by default Claude via
- * @ai-sdk/anthropic with config keys and the real engine pipeline.
+ * Composes the agent side of the server: deterministic pipeline, tool registry (single source for the pi design agent +
+ * MCP), the design agent run manager (pi), independent test author, RETRO reviewer, photo check, and the MissionService
+ * facade. `models` and `pipeline` are injectable for tests (pi faux design model + AI SDK mocks, a recording pipeline); by
+ * default Claude with the owner's credential and the real engine pipeline.
  */
 export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pipeline?: Pipeline }): AgentRuntime {
   const direct = deps.models ?? anthropicModels({ config: deps.config, claudeAccounts: deps.claudeAccounts });

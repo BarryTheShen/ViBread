@@ -3,7 +3,7 @@ import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { anthropicModels } from "./models.js";
 import { HIGH_RES_LIMITS, cutCrop, identifyParts, prepareForVision, scanSystemPrompt, visionSize } from "./scan.js";
-import { jsonModel, mockModels, scriptedModel } from "./testing.js";
+import { jsonModel, mockModels, scriptedDesign } from "./testing.js";
 
 const tokens = (w: number, h: number) => Math.ceil(w / 28) * Math.ceil(h / 28);
 
@@ -68,7 +68,7 @@ describe("scan vision", () => {
     ];
     const fast = jsonModel(answers);
     const result = await identifyParts(
-      { models: mockModels(scriptedModel([]), fast) },
+      { models: mockModels(scriptedDesign([]), fast) },
       { ownerId: "operator", photos: [await photo(4032, 3024), await photo(800, 600)], types: [...BUILT_IN_PART_TYPES, USER_TYPE] },
     );
     const phone = visionSize(4032, 3024);

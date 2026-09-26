@@ -1,23 +1,17 @@
 import { randomUUID } from "node:crypto";
+import { Agent } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Actor, ToolRegistry } from "@vibread/core";
-import { ToolInputError, createAiToolset, errorMessage, isClaudeNotConnected } from "@vibread/tools";
-import {
-  convertToModelMessages,
-  hasToolCall,
-  isStepCount,
-  streamText,
-  tool,
-  type ToolSet,
-  type UIMessage,
-  type UIMessageChunk,
-} from "ai";
-import { z } from "zod";
+import { ToolInputError, errorMessage, isClaudeNotConnected } from "@vibread/tools";
+import { createUIMessageStream, type UIMessage, type UIMessageChunk } from "ai";
 import type { AgentDeps, MissionEvent } from "./deps.js";
 import type { AgentModels } from "./models.js";
+import { ASK_USER, askUserTool, registryTools, type AskUserOutput } from "./pi-tools.js";
+import { FINISH_REASONS, PiChunkTranslator, historyToPi, userContent } from "./pi-ui.js";
 import { designSystemPrompt } from "./prompts.js";
 import { actorForLog } from "./trace.js";
 
-/** Upper bound on model steps per run (PLAN §5.2 `stopWhen: isStepCount(20)`). */
+/** Upper bound on model turns per run (PLAN §5.2). */
 export const MAX_STEPS = 20;
 /** Design iterations per run before the agent must report blockers (PLAN §5.4). */
 export const MAX_DESIGN_ITERATIONS = 4;
@@ -64,16 +58,6 @@ export interface RunManager {
   stream(run: ActiveRun): ReadableStream<UIMessageChunk>;
 }
 
-const askUser = tool({
-  title: "Ask you a question",
-  description: "Ask the person ONE short clarifying question when the brief is ambiguous; the run stops until they answer.",
-  inputSchema: z.object({
-    question: z.string().min(1).max(300),
-    choices: z.array(z.string().min(1).max(80)).max(6).optional(),
-  }),
-  execute: async ({ question, choices }) => ({ summary: question, question, ...(choices ? { choices } : {}) }),
-});
-
 function friendlyError(error: unknown): string {
   if (isClaudeNotConnected(error)) return errorMessage(error);
   return `The agent hit an error: ${errorMessage(error)}`;
@@ -87,8 +71,8 @@ interface TrackedRun extends ActiveRun {
   wake: Set<() => void>;
   error?: string;
   startedAt: number;
-  /** From streamText's onEnd (absent when the run was aborted or failed before finishing). */
-  stats?: { steps: number; finish: string; usage: { input?: number; output?: number } };
+  /** From the run's pi turns (absent when it failed before the first turn). */
+  stats?: { steps: number; finish: string; usage: { input: number; output: number } };
   watched: boolean;
   finishedAt?: number;
 }
@@ -98,7 +82,7 @@ const UNWATCHED_REPLAY_MS = 10_000;
 
 interface PreparedRun {
   ui: ReadableStream<UIMessageChunk>;
-  /** Set by onFinish once the stream has ended and history is saved. */
+  /** Set by onEnd once the stream has ended and history is saved. */
   outcome(): RunOutcome | undefined;
 }
 
@@ -113,65 +97,101 @@ export function createRunManager(
     const { missionId } = run;
     const mission = await store.getMission(missionId);
     if (!mission) throw new ToolInputError(`Mission ${missionId} does not exist.`, 404);
+    const content = userContent(input.message);
+    if (!content) throw new ToolInputError("Send a message with text or a photo.");
     // Resolved per run: the owner may connect or disconnect their Claude account at any time.
-    const { model, credential } = await deps.models.design(mission.ownerId, { missionId, purpose: "design" });
+    const design = await deps.models.design(mission.ownerId, { missionId, purpose: "design" });
 
-    const history = [...(await messages.list(missionId)), input.message];
+    const prior = await messages.list(missionId);
+    const history = [...prior, input.message];
     await messages.save(missionId, history);
     const text = input.message.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
     await store.appendEvent({ missionId, channel: input.actor.channel, actor: input.actor, kind: "message", text: text.slice(0, 2000) });
     if (mission.phase === "BRIEF" || mission.phase === "CLARIFY") await deps.sendMachine(missionId, { type: "DESIGN_STARTED" });
-    if (credential.kind === "claude-account") {
+    if (design.credential.kind === "claude-account") {
       await store.appendEvent({
         missionId,
         channel: "system",
         actor: { kind: "system", id: "claude-account", name: "Claude account", channel: "system" },
         kind: "agent.credential",
-        text: `Using your Claude account${credential.email ? ` (${credential.email})` : ""}`,
-        data: credential,
+        text: `Using your Claude account${design.credential.email ? ` (${design.credential.email})` : ""}`,
+        data: design.credential,
       });
     }
 
     const agentActor: Actor = { kind: "agent", id: "design-agent", name: "Design agent", channel: input.actor.channel };
-    const toolset = createAiToolset({ registry: deps.tools, broker, store, ctx: { missionId, actor: agentActor } });
-    const tools: ToolSet = { ...toolset.tools, ask_user: askUser };
-    const names = Object.keys(tools);
-
-    const result = streamText({
-      model,
-      system: designSystemPrompt({ mission, revision: await store.getRevision(missionId) }),
-      messages: await convertToModelMessages(history, { tools }),
-      tools,
-      stopWhen: [isStepCount(MAX_STEPS), hasToolCall("ask_user")],
-      prepareStep: ({ steps }) => {
-        const iterations = steps.flatMap((s) => s.toolCalls).filter((c) => c.toolName === "propose_design").length;
-        return iterations >= MAX_DESIGN_ITERATIONS ? { activeTools: names.filter((n) => n !== "propose_design") } : {};
+    let turns = 0;
+    let proposals = 0;
+    // The pi transcript is rebuilt from the server-held UI history every run: that history is the only record.
+    const agent = new Agent({
+      initialState: {
+        systemPrompt: designSystemPrompt({ mission, revision: await store.getRevision(missionId) }),
+        model: design.model,
+        thinkingLevel: "off",
+        tools: [...registryTools({ registry: deps.tools, broker, store, ctx: { missionId, actor: agentActor } }), askUserTool],
+        messages: historyToPi(prior, design.model),
       },
-      abortSignal: run.controller.signal,
-      onError: ({ error }) => log.warn({ missionId, err: errorMessage(error) }, "design agent stream error"),
-      onEnd: ({ steps, finishReason, totalUsage }) => {
-        run.stats = {
-          steps: steps.length,
-          finish: finishReason,
-          usage: { ...(totalUsage.inputTokens !== undefined ? { input: totalUsage.inputTokens } : {}), ...(totalUsage.outputTokens !== undefined ? { output: totalUsage.outputTokens } : {}) },
-        };
+      streamFn: design.streamFn,
+      sessionId: missionId,
+      toolExecution: "sequential",
+      beforeToolCall: async ({ toolCall }) => {
+        if (toolCall.name !== "propose_design") return undefined;
+        if (proposals >= MAX_DESIGN_ITERATIONS) {
+          return { block: true, reason: `That was design attempt ${proposals + 1}; the limit is ${MAX_DESIGN_ITERATIONS} per turn. Tell the person exactly what still blocks and what they could decide or change.` };
+        }
+        proposals++;
+        return undefined;
+      },
+      finishTurn: ({ toolResults }) => {
+        turns++;
+        // The run waits for the person after asking; the answer arrives as their next message (a new run).
+        if (toolResults.some((r) => r.toolName === ASK_USER && !r.isError)) return { action: "end" };
+        return turns >= MAX_STEPS ? { action: "end" } : undefined;
       },
     });
+    run.controller.signal.addEventListener("abort", () => agent.abort(), { once: true });
 
     let outcome: RunOutcome | undefined;
-    const ui = result.toUIMessageStream({
+    const ui = createUIMessageStream<UIMessage>({
       originalMessages: history,
-      generateMessageId: randomUUID,
+      generateId: randomUUID,
       onError: (error) => {
         run.error = friendlyError(error);
+        log.error({ missionId, err: errorMessage(error) }, "design agent run failed");
         return run.error;
       },
-      onFinish: async ({ messages: all, isAborted }) => {
+      execute: async ({ writer }) => {
+        writer.write({ type: "start" });
+        const translator = new PiChunkTranslator((chunk) => writer.write(chunk));
+        const replies: AssistantMessage[] = [];
+        agent.subscribe((event) => {
+          translator.handle(event);
+          if (event.type === "message_end" && event.message.role === "assistant") replies.push(event.message);
+        });
+        if (!run.controller.signal.aborted) await agent.prompt({ role: "user", content, timestamp: Date.now() });
+        const last = replies.at(-1);
+        run.stats = {
+          steps: replies.length,
+          finish: last?.stopReason ?? "aborted",
+          usage: { input: replies.reduce((sum, r) => sum + r.usage.input, 0), output: replies.reduce((sum, r) => sum + r.usage.output, 0) },
+        };
+        if (run.controller.signal.aborted || last?.stopReason === "aborted") {
+          writer.write({ type: "abort" });
+          return;
+        }
+        if (last?.stopReason === "error") {
+          log.warn({ missionId, err: last.errorMessage }, "design agent model error");
+          run.error = friendlyError(new Error(last.errorMessage ?? "the model request failed"));
+          writer.write({ type: "error", errorText: run.error });
+        }
+        writer.write({ type: "finish", finishReason: last ? FINISH_REASONS[last.stopReason] : "other" });
+      },
+      onEnd: async ({ messages: all, isAborted }) => {
         await messages.save(missionId, all);
         const reply = lastAssistant(all);
         const text = reply?.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n").trim() ?? "";
-        const asked = reply?.parts.find((p) => p.type === "tool-ask_user" && p.state === "output-available");
-        const question = asked && "input" in asked ? (asked.input as { question?: string }).question : undefined;
+        const asked = reply?.parts.find((p) => p.type === `tool-${ASK_USER}` && p.state === "output-available");
+        const question = asked && "output" in asked ? (asked.output as AskUserOutput | undefined)?.question : undefined;
         outcome = { messages: all, aborted: isAborted, text, ...(question ? { question } : {}), ...(run.error ? { error: run.error } : {}) };
         if (question) await deps.sendMachine(missionId, { type: "NEEDS_CLARIFICATION" });
         if (text || question) {

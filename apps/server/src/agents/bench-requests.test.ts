@@ -2,12 +2,13 @@ import { randomBytes } from "node:crypto";
 import { createServer } from "node:net";
 import { GOLDEN } from "@vibread/fixtures";
 import type { Actor, BenchRunResult } from "@vibread/core";
-import { createAiToolset, invokeTool } from "@vibread/tools";
-import { isStepCount, streamText } from "ai";
+import { Agent } from "@earendil-works/pi-agent-core";
+import { invokeTool } from "@vibread/tools";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { loadConfig } from "../config.js";
 import { startServer, type RunningServer } from "../main.js";
-import { scriptedModel } from "./testing.js";
+import { registryTools } from "./pi-tools.js";
+import { scriptedDesign } from "./testing.js";
 
 const golden = GOLDEN.find((g) => g.key === "moon-phase-lamp")!;
 const OPERATOR: Actor = { kind: "human", id: "operator", name: "Operator", channel: "web" };
@@ -32,7 +33,7 @@ async function freePort(): Promise<number> {
 
 /**
  * Audit R2-1: agent bench requests must reach the bench. Real server (SQLite broker, REST routes), both tool paths:
- * MCP/A2A (`invokeTool`) and the AI SDK agent loop (`createAiToolset` + streamText with a scripted model).
+ * MCP/A2A (`invokeTool`) and the design agent's pi tools (`registryTools` in a pi Agent with a scripted model).
  */
 describe("bench requests from agents reach the bench", () => {
   let running: RunningServer;
@@ -120,19 +121,20 @@ describe("bench requests from agents reach the bench", () => {
     expect((await ctx.broker.get(id))?.status).toBe("consumed");
   });
 
-  it("the design agent's request_bench_action (AI SDK loop) is listed for the bench and never executed", async () => {
+  it("the design agent's request_bench_action (pi agent) is listed for the bench and never executed", async () => {
     const { ctx } = running.context;
     const missionId = await missionWithRevision();
-    const agent: Actor = { kind: "agent", id: "design-agent", name: "Design agent", channel: "web" };
-    const toolset = createAiToolset({ registry: ctx.tools, broker: ctx.broker, store: ctx.store, ctx: { missionId, actor: agent } });
-    const result = streamText({
-      model: scriptedModel([{ toolCalls: [{ name: "request_bench_action", input: { action: "run-selftest", note: "Check the LEDs" } }] }, { text: "Click Start at the bench." }]),
-      prompt: "Run the self-test.",
-      tools: toolset.tools,
-      stopWhen: isStepCount(3),
+    const actor: Actor = { kind: "agent", id: "design-agent", name: "Design agent", channel: "web" };
+    const design = scriptedDesign([{ toolCalls: [{ name: "request_bench_action", input: { action: "run-selftest", note: "Check the LEDs" } }] }, { text: "Click Start at the bench." }]);
+    const agent = new Agent({
+      initialState: { systemPrompt: "You are the design agent.", model: design.model, tools: registryTools({ registry: ctx.tools, broker: ctx.broker, store: ctx.store, ctx: { missionId, actor } }) },
+      streamFn: design.streamFn,
     });
     const outputs: unknown[] = [];
-    for await (const part of result.fullStream) if (part.type === "tool-result") outputs.push(part.output);
+    agent.subscribe((event) => {
+      if (event.type === "tool_execution_end" && !event.isError) outputs.push((event.result as { details: unknown }).details);
+    });
+    await agent.prompt("Run the self-test.");
     expect(outputs).toEqual([expect.objectContaining({ action: "run-selftest", status: "waiting-for-bench-click", revision: 1, approvalId: expect.any(String) })]);
 
     const requests = await listed(missionId);

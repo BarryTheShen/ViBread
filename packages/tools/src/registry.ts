@@ -80,7 +80,7 @@ async function appHex(store: MissionStore, revision: Revision): Promise<string> 
 }
 
 /**
- * The ViBread tool surface (PLAN §5.2). Defined once; adapted to AI SDK tools (ai-sdk.ts) and to MCP by Channels from
+ * The ViBread tool surface (PLAN §5.2). Defined once; adapted to the design agent's pi tools (apps/server agents/pi-tools.ts) and to MCP by Channels from
  * `list()`. Engines are imported inside handlers so one broken engine only breaks the tools that need it.
  */
 export function createToolRegistry(deps: {
