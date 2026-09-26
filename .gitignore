@@ -12,3 +12,8 @@ coverage/
 *.db-journal
 *.sqlite
 tmp/
+.toolchain/
+data/
+*.db-wal
+*.db-shm
+.jobs/

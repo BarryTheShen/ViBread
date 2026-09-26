@@ -1,0 +1,13 @@
+{
+  "name": "@vibread/firmware",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@vibread/core": "0.1.0",
+    "eta": "4.6.0"
+  }
+}

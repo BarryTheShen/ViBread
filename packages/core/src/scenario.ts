@@ -1,0 +1,79 @@
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { z } from "zod";
+
+/**
+ * `vibread.sim/v1` — Wokwi-shaped scenario files the independent test author writes and the avr8js runner executes.
+ *
+ * Semantics (the simulator implements exactly this):
+ *  - Virtual time starts at 0 at MCU reset. `setup` values hold from t = 0. Defaults when a part is not in `setup`:
+ *    light level 0.8 (a lit room), analog 0.0, digital false (button released).
+ *  - `wait` advances virtual time by N ms.
+ *  - `set-digital` sets a button (true = pressed) or a generic digital sensor output level, instantly.
+ *  - `press` = pressed, hold `holdMs`, released, then wait `gapMs`.
+ *  - `bounce` = `edges` alternating contact changes spread evenly over `ms`, ending in state `to`; no extra wait.
+ *  - `set-light` sets a photoresistor's relative light level 0 (dark) … 1 (bright); see `photoresistorOhms`.
+ *  - `set-analog` sets a potentiometer wiper position 0 (at pin A) … 1 (at pin B), or a generic analog sensor output as a
+ *    fraction of VCC.
+ *  - `expect-pin` checks a board pin's driven output level now (the pin must be an OUTPUT).
+ *  - `expect-part` watches a part for `windowMs` (advancing time): LED "on" = lit ≥ 90 % of the window, "off" = ≤ 10 %;
+ *    active buzzer "on" = sounding the same way.
+ *  - `expect-pwm` measures the HIGH fraction of a pin over `windowMs` (advancing time).
+ *  - `expect-tone` measures a passive buzzer's drive frequency over `windowMs` (advancing time).
+ *  - `expect-serial` passes when serial output since reset contains `contains`, waiting up to `withinMs`.
+ */
+export const SIM_SCHEMA = "vibread.sim/v1" as const;
+
+const part = z.string().min(1);
+const ms = z.number().int().positive().max(60_000);
+
+export const ScenarioStepSchema = z.union([
+  z.object({ wait: ms }).strict(),
+  z.object({ "set-digital": z.object({ part, value: z.boolean() }).strict() }).strict(),
+  z.object({ press: z.object({ part, holdMs: ms.default(120), gapMs: z.number().int().nonnegative().max(60_000).default(150) }).strict() }).strict(),
+  z.object({ bounce: z.object({ part, to: z.boolean(), edges: z.number().int().min(2).max(20).default(6), ms: z.number().positive().max(30).default(8) }).strict() }).strict(),
+  z.object({ "set-light": z.object({ part, level: z.number().min(0).max(1) }).strict() }).strict(),
+  z.object({ "set-analog": z.object({ part, value: z.number().min(0).max(1) }).strict() }).strict(),
+  z.object({ "expect-pin": z.object({ pin: z.string().min(1), level: z.enum(["high", "low"]) }).strict() }).strict(),
+  z.object({ "expect-part": z.object({ part, state: z.enum(["on", "off"]), windowMs: ms.default(50) }).strict() }).strict(),
+  z.object({ "expect-pwm": z.object({ pin: z.string().min(1), min: z.number().min(0).max(1), max: z.number().min(0).max(1), windowMs: ms.default(100) }).strict() }).strict(),
+  z.object({ "expect-tone": z.object({ part, minHz: z.number().positive(), maxHz: z.number().positive(), windowMs: ms.default(200) }).strict() }).strict(),
+  z.object({ "expect-serial": z.object({ contains: z.string().min(1), withinMs: z.number().int().nonnegative().max(60_000).default(0) }).strict() }).strict(),
+]);
+export type ScenarioStep = z.infer<typeof ScenarioStepSchema>;
+
+/** Edge-case categories the coverage rules look for (bounce/rapid need a button; threshold/hysteresis need an analog input). */
+export const SCENARIO_CATEGORIES = ["normal", "power-on", "bounce", "rapid", "threshold", "hysteresis", "edge"] as const;
+export type ScenarioCategory = (typeof SCENARIO_CATEGORIES)[number];
+
+export const ScenarioSchema = z.object({
+  id: z.string().regex(/^T\d+$/),
+  /** Plain-language line the human reads at GO ("In the dark, pressing the button 3 times lights 3 LEDs from the right"). */
+  title: z.string().min(1),
+  clauses: z.array(z.string().regex(/^C\d+$/)).min(1),
+  categories: z.array(z.enum(SCENARIO_CATEGORIES)).min(1),
+  setup: z
+    .object({
+      light: z.record(z.string(), z.number().min(0).max(1)).optional(),
+      analog: z.record(z.string(), z.number().min(0).max(1)).optional(),
+      digital: z.record(z.string(), z.boolean()).optional(),
+    })
+    .strict()
+    .default({}),
+  steps: z.array(ScenarioStepSchema).min(1),
+});
+export type Scenario = z.infer<typeof ScenarioSchema>;
+
+export const TestSuiteSchema = z.object({
+  schema: z.literal(SIM_SCHEMA),
+  author: z.enum(["test-author", "fixture", "human"]),
+  scenarios: z.array(ScenarioSchema).min(1),
+});
+export type TestSuite = z.infer<typeof TestSuiteSchema>;
+
+export function parseSuiteYaml(text: string): TestSuite {
+  return TestSuiteSchema.parse(parseYaml(text));
+}
+
+export function suiteToYaml(suite: TestSuite): string {
+  return stringifyYaml(suite);
+}

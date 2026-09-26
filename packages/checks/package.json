@@ -1,0 +1,13 @@
+{
+  "name": "@vibread/checks",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@vibread/core": "0.1.0",
+    "json-rules-engine": "7.3.1"
+  }
+}

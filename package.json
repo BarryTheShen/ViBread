@@ -1,0 +1,28 @@
+{
+  "name": "vibread",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "fixtures"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "setup:toolchain": "bash scripts/setup-toolchain.sh",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json && npm run typecheck -w @vibread/web",
+    "dev:server": "npm run dev -w @vibread/server",
+    "dev:web": "npm run dev -w @vibread/web",
+    "build": "npm run build -w @vibread/web",
+    "start": "npm run start -w @vibread/server"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.4",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "5.0.2"
+  }
+}

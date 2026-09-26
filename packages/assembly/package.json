@@ -1,0 +1,33 @@
+{
+  "name": "@vibread/assembly",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@vibread/core": "0.1.0",
+    "@tscircuit/core": "0.0.1989",
+    "circuit-json": "0.0.506",
+    "circuit-to-svg": "0.0.433",
+    "@resvg/resvg-js": "2.6.2",
+    "@tscircuit/alphabet": "0.0.27",
+    "@tscircuit/capacity-autorouter": "0.0.937",
+    "@tscircuit/checks": "0.0.218",
+    "@tscircuit/circuit-json-util": "0.0.116",
+    "@tscircuit/create-fdm-enclosure": "0.0.7",
+    "@tscircuit/footprinter": "0.0.429",
+    "@tscircuit/infgrid-ijump-astar": "0.0.35",
+    "@tscircuit/matchpack": "0.0.97",
+    "@tscircuit/math-utils": "0.0.38",
+    "@tscircuit/props": "0.0.667",
+    "@tscircuit/schematic-match-adapt": "0.0.22",
+    "bpc-graph": "0.0.67",
+    "circuit-json-to-bpc": "0.0.14",
+    "circuit-json-to-connectivity-map": "0.0.31",
+    "circuit-json-to-spice": "0.0.46",
+    "schematic-symbols": "0.0.247",
+    "spicets": "0.0.5"
+  }
+}
