@@ -1,0 +1,207 @@
+#include <Arduino.h>
+#include <ArduinoJson.h>
+#include <avr/io.h>
+#include <avr/interrupt.h>
+#include <avr/pgmspace.h>
+#include <string.h>
+
+#define VB_SAMPLES <%= it.samples %>UL
+#define VB_LED_ON_MS <%= it.ledOnMs %>U
+#define VB_LED_PERIOD_MS <%= it.ledPeriodMs %>U
+#define VB_LED_PULSES <%= it.ledPulses %>U
+#define VB_PROMPT_TIMEOUT <%= it.promptTimeoutMs %>UL
+
+static bool vbFirstCommand = false;
+static bool vbReadonlyDone = false;
+static bool vbAbort = false;
+static unsigned long vbLastHello = 0;
+static char vbLine[192];
+static uint8_t vbLineLength = 0;
+static bool vbWaiting = false;
+static bool vbAnswerReady = false;
+static char vbPendingId[24];
+static char vbAnswer[32];
+
+static void vbPrintJsonString(const char* value) {
+  if (value == nullptr) return;
+  while (*value != '\0') {
+    const char c = *value++;
+    if (c == '\\' || c == '"') { Serial.print('\\'); Serial.print(c); }
+    else if (c == '\n') Serial.print(F("\\n"));
+    else if (c == '\r') Serial.print(F("\\r"));
+    else if (c == '\t') Serial.print(F("\\t"));
+    else Serial.print(c);
+  }
+}
+
+static void vbPrintFlash(const char* value) {
+  Serial.print((const __FlashStringHelper*)value);
+}
+
+static void vbEmitHello() {
+  Serial.print(F("{\"t\":\"hello\",\"fw\":\"vibread-bench\",\"proto\":1,\"design\":\""));
+  Serial.print((const __FlashStringHelper*)PSTR("<%= it.design %>"));
+  Serial.print(F("\",\"board\":\""));
+  Serial.print((const __FlashStringHelper*)PSTR("<%= it.board %>"));
+  Serial.println(F("\"}"));
+}
+
+static void vbEmitErr(const char* message) {
+  Serial.print(F("{\"t\":\"err\",\"msg\":\""));
+  vbPrintFlash(message);
+  Serial.println(F("\"}"));
+}
+
+static void vbEmitBegin(const char* test) {
+  Serial.print(F("{\"t\":\"begin\",\"test\":\"")); vbPrintFlash(test); Serial.println(F("\"}"));
+}
+
+static void vbEmitEnd(const char* test, const char* status, const char* note) {
+  Serial.print(F("{\"t\":\"end\",\"test\":\"")); vbPrintFlash(test);
+  Serial.print(F("\",\"status\":\"")); vbPrintFlash(status);
+  if (note != nullptr) { Serial.print(F("\",\"note\":\"")); vbPrintFlash(note); }
+  Serial.println(F("\"}"));
+}
+
+static void vbEmitRead(const char* pin, uint8_t pull, uint32_t ones, uint32_t n) {
+  Serial.print(F("{\"t\":\"read\",\"pin\":\"")); vbPrintFlash(pin);
+  Serial.print(F("\",\"pull\":")); Serial.print(pull); Serial.print(F(",\"ones\":")); Serial.print(ones);
+  Serial.print(F(",\"n\":")); Serial.print(n); Serial.println(F("}"));
+}
+
+static void vbEmitProbe(const char* pin, uint8_t drive, uint8_t readback) {
+  Serial.print(F("{\"t\":\"probe\",\"pin\":\"")); vbPrintFlash(pin);
+  Serial.print(F("\",\"drive\":")); Serial.print(drive); Serial.print(F(",\"readback\":")); Serial.print(readback); Serial.println(F("}"));
+}
+
+static void vbEmitStuck(const char* pin, uint8_t level) {
+  Serial.print(F("{\"t\":\"stuck\",\"pin\":\"")); vbPrintFlash(pin);
+  Serial.print(F("\",\"level\":")); Serial.print(level); Serial.println(F("}"));
+}
+
+static void vbEmitVcc(uint16_t mv) {
+  Serial.print(F("{\"t\":\"vcc\",\"mv\":")); Serial.print(mv); Serial.println(F("}"));
+}
+
+static void vbEmitAdc(const char* pin, const char* phase, uint32_t med, uint16_t minValue, uint16_t maxValue, uint32_t n) {
+  Serial.print(F("{\"t\":\"adc\",\"pin\":\"")); vbPrintFlash(pin);
+  Serial.print(F("\",\"phase\":\"")); vbPrintFlash(phase); Serial.print(F("\",\"med\":")); Serial.print(med);
+  Serial.print(F(",\"min\":")); Serial.print(minValue); Serial.print(F(",\"max\":")); Serial.print(maxValue);
+  Serial.print(F(",\"n\":")); Serial.print(n); Serial.println(F("}"));
+}
+
+static void vbEmitObsNum(const char* test, const char* part, const char* key, uint32_t value) {
+  Serial.print(F("{\"t\":\"obs\",\"test\":\"")); vbPrintFlash(test);
+  if (part != nullptr) { Serial.print(F("\",\"part\":\"")); vbPrintFlash(part); }
+  Serial.print(F("\",\"key\":\"")); vbPrintFlash(key); Serial.print(F("\",\"v\":")); Serial.print(value); Serial.println(F("}"));
+}
+
+static void vbEmitObsStr(const char* test, const char* part, const char* key, const char* value) {
+  Serial.print(F("{\"t\":\"obs\",\"test\":\"")); vbPrintFlash(test);
+  if (part != nullptr) { Serial.print(F("\",\"part\":\"")); vbPrintFlash(part); }
+  Serial.print(F("\",\"key\":\"")); vbPrintFlash(key); Serial.print(F("\",\"v\":\"")); vbPrintJsonString(value); Serial.println(F("\"}"));
+}
+
+static void vbEmitAsk(const char* id, const char* test, const char* kind, const char* part, const char* choices, uint32_t timeoutMs) {
+  Serial.print(F("{\"t\":\"ask\",\"id\":\"")); Serial.print(id);
+  Serial.print(F("\",\"test\":\"")); vbPrintFlash(test); Serial.print(F("\",\"kind\":\"")); vbPrintFlash(kind);
+  if (part != nullptr) { Serial.print(F("\",\"part\":\"")); vbPrintFlash(part); }
+  Serial.print(F("\",\"choices\":[")); Serial.print(choices); Serial.print(F("],\"timeoutMs\":")); Serial.print(timeoutMs); Serial.println(F("}"));
+}
+
+static void vbPollAnswer() {
+  while (Serial.available() > 0) {
+    const char c = (char)Serial.read();
+    if (c == '\r') continue;
+    if (c != '\n' && vbLineLength + 1 < sizeof(vbLine)) { vbLine[vbLineLength++] = c; continue; }
+    vbLine[vbLineLength] = '\0';
+    vbLineLength = 0;
+    JsonDocument doc;
+    const DeserializationError error = deserializeJson(doc, vbLine);
+    if (error) continue;
+    const char* command = doc["c"] | "";
+    if (strcmp_P(command, PSTR("abort")) == 0) { vbAbort = true; continue; }
+    if (!vbWaiting || strcmp_P(command, PSTR("answer")) != 0) continue;
+    const char* id = doc["id"] | "";
+    if (strcmp(id, vbPendingId) != 0) continue;
+    const char* value = doc["v"] | "timeout";
+    strncpy(vbAnswer, value, sizeof(vbAnswer) - 1);
+    vbAnswer[sizeof(vbAnswer) - 1] = '\0';
+    vbAnswerReady = true;
+  }
+}
+
+static const char* vbAsk(const char* idP, const char* test, const char* kind, const char* part, const char* choices, uint32_t timeoutMs) {
+  strcpy_P(vbPendingId, idP);
+  vbAnswer[0] = '\0';
+  vbAnswerReady = false;
+  vbWaiting = true;
+  vbEmitAsk(vbPendingId, test, kind, part, choices, timeoutMs);
+  const unsigned long started = millis();
+  while (!vbAnswerReady && !vbAbort && (uint32_t)(millis() - started) < timeoutMs) { vbPollAnswer(); delay(1); }
+  vbWaiting = false;
+  if (vbAbort) return nullptr;
+  if (!vbAnswerReady) { strcpy(vbAnswer, "timeout"); }
+  return vbAnswer;
+}
+
+<%= it.pinHelpers %>
+
+static void vbRunReadonly();
+static void vbRunRails();
+static void vbRunDigitalStuck();
+static void vbRunButton();
+static void vbRunLight();
+static void vbRunPot();
+static void vbRunLed();
+static void vbRunBuzzer();
+static void vbRunContinuity();
+
+<%= it.tests %>
+
+static void vbRunNamed(const char* test) {
+  <%= it.dispatch %>
+}
+
+static void vbRunAll() {
+  <%= it.allTests %>
+  Serial.println(F("{\"t\":\"done\"}"));
+}
+
+static void vbConsumeCommand(const char* line) {
+  JsonDocument doc;
+  const DeserializationError error = deserializeJson(doc, line);
+  if (error) { vbEmitErr(PSTR("invalid JSON command")); return; }
+  vbFirstCommand = true;
+  const char* command = doc["c"] | "";
+  if (strcmp_P(command, PSTR("hello")) == 0) { vbEmitHello(); return; }
+  if (strcmp_P(command, PSTR("abort")) == 0) { vbAbort = true; return; }
+  if (strcmp_P(command, PSTR("run")) != 0) { vbEmitErr(PSTR("unknown command")); return; }
+  const char* test = doc["test"] | "";
+  vbAbort = false;
+  if (strcmp_P(test, PSTR("all")) == 0) vbRunAll();
+  else vbRunNamed(test);
+}
+
+static void vbPumpCommands() {
+  while (Serial.available() > 0) {
+    const char c = (char)Serial.read();
+    if (c == '\r') continue;
+    if (c != '\n' && vbLineLength + 1 < sizeof(vbLine)) { vbLine[vbLineLength++] = c; continue; }
+    vbLine[vbLineLength] = '\0';
+    vbLineLength = 0;
+    vbConsumeCommand(vbLine);
+  }
+}
+
+void setup() {
+  <%= it.safeIdle %>
+  Serial.begin(115200);
+  vbLastHello = millis();
+  vbEmitHello();
+}
+
+void loop() {
+  if (!vbFirstCommand && (uint32_t)(millis() - vbLastHello) >= 2000UL) { vbLastHello = millis(); vbEmitHello(); }
+  vbPumpCommands();
+}

@@ -1,0 +1,30 @@
+{
+  "name": "vibread-schematic-runtime",
+  "private": true,
+  "type": "module",
+  "description": "Isolated install of the tscircuit stack (needs zod 3; the workspace uses zod 4). Rendered in a child process by packages/assembly/src/schematic.",
+  "dependencies": {
+    "@tscircuit/alphabet": "0.0.27",
+    "@tscircuit/capacity-autorouter": "0.0.937",
+    "@tscircuit/checks": "0.0.218",
+    "@tscircuit/circuit-json-util": "0.0.116",
+    "@tscircuit/core": "0.0.1989",
+    "@tscircuit/create-fdm-enclosure": "0.0.7",
+    "@tscircuit/footprinter": "0.0.429",
+    "@tscircuit/infgrid-ijump-astar": "0.0.35",
+    "@tscircuit/matchpack": "0.0.97",
+    "@tscircuit/math-utils": "0.0.38",
+    "@tscircuit/props": "0.0.667",
+    "@tscircuit/schematic-match-adapt": "0.0.22",
+    "bpc-graph": "0.0.67",
+    "circuit-json": "0.0.506",
+    "circuit-json-to-bpc": "0.0.14",
+    "circuit-json-to-connectivity-map": "0.0.31",
+    "circuit-json-to-spice": "0.0.46",
+    "circuit-to-svg": "0.0.433",
+    "schematic-symbols": "0.0.247",
+    "spicets": "0.0.5",
+    "typescript": "5.9.3",
+    "zod": "3.25.76"
+  }
+}
