@@ -55,15 +55,17 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
   const chat = useChat();
   const [open, setOpen] = useState(false);
   const detailsId = useId();
-  const label = toolLabel(invocation.toolName);
+  // MUI X Chat can create a tool part without its name when the part's first chunk arrives mid-stream (after a reconnect).
+  const toolName: string | undefined = invocation.toolName;
+  const label = toolLabel(toolName);
 
-  if (invocation.toolName === "ask_user") return <AskUserCard invocation={invocation} message={message} />;
+  if (toolName === "ask_user") return <AskUserCard invocation={invocation} message={message} />;
 
   if (invocation.state === "approval-requested" || (invocation.state === "approval-responded" && invocation.approvalId)) {
     const approvalId = invocation.approvalId ?? invocation.toolCallId;
     const meta = approvalMetaOf(message.metadata, approvalId);
     const view = detail?.pendingApprovals.find((a) => a.id === approvalId);
-    const summary = meta?.summary ?? view?.summary ?? `The agent wants to: ${invocation.toolName.replace(/_/g, " ")}`;
+    const summary = meta?.summary ?? view?.summary ?? (toolName ? `The agent wants to: ${toolName.replace(/_/g, " ")}` : "The agent wants your OK for its next step.");
     const consequence = meta?.consequence ?? view?.consequence ?? "It will continue as soon as you decide.";
     return (
       <ApprovalCard
@@ -159,7 +161,7 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
       <Collapse in={open} id={detailsId} unmountOnExit>
         <Stack sx={{ gap: 1, mt: 1 }}>
           <Typography variant="caption" sx={{ fontFamily: MONO_FONT, color: "text.secondary" }}>
-            tool {invocation.toolName} · call {invocation.toolCallId}
+            tool {toolName ?? "unknown"} · call {invocation.toolCallId}
           </Typography>
           {invocation.input !== undefined && (
             <>
