@@ -50,7 +50,8 @@ async function boot(): Promise<void> {
     // After an automatic restart the port can change; keep the window on the live server.
     if (mainWindow && new URL(mainWindow.webContents.getURL() || info.localUrl).origin !== info.localUrl) void mainWindow.loadURL(`${info.localUrl}/`);
   });
-  serial = installSerial(session.defaultSession, () => server.info?.localUrl, () => mainWindow);
+  const desktopLog = openLog(paths, "desktop.log");
+  serial = installSerial(session.defaultSession, () => server.info?.localUrl, () => mainWindow, (line) => desktopLog.write(`${new Date().toISOString()} ${line}\n`));
   registerIpc();
   buildMenu();
 

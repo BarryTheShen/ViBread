@@ -17,7 +17,12 @@ export interface SerialState {
  * Web Serial for the app origin only: navigator.serial.requestPort() → 'select-serial-port'. Exactly one known Arduino
  * port is picked automatically; several ports get a native chooser; none cancels (requestPort rejects NotFoundError).
  */
-export function installSerial(session: Session, appOrigin: () => string | undefined, parent: () => BrowserWindow | undefined): SerialState {
+export function installSerial(
+  session: Session,
+  appOrigin: () => string | undefined,
+  parent: () => BrowserWindow | undefined,
+  log: (line: string) => void,
+): SerialState {
   const state: SerialState = { handlerInstalled: true };
   const trusted = (origin: string | undefined) => {
     const expected = appOrigin();
@@ -35,6 +40,7 @@ export function installSerial(session: Session, appOrigin: () => string | undefi
     };
     const finish = (portId: string, picked: string) => {
       state.lastChooser = { ports: portList.length, picked };
+      log(`select-serial-port: ${portList.length} port(s) [${portList.map((p) => `${p.portName} ${p.vendorId ?? "?"}:${p.productId ?? "?"}`).join(", ")}] → ${picked}`);
       callback(portId);
     };
     if (portList.length === 0) return finish("", "none (no matching ports)");

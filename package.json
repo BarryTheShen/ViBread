@@ -11,15 +11,17 @@
     "node": ">=22.12"
   },
   "scripts": {
-    "setup:toolchain": "bash scripts/setup-toolchain.sh",
+    "setup:toolchain": "node scripts/setup-toolchain.mjs",
     "test": "vitest run",
     "typecheck": "tsc -p tsconfig.json && npm run typecheck -w @vibread/web",
     "dev:server": "npm run dev -w @vibread/server",
     "dev:web": "npm run dev -w @vibread/web",
     "build": "npm run build -w @vibread/web",
     "start": "npm start -w @vibread/server",
-    "postinstall": "npm install --prefix packages/assembly/schematic-runtime --no-audit --no-fund --install-links=false",
-    "seed": "tsx --env-file-if-exists=.env scripts/seed-golden.ts"
+    "postinstall": "cd packages/assembly/schematic-runtime && npm install --no-audit --no-fund --install-links=false",
+    "seed": "tsx --env-file-if-exists=.env scripts/seed-golden.ts",
+    "desktop": "npm run build && npm start -w @vibread/desktop",
+    "desktop:dist": "npm run build && npm run dist -w @vibread/desktop"
   },
   "devDependencies": {
     "@types/node": "22.20.4",
