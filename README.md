@@ -6,6 +6,8 @@ describe what the circuit should do; ViBread's agent designs it (parts from your
 phone, and a **self-test over USB** checks the real build and says *where* it is wrong ("Houston, we have a problem: D2
 reads LOW even with the button released — its leg shares row 17 with the GND jumper").
 
+**New here? Read [HOW-IT-WORKS.md](HOW-IT-WORKS.md)** — what the app does, step by step, in plain words.
+
 Built for the HackWashU Fall Build Challenge (Sep 25–27, 2026; theme "Fly Me to the Moon"). The full plan is in
 [PLAN.md](PLAN.md); research and hands-on library audits are in [research/](research/).
 
