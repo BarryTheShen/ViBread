@@ -33,16 +33,44 @@ only request them.
 
 ## Install
 
+### Option A — Desktop app (recommended)
+
+Download, double-click, done: no Node.js, npm or terminal, and no browser choice (the app has Chromium built in, so the
+USB bench works the same on every OS). How it works inside: [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
+
+| OS | Download ([release desktop-v0.1.0](https://github.com/BarryTheShen/ViBread/releases/tag/desktop-v0.1.0)) | First launch if unsigned-app warnings appear |
+|---|---|---|
+| Linux x64 | [`ViBread-0.1.0-linux-x86_64.AppImage`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-linux-x86_64.AppImage) or [`.deb`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-linux-amd64.deb) | AppImage: `chmod +x ViBread-*.AppImage` then run it (needs FUSE — present on desktop distros; else `sudo apt install libfuse2` or run with `APPIMAGE_EXTRACT_AND_RUN=1`). Deb: `sudo apt install ./ViBread-*.deb`, then *ViBread* in the app menu |
+| Windows 10/11 x64 | [`ViBread-0.1.0-win-x64.exe`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-win-x64.exe) (installer) | SmartScreen: **More info → Run anyway** |
+| macOS (Apple silicon / Intel) | [`ViBread-0.1.0-mac-arm64.dmg`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-mac-arm64.dmg) / [`-mac-x64.dmg`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-mac-x64.dmg) | Drag to Applications, open once, then **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine /Applications/ViBread.app`) |
+
+- **First launch** shows a setup window: it downloads the Arduino toolchain (arduino-cli 1.5.1 + AVR core 1.8.8 +
+  ArduinoJson 7.4.2, SHA-256 checked, ~150 MB) and builds the example missions — about 2–3 minutes, internet needed
+  once. Later launches start in ~10 s. The download is ~160–200 MB; installed size ~600 MB plus the toolchain.
+- **USB on Linux:** add yourself to the serial group once and log out/in: `sudo usermod -aG dialout $USER` (Arch:
+  `uucp`). Then the bench's *Choose filtered USB port* picks the Arduino automatically (or asks when several are plugged in).
+- **Phones:** menu **ViBread → Show phone link / QR** (same Wi-Fi). Allow ViBread through the firewall when your OS
+  asks (Windows/macOS prompt on first phone connection; private networks only).
+- **AI agents:** menu **ViBread → Set Anthropic API key…** (stored encrypted in the system keychain), or connect a
+  Claude account in Settings.
+- **Your data** lives in `~/.config/ViBread` (Linux), `%APPDATA%\ViBread` (Windows), `~/Library/Application Support/ViBread`
+  (macOS): `data/` (missions), `toolchain/`, `logs/server.log`, `logs/setup.log`. Menu: *Open data folder*, *Open logs*,
+  *Reset example missions*.
+- **SPICE cross-check** needs [ngspice](https://ngspice.sourceforge.io/) installed (`sudo apt install ngspice` /
+  `brew install ngspice` / Windows: add `ngspice.exe` to `PATH`); without it EECOM reports SPICE as unavailable.
+
+### Option B — From source (developers)
+
 Tested from a clean clone of this repository (install → toolchain → build → seed → 99 tests → app) on Linux x86_64.
 
 ### 1. What you need
 
 | | Version | Check with | Notes |
 |---|---|---|---|
-| OS | macOS (Intel or Apple silicon), Linux x86_64/arm64, or Windows **inside WSL2** | — | The Arduino compiler is downloaded for your platform |
+| OS | macOS (Intel or Apple silicon), Linux x86_64/arm64, or Windows 10/11 x64 | — | The Arduino compiler is downloaded for your platform |
 | Node.js | **22.12 or newer** | `node -v` | https://nodejs.org or `nvm install 22` |
 | npm | **10 or newer** | `npm -v` | Upgrade with `npm install -g npm@11` |
-| git, curl, tar | any | — | Preinstalled on macOS/Linux |
+| git, tar | any | — | Preinstalled on macOS/Linux and Windows 10+ |
 | Browser | Chrome or Edge | — | Needed for the bench (Web Serial talks to the Arduino). Other screens work in any modern browser |
 | Disk / network | ~1.5 GB, internet for the first install | — | node_modules + Arduino toolchain |
 
@@ -55,7 +83,7 @@ Optional: **ngspice** for the SPICE cross-check (`brew install ngspice` / `sudo 
 git clone https://github.com/BarryTheShen/ViBread.git
 cd ViBread
 npm install               # ~1 min; also installs the isolated schematic renderer (packages/assembly/schematic-runtime)
-npm run setup:toolchain   # ~1 min; arduino-cli 1.5.1 (checksum-pinned) + Arduino AVR core 1.8.8 + ArduinoJson 7.4.2 → .toolchain/
+npm run setup:toolchain   # ~1 min; arduino-cli 1.5.1 (SHA-256 pinned) + Arduino AVR core 1.8.8 + ArduinoJson 7.4.2 → .toolchain/ (any OS)
 npm run build             # builds the web app into apps/web/dist (the server serves it)
 npm run seed              # optional: three ready-made demo missions (Moon-Phase Lamp, Knob Night-Light, Launch Control)
 cp .env.example .env      # optional: add ANTHROPIC_API_KEY etc. (see Configuration)

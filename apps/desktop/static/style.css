@@ -1,0 +1,26 @@
+:root { color-scheme: dark; --bg: #0b1118; --panel: #121b26; --line: #223244; --text: #e7edf3; --muted: #8fa3b8; --accent: #f3c969; --bad: #ff7b72; --good: #7ee787; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 28px 32px; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; user-select: none; }
+h1 { margin: 0 0 4px; font-size: 20px; display: flex; align-items: center; gap: 10px; }
+h1 img { width: 32px; height: 32px; }
+p.sub { margin: 0 0 22px; color: var(--muted); }
+ol.steps { list-style: none; margin: 0 0 18px; padding: 0; display: grid; gap: 12px; }
+ol.steps li { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+ol.steps li .title { font-weight: 600; display: flex; justify-content: space-between; }
+ol.steps li .state { color: var(--muted); font-weight: 400; }
+ol.steps li.done .state { color: var(--good); }
+ol.steps li.failed .state { color: var(--bad); }
+ol.steps li .msg { color: var(--muted); font-size: 13px; margin-top: 4px; min-height: 20px; overflow-wrap: anywhere; }
+progress { width: 100%; height: 6px; margin-top: 8px; accent-color: var(--accent); }
+.error { display: none; background: #2a1517; border: 1px solid #5c2b2e; border-radius: 10px; padding: 12px 14px; margin-bottom: 14px; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; max-height: 160px; overflow: auto; font-size: 12px; }
+.row { display: flex; gap: 10px; justify-content: flex-end; align-items: center; }
+button { background: var(--accent); color: #1a1405; border: 0; border-radius: 8px; padding: 8px 16px; font-weight: 600; font-size: 14px; cursor: pointer; }
+button.secondary { background: transparent; color: var(--text); border: 1px solid var(--line); }
+button:disabled { opacity: .5; cursor: default; }
+label { display: block; font-weight: 600; margin-bottom: 6px; }
+input[type=password], input[type=text] { width: 100%; padding: 9px 11px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; margin-bottom: 8px; user-select: text; }
+.hint { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
+.status { color: var(--muted); font-size: 13px; margin-right: auto; }
+.qr { display: flex; gap: 22px; align-items: center; }
+.qr img { width: 220px; height: 220px; background: white; border-radius: 12px; padding: 10px; }
+code.url { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0 12px; user-select: text; overflow-wrap: anywhere; font-size: 15px; }

@@ -1,0 +1,116 @@
+name: Desktop app
+
+on:
+  push:
+    branches: [desktop, main]
+    paths:
+      - "apps/**"
+      - "packages/**"
+      - "fixtures/**"
+      - "scripts/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, label: linux-x64, builder: --linux AppImage deb }
+          - { os: windows-latest, label: windows-x64, builder: --win nsis }
+          - { os: macos-14, label: macos-arm64, builder: --mac dmg zip }
+          - { os: macos-15-intel, label: macos-x64, builder: --mac dmg zip }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22.22.1
+          cache: npm
+
+      - name: Linux display + packaging deps
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Install (native modules built for this runner)
+        run: npm ci --no-audit --no-fund
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Package
+        working-directory: apps/desktop
+        shell: bash
+        run: |
+          node ../../node_modules/electron/install.js
+          node scripts/build.mjs
+          node scripts/stage-runtime.mjs
+          npx electron-builder --config electron-builder.config.cjs ${{ matrix.builder }} --publish never
+          ls -la release
+
+      - name: Smoke (first run + server + renderer + screenshots)
+        shell: bash
+        env:
+          VIBREAD_USER_DATA: ${{ runner.temp }}/vibread-smoke
+          VIBREAD_SMOKE_DIR: ${{ github.workspace }}/smoke
+        run: node apps/desktop/scripts/smoke-packaged.mjs
+
+      - name: Collect logs
+        if: always()
+        shell: bash
+        run: mkdir -p smoke/logs && cp -r "${{ runner.temp }}/vibread-smoke/logs/." smoke/logs/ 2>/dev/null || true
+
+      - name: Upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vibread-${{ matrix.label }}
+          path: |
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.deb
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            smoke/
+          if-no-files-found: warn
+
+  release:
+    name: Prerelease desktop-v0.1.0
+    needs: package
+    if: github.ref == 'refs/heads/desktop'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+      - name: Create or update prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir upload
+          find artifacts -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \) -exec cp {} upload/ \;
+          (cd upload && sha256sum * > SHA256SUMS.txt)
+          ls -la upload
+          if gh release view desktop-v0.1.0 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload desktop-v0.1.0 upload/* --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create desktop-v0.1.0 upload/* --prerelease --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
+              --title "ViBread desktop v0.1.0 (preview)" \
+              --notes "Unsigned preview builds of the ViBread desktop app. See the README 'Desktop app' section for first-run steps."
+          fi
