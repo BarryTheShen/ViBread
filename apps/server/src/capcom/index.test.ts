@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { approvalOutcome, benchAskOptionTitle, benchAskValueForOption, cloudSendDelayMs, faultAlertText, isFaultAlertEvent, isQuietHours, isSelectedPollOption, isSupportedInboundContentType, missionSelection, pendingApprovalIndex, pollTitleForApproval, shouldSendCelebrationEffect } from "./index.js";
+import { approvalOutcome, benchAskOptionTitle, benchAskValueForOption, capcomLinkUrl, cloudSendDelayMs, faultAlertText, isFaultAlertEvent, isQuietHours, isSelectedPollOption, isSupportedInboundContentType, missionSelection, pendingApprovalIndex, pollTitleForApproval, shouldSendCelebrationEffect } from "./index.js";
 
 describe("CAPCOM timeline alerts", () => {
   it("does not duplicate the Houston prefix from bench diagnoses", () => {
@@ -79,5 +79,10 @@ describe("CAPCOM timeline alerts", () => {
     expect(approvalOutcome("approved", "approve-once", "approve-once")).toBe("approved");
     expect(approvalOutcome("denied", "deny", "approve-once")).toBe("decided");
     expect(approvalOutcome("expired", "approve-once", "approve-once")).toBe("expired");
+  });
+
+  it("builds phone-reachable CAPCOM links from phoneUrl", () => {
+    expect(capcomLinkUrl("http://192.168.1.24:8787/")).toBe("http://192.168.1.24:8787/");
+    expect(capcomLinkUrl("https://vibread.example")).toBe("https://vibread.example/");
   });
 });

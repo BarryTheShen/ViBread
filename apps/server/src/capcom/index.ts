@@ -118,6 +118,10 @@ export function approvalOutcome(
   return "decided";
 }
 
+export function capcomLinkUrl(phoneUrl: string): string {
+  return `${phoneUrl.replace(/\/$/, "")}/`;
+}
+
 function senderHandle(space: Space, message: Message): string {
   return message.sender?.id ?? space.id;
 }
@@ -395,7 +399,7 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
   const sendLinkAfterReply = async (space: Space, userId: string): Promise<void> => {
     const handle = await ctx.links.handleForUser(userId);
     await sendText(space, `CAPCOM linked to ${handle ?? "your ViBread account"}.`);
-    await send(space, appCard(`${ctx.config.publicUrl.replace(/\/$/, "")}/`, { live: true }));
+    await send(space, appCard(capcomLinkUrl(ctx.config.phoneUrl), { live: true }));
     await send(space, nativeContactCard());
   };
 
