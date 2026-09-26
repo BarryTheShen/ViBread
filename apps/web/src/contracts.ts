@@ -5,7 +5,7 @@
  * Owners: shell/* (S1 ShellTheme) · pages/NewMissionPage + pages/MissionPage + chat/* (S2 ChatUI) · workspace/* (S3
  * WebWorkspace) · inventory/* (S4 InventoryUI) · bench/* + build/* (S6).
  */
-import type { InventoryItem, MissionDetail, PermissionMode, TimelineEvent } from "@vibread/core";
+import type { InventoryItem, MissionDetail, TimelineEvent } from "@vibread/core";
 
 /** Views of the right-hand artifact panel (§3.2). */
 export const PANEL_VIEWS = [
@@ -68,8 +68,6 @@ export interface MissionHeaderProps {
 /** S2 chat/Composer.tsx: the chat box (new mission and replies). */
 export interface ComposerProps {
   placeholder: string;
-  mode: PermissionMode;
-  onModeChange(mode: PermissionMode): void;
   /** "Parts: all inventory (23)" chip; omitted in a running mission. */
   parts?: { label: string; onClick(): void };
   running: boolean;

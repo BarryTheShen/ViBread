@@ -14,7 +14,7 @@ import { createAppContext, type AppContextHandle } from "./context.js";
 import { getSessionUser } from "./auth.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { mountApi, approvalOwnerMiddleware, missionOwnerMiddleware } from "./routes.js";
-
+import type { DebugLog } from "./services/debug-log.js";
 export interface RunningServer {
   app: Express;
   server: http.Server;
@@ -22,14 +22,18 @@ export interface RunningServer {
   close(): Promise<void>;
 }
 
-export function createApiErrorHandler(log: Logger): ErrorRequestHandler {
-  return (error, _req, res, next) => {
+export function createApiErrorHandler(log: Logger, debug?: DebugLog): ErrorRequestHandler {
+  return (error, req, res, next) => {
     if (res.headersSent) return next(error);
     const deliberate = typeof error?.status === "number" && typeof error?.code === "string";
     const status = deliberate ? error.status : 500;
     const code = deliberate ? error.code : "INTERNAL_ERROR";
     const message = deliberate && error instanceof Error ? error.message : "internal server error";
     if (!deliberate || status >= 500) log.error({ err: error }, "request failed");
+    if (debug) {
+      const mission = /^\/api\/missions\/([^/]+)/.exec(req.path)?.[1] ?? null;
+      debug.event(mission, status >= 500 ? "error" : "http", `${req.method} ${req.path} failed`, { status, code, durationMs: Date.now() - Number(res.locals.debugStartedAt ?? Date.now()) }, status >= 500 ? "error" : "warn");
+    }
     res.status(status).json({ error: { code, message } });
   };
 }
@@ -87,11 +91,16 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
       censor: "[REDACTED]",
     },
   }));
-
+  app.use((req, res, next) => {
+    res.locals.debugStartedAt = Date.now();
+    next();
+  });
   const authLimiter = rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: "draft-8", legacyHeaders: false });
   const tokenLimiter = rateLimit({ windowMs: 60_000, limit: 20, standardHeaders: "draft-8", legacyHeaders: false });
+  const clientErrorLimiter = rateLimit({ windowMs: 60_000, limit: 30, standardHeaders: "draft-8", legacyHeaders: false });
   app.use("/api/auth", authLimiter);
   app.use("/api/connections/tokens", tokenLimiter);
+  app.use("/api/debug/client-errors", clientErrorLimiter);
   const authHandler = toNodeHandler(auth);
   // Better Auth must see the raw request stream before express.json consumes it.
   app.get("/.well-known/oauth-protected-resource/mcp", (_req, res) => {
@@ -158,7 +167,7 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
     app.get("*splat", (_req, res) => res.sendFile("index.html", { root: webDist }));
   }
 
-  app.use(createApiErrorHandler(log));
+  app.use(createApiErrorHandler(log, ctx.debug));
 
   const capcom = await startCapcom(ctx);
   const server = await new Promise<http.Server>((resolveServer, reject) => {
@@ -182,6 +191,12 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const config = loadConfig();
   const running = await startServer(config);
+  const fatal = (error: unknown, message: string): void => {
+    running.context.ctx.debug.event(null, "error", message, { error: error instanceof Error ? error.stack ?? error.message : String(error) }, "error");
+    void running.close().finally(() => process.exit(1));
+  };
+  process.once("unhandledRejection", (error) => fatal(error, "unhandledRejection"));
+  process.once("uncaughtException", (error) => fatal(error, "uncaughtException"));
   const shutdown = (): void => {
     void running.close().finally(() => process.exit(0));
   };

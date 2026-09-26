@@ -349,7 +349,7 @@ function addNetConnections(
         if (ref?.part === "board" && net.kind === "ground") continue;
         if (part?.module === "led" && net.kind === "ground") {
           const position = positions.get(part.id);
-          if (position) tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom", schX: position.x, schY: position.y - 2 }));
+          if (position) tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom", schX: position.x, schY: position.y - 2.7 }));
           else tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom" }));
           continue;
         }
@@ -368,7 +368,6 @@ function addNetConnections(
         if (part?.module === "photoresistor" && net.kind === "power") {
           const position = positions.get(part.id);
           if (position) tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom", schX: position.x - 1.5, schY: position.y + 2 }));
-          else tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom" }));
           continue;
         }
         const anchorSide = net.kind === "ground"
@@ -384,9 +383,10 @@ function addNetConnections(
     }
     const first = selectors[0];
     if (!first) throw new Error(`Net ${net.id} has no pins`);
-    const showNetName = !/^L\d+$/.test(net.id);
+    const showNetName = !/^L\d+$/.test(net.id) && net.id !== "A0";
     for (const selector of selectors.slice(1)) {
-      if (showNetName) tscircuitBoard.add(new Trace({ name: net.id, from: first, to: selector }));
+      if (showNetName && net.id !== "A0") tscircuitBoard.add(new Trace({ name: net.id, from: first, to: selector }));
+      else if (net.id === "A0") tscircuitBoard.add(new Trace({ schDisplayLabel: "", displayName: "", from: first, to: selector }));
       else tscircuitBoard.add(new Trace({ from: first, to: selector }));
     }
   }
@@ -427,14 +427,15 @@ function massageCircuitJson(elements: AnyCircuitElement[], photoPartId: string):
 }
 function addManualLabels(circuit: Circuit, positions: Map<string, Point>, board: Board): void {
   board.add(new SchematicText({ text: `ARDUINO ${boardDisplayName(circuit)}`, schX: 0, schY: 2.5, fontSize: 0.32, color: "#a7f3d0" }));
+  board.add(new SchematicText({ text: "GND", schX: 0, schY: -4.2, fontSize: 0.32, color: "#f8fafc" }));
   for (const part of circuit.parts) {
     const position = positions.get(part.id);
     if (!position) continue;
     if (part.module === "led") {
       const color = isLedColor(part.params.color) ? part.params.color : "LED";
-      board.add(new SchematicText({ text: color, schX: position.x, schY: position.y - 1.2, fontSize: 0.32, color: "#fde68a" }));
+      board.add(new SchematicText({ text: color, schX: position.x, schY: position.y - 0.5, fontSize: 0.32, color: "#fde68a" }));
     } else if (part.module === "buzzer-active" || part.module === "buzzer-passive") {
-      board.add(new SchematicText({ text: part.id, schX: position.x, schY: position.y + 1.5, fontSize: 0.32, color: "#f8fafc" }));
+      board.add(new SchematicText({ text: part.id, schX: position.x, schY: position.y + 2.2, fontSize: 0.32, color: "#f8fafc" }));
     }
   }
 }
@@ -444,7 +445,8 @@ function postProcessSvg(svg: string): string {
     .replaceAll(">V5<", ">5V<")
     .replaceAll("rgb(169, 0, 0)", "#fda4af")
     .replaceAll("rgb(132, 0, 0)", "#fda4af")
-    .replaceAll("rgb(0, 100, 100)", "#a7f3d0");
+    .replace(/<text\b[^>]*>ARDUINO_A0<\/text>/g, "")
+    .replace(/<text\b([^>]*)>(7|8|5V|GND)<\/text>/g, (full: string, attributes: string) => attributes.includes("pin-number") ? "" : full);
 }
 
 function cropSvg(svg: string): string {

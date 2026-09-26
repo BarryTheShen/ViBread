@@ -4,15 +4,14 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Paper from "@mui/material/Paper";
-import Snackbar from "@mui/material/Snackbar";
 import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { useQuery } from "@tanstack/react-query";
-import { MODE_LABELS, type MissionDetail, type PermissionMode, type TimelineEvent } from "@vibread/core";
+import type { MissionDetail, TimelineEvent } from "@vibread/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link as RouterLink, useParams } from "react-router";
 import { api } from "../api/client.js";
-import { queryKeys, useConnections, useMission, useRevisions, useSetMode } from "../api/hooks.js";
+import { queryKeys, useConnections, useMission, useRevisions } from "../api/hooks.js";
 import { isSignInRequired, SignInRequired } from "../components/SignIn.js";
 import type { MissionShellValue, PanelView } from "../contracts.js";
 import { MissionChat, useMissionChatAdapter } from "../chat/MissionChat.js";
@@ -66,14 +65,12 @@ export default function MissionPage() {
     () => withRevisionEvents(timeline.data ?? EMPTY_EVENTS, revisions.data ?? [], missionId),
     [timeline.data, revisions.data, missionId],
   );
-  const setMode = useSetMode(missionId);
   const adapter = useMissionChatAdapter(missionId);
   const connections = useConnections();
   // Nothing powers the agent: no connected Claude account and no server key.
   const claudeMissing = connections.data?.claude?.using === "none";
   const phone = useMediaQuery("(max-width: 699.95px)");
   const roomy = useMediaQuery("(min-width: 1200px)");
-  const [notice, setNotice] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [panel, setPanel] = useState<PanelState>({ open: false, view: "schematic" });
@@ -114,11 +111,6 @@ export default function MissionPage() {
         ? { missionId, detail, panel: { open: panel.open, view: panel.view, revision: panel.revision }, openPanel, closePanel }
         : null,
     [missionId, detail, panel.open, panel.view, panel.revision, openPanel, closePanel],
-  );
-
-  const changeMode = useCallback(
-    (mode: PermissionMode) => setMode.mutate(mode, { onSuccess: () => setNotice(`Mode set to ${MODE_LABELS[mode]}.`) }),
-    [setMode],
   );
 
   if (mission.isPending) {
@@ -173,8 +165,6 @@ export default function MissionPage() {
               adapter={adapter}
               events={events}
               canChat={!claudeMissing}
-              mode={m.mode}
-              onModeChange={changeMode}
               draft={draft}
               setDraft={setDraft}
               inputRef={inputRef}
@@ -201,7 +191,6 @@ export default function MissionPage() {
           )}
         </Box>
       </Box>
-      <Snackbar open={notice !== null} autoHideDuration={4000} onClose={() => setNotice(null)} message={notice ?? ""} />
     </MissionShellContext.Provider>
   );
 }

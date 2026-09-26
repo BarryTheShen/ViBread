@@ -8,6 +8,7 @@ import {
   type Finding,
   type MissionStore,
   type Revision,
+  type ToolContext,
   type ToolDef,
 } from "@vibread/core";
 
@@ -57,6 +58,37 @@ export function errorMessage(error: unknown): string {
 /** ToolDef<I, O> → ToolDef: handlers are contravariant in their input, so the registry stores them erased. */
 export function defineTool<I, O>(def: ToolDef<I, O>): ToolDef {
   return def as unknown as ToolDef;
+}
+
+/** One finished tool call, for the server's debug log (the registry's optional `trace`). */
+export interface ToolTraceEvent {
+  missionId: string;
+  tool: string;
+  actionClass: ToolDef["actionClass"];
+  actor: ToolContext["actor"];
+  ms: number;
+  input: unknown;
+  output?: unknown;
+  error?: string;
+}
+
+/** Wraps every handler so each call (whoever made it) reports its timing and outcome to `trace`. */
+export function traceTools(tools: ToolDef[], trace: (event: ToolTraceEvent) => void): ToolDef[] {
+  return tools.map((def) => ({
+    ...def,
+    handler: async (ctx, input) => {
+      const started = Date.now();
+      const base = { missionId: ctx.missionId, tool: def.name, actionClass: def.actionClass, actor: ctx.actor, input };
+      try {
+        const output = await def.handler(ctx, input);
+        trace({ ...base, ms: Date.now() - started, output });
+        return output;
+      } catch (error) {
+        trace({ ...base, ms: Date.now() - started, error: errorMessage(error) });
+        throw error;
+      }
+    },
+  }));
 }
 
 export async function requireRevision(store: MissionStore, missionId: string, n?: number): Promise<Revision> {

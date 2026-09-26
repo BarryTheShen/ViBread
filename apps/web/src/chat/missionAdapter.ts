@@ -1,20 +1,15 @@
 import { createAiSdkAdapter } from "@mui/x-chat";
 import type { ChatAdapter } from "@mui/x-chat/headless";
 import type { ChatMessageChunk, ChatStreamEnvelope } from "@mui/x-chat/types";
-import type { ApprovalDecision, ApprovalView } from "@vibread/core";
 import type { UIMessage } from "ai";
 import { api, apiFetch, getJson, HttpError } from "../api/client.js";
-import { decisionOf, normalizeChunks, rememberToolCalls, toChatMessages, toUserUiMessage, type ToolCallRegistry } from "./uiMessages.js";
+import { normalizeChunks, rememberToolCalls, toChatMessages, toUserUiMessage, type ToolCallRegistry } from "./uiMessages.js";
 
 type ChunkStream = ReadableStream<ChatMessageChunk | ChatStreamEnvelope>;
 
 export interface MissionChatAdapter extends ChatAdapter {
   /** Resolves once the first history load (GET chat) has completed, successfully or not. */
   readonly historyLoaded: Promise<void>;
-  /** POST /api/approvals/:id, then notify followers (the server resumes the agent right after a decision). */
-  decide(approvalId: string, decision: ApprovalDecision): Promise<ApprovalView>;
-  /** Subscribe to approval decisions made from this browser. */
-  onApprovalDecided(listener: (view: ApprovalView) => void): () => void;
   /** Tool name of a call seen in the loaded history or the streams (a part can arrive without one). */
   toolNameOf(toolCallId: string): string | undefined;
 }
@@ -31,13 +26,11 @@ const FRIENDLY_ERRORS: Record<string, string> = {
  * Wraps MUI X Chat's `createAiSdkAdapter` (which decodes the AI SDK UI message stream, SSE framing included) with the
  * pieces the stock adapter lacks for ViBread's server-authored history:
  *  - `listMessages`: GET /api/missions/:id/chat (UIMessage[] → ChatMessage[])
- *  - `addToolApprovalResponse`: POST /api/approvals/:approvalId { decision } (the broker is the authority)
  *  - `stop`: POST /api/missions/:id/chat/stop (the runtime also aborts the open fetch)
  *  - `reconnectToStream`: GET /api/missions/:id/chat/stream (204 → null)
  */
 export function createMissionChatAdapter(missionId: string): MissionChatAdapter {
   const chatPath = api.chatPath(missionId);
-  const listeners = new Set<(view: ApprovalView) => void>();
   const toolCalls: ToolCallRegistry = new Map();
   let markHistoryLoaded: () => void = () => {};
   const historyLoaded = new Promise<void>((resolve) => {
@@ -71,20 +64,9 @@ export function createMissionChatAdapter(missionId: string): MissionChatAdapter 
     return stream.pipeThrough(normalizeChunks<ChatMessageChunk | ChatStreamEnvelope>(toolCalls));
   }
 
-  async function decide(approvalId: string, decision: ApprovalDecision): Promise<ApprovalView> {
-    const view = await api.decideApproval(approvalId, decision);
-    for (const listener of listeners) listener(view);
-    return view;
-  }
-
   return {
     historyLoaded,
-    decide,
     toolNameOf: (toolCallId) => toolCalls.get(toolCallId)?.toolName,
-    onApprovalDecided(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
     async listMessages({ conversationId }) {
       try {
         const history = await getJson<UIMessage[]>(chatPath);
@@ -100,9 +82,6 @@ export function createMissionChatAdapter(missionId: string): MissionChatAdapter 
       return stream.pipeThrough(normalizeChunks<ChatMessageChunk | ChatStreamEnvelope>(toolCalls));
     },
     reconnectToStream: ({ signal }) => openActiveStream(signal),
-    async addToolApprovalResponse(input) {
-      await decide(input.id, decisionOf(input));
-    },
     stop() {
       api.stopAgent(missionId).catch((error: unknown) => console.warn("Stop agent request failed", error));
     },

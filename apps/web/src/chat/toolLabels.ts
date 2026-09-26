@@ -1,3 +1,5 @@
+import { isRecord } from "../lib/guards.js";
+
 /** Plain-language labels for agent tools (packages/tools names). Unknown tools fall back to a generic label. */
 export interface ToolLabel {
   active: string;
@@ -27,14 +29,19 @@ export const TOOL_LABELS: Record<string, ToolLabel> = {
   diagnose: { active: "Working out what went wrong…", done: "Worked out what went wrong" },
   inspect_photo: { active: "Looking at your photo…", done: "Looked at your photo" },
   explain_telemetry: { active: "Reading the board's test results…", done: "Read the board's test results" },
-  release_revision: { active: "Making this design the build target…", done: "Released the design for building" },
+  release_revision: { active: "Releasing the design for building…", done: "Released the design for building" },
   request_bench_action: { active: "Asking for a bench action…", done: "Bench action requested" },
-  add_part: { active: "Updating your parts list…", done: "Updated your parts list" },
+  add_part: { active: "Adding a part…", done: "Added a part" },
   ask_user: { active: "Preparing a question…", done: "Asked you a question" },
 };
 
-/** A tool part can arrive without its name (e.g. its output streams in after a reconnect); label it generically. */
-export function toolLabel(toolName: string | undefined): ToolLabel {
+/**
+ * Label for a tool call; `input` names the design version where the tool has one ("Released design r2"). A tool part
+ * can arrive without its name (e.g. its output streams in after a reconnect); it is labelled generically.
+ */
+export function toolLabel(toolName: string | undefined, input?: unknown): ToolLabel {
   if (!toolName) return { active: "Working…", done: "Finished a step" };
+  const revision = isRecord(input) && typeof input.revision === "number" ? input.revision : undefined;
+  if (toolName === "release_revision" && revision !== undefined) return { active: `Releasing design r${revision}…`, done: `Released design r${revision}` };
   return TOOL_LABELS[toolName] ?? { active: `Working (${toolName.replace(/_/g, " ")})…`, done: `Finished ${toolName.replace(/_/g, " ")}` };
 }

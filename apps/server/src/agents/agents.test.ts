@@ -2,10 +2,9 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { GOLDEN } from "@vibread/fixtures";
-import type { Actor, ConsoleReport, MissionStore, PermissionMode } from "@vibread/core";
+import type { Actor, ConsoleReport, MissionStore } from "@vibread/core";
 import type { Pipeline } from "@vibread/tools";
 import type { LanguageModelV4StreamPart } from "@ai-sdk/provider";
-import type { UIMessage } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
@@ -87,19 +86,19 @@ async function say(base: string, missionId: string, text: string): Promise<Chunk
   return sse(response);
 }
 
-async function setup(mode: PermissionMode, script: ScriptStep[], options: { realPipeline?: boolean } = {}) {
+async function setup(script: ScriptStep[], options: { realPipeline?: boolean } = {}) {
   const deps = testDeps();
   const fast = jsonModel((call) => (JSON.stringify(call.prompt).includes("RETRO") ? GO_VOTE : golden.suite));
   const pipeline = options.realPipeline ? undefined : goPipeline(deps.store);
   const runtime = createAgentRuntime({ ...deps, models: mockModels(scriptedModel(script), fast), ...(pipeline ? { pipeline } : {}) });
-  const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, mode, owner: HUMAN });
+  const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
   const base = await serve(runtime);
   return { deps, fast, pipeline, runtime, mission, base };
 }
 
 describe("design agent", () => {
   it("proposes the golden lamp, runs the real pipeline, and records every console", async () => {
-    const { deps, fast, runtime, mission, base } = await setup("review", [proposeGolden, { text: "Revision 1 is ready." }], { realPipeline: true });
+    const { deps, fast, runtime, mission, base } = await setup([proposeGolden, { text: "Revision 1 is ready." }], { realPipeline: true });
     const chunks = await say(base, mission.id, golden.brief);
 
     const output = chunks.find((c) => c.type === "tool-output-available")?.output as { accepted: boolean; revision: number; verdicts: Record<string, string> };
@@ -122,7 +121,7 @@ describe("design agent", () => {
   }, 120_000);
 
   it("records the RETRO vote when every deterministic console is GO", async () => {
-    const { deps, runtime, mission, base } = await setup("review", [proposeGolden, { text: "Ready." }]);
+    const { deps, runtime, mission, base } = await setup([proposeGolden, { text: "Ready." }]);
     await say(base, mission.id, golden.brief);
     const retro = (await deps.store.getRevision(mission.id, 1))!.results.reports.find((r) => r.console === "RETRO")!;
     expect(retro.verdict).toBe("GO");
@@ -131,139 +130,24 @@ describe("design agent", () => {
     expect(events.some((e) => e.kind === "console.report" && (e.data as { console?: string }).console === "RETRO")).toBe(true);
   });
 
-  it("Plan mode denies propose_design but runs read-only tools", async () => {
-    const { deps, pipeline, mission, base } = await setup("plan", [
-      { toolCalls: [{ name: "validate_ir", input: { circuit: golden.circuit } }, { name: "propose_design", input: { circuit: golden.circuit } }] },
-      { text: "Here is the plan." },
-    ]);
-    const chunks = await say(base, mission.id, golden.brief);
-    const validated = chunks.find((c) => c.type === "tool-output-available")?.output as { ok: boolean };
-    expect(validated.ok).toBe(true);
-    expect(chunks.filter((c) => c.type === "tool-output-denied")).toHaveLength(1);
-    expect(chunks.some((c) => c.type === "tool-approval-request" && !c.isAutomatic)).toBe(false);
-    expect(await deps.store.getRevision(mission.id)).toBeNull();
-    expect(pipeline!.calls).toBe(0);
-  });
+  it("design changes run without any approval, and the agent is never offered a release tool", async () => {
+    const deps = testDeps();
+    const design = scriptedModel([proposeGolden, { text: "Revision 1 is GO — press GO for build when you're ready." }]);
+    const fast = jsonModel((call) => (JSON.stringify(call.prompt).includes("RETRO") ? GO_VOTE : golden.suite));
+    const pipeline = goPipeline(deps.store);
+    const runtime = createAgentRuntime({ ...deps, models: mockModels(design, fast), pipeline });
+    const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
+    const chunks = await say(await serve(runtime), mission.id, golden.brief);
 
-  it("Ask mode pauses on an approval; a signed approval resumes and executes exactly once", async () => {
-    const { deps, pipeline, runtime, mission, base } = await setup("ask", [proposeGolden, { text: "Saved revision 1." }]);
-    const chunks = await say(base, mission.id, golden.brief);
-    const request = chunks.find((c) => c.type === "tool-approval-request")!;
-    expect(request).toBeDefined();
-    const approvalId = String(request.approvalId);
-    const meta = chunks.find((c) => c.type === "message-metadata")?.messageMetadata as { vibread: { approvals: Record<string, { summary: string }> } };
-    expect(meta.vibread.approvals[approvalId]?.summary).toContain("Save revision 1");
-    expect(await deps.store.getRevision(mission.id)).toBeNull();
-
-    // History is saved at the pause and carries the server signature.
-    const stored = await deps.messages.list(mission.id);
-    const part = stored.at(-1)!.parts.find((p) => p.type === "tool-propose_design") as { state: string; approval: { id: string; signature?: string } };
-    expect(part.state).toBe("approval-requested");
-    expect(part.approval.signature).toBeTruthy();
-
-    const detail = await runtime.missions.detail(mission.id);
-    expect(detail.pendingApprovals.map((a) => a.id)).toEqual([approvalId]);
-
-    // Another signed-in user can't decide it (chat approval ids are not broker ids, so this is enforced in decide).
-    await expect(runtime.missions.decide(approvalId, "approve-once", { kind: "human", id: "someone-else", channel: "web" })).rejects.toMatchObject({ status: 404 });
-    expect(deps.broker.all().map((r) => r.status)).toEqual(["pending"]);
-    const view = await runtime.missions.decide(approvalId, "approve-once", HUMAN);
-    expect(view.id).toBe(approvalId);
-    // Resumed run is registered before decide returns; the resume stream replays it from `start`.
-    const resumed = await sse(await fetch(`${base}/api/missions/${mission.id}/chat/stream`));
-    expect(resumed[0]!.type).toBe("start");
-    expect(resumed[0]!.messageId).toBe(stored.at(-1)!.id);
-    expect(resumed.some((c) => c.type === "tool-output-available")).toBe(true);
-    expect((await deps.store.listRevisions(mission.id)).length).toBe(1);
-    expect(pipeline!.calls).toBe(1);
-
-    // A second decision on the same approval neither resumes nor executes again.
-    await runtime.missions.decide(approvalId, "approve-once", HUMAN);
-    expect((await deps.store.listRevisions(mission.id)).length).toBe(1);
-    expect(pipeline!.calls).toBe(1);
-    expect((await fetch(`${base}/api/missions/${mission.id}/chat/stream`)).status).toBe(204);
-    const final = (await deps.messages.list(mission.id)).at(-1)!.parts.find((p) => p.type === "tool-propose_design") as { state: string };
-    expect(final.state).toBe("output-available");
-  });
-
-  it.each([
-    ["tampered", (sig: string) => `${sig.slice(0, -4)}AAAA`],
-    ["missing", () => undefined],
-  ])("rejects a %s approval signature without executing", async (_label, mutate) => {
-    const { deps, pipeline, runtime, mission, base } = await setup("ask", [proposeGolden, { text: "Saved." }]);
-    const chunks = await say(base, mission.id, golden.brief);
-    const approvalId = String(chunks.find((c) => c.type === "tool-approval-request")!.approvalId);
-
-    const history = await deps.messages.list(mission.id);
-    const tampered = history.map((m): UIMessage => ({
-      ...m,
-      parts: m.parts.map((p) => {
-        if (p.type !== "tool-propose_design" || !("approval" in p) || !p.approval) return p;
-        const signature = mutate(p.approval.signature ?? "");
-        const { signature: _drop, ...approval } = p.approval;
-        return { ...p, approval: signature ? { ...approval, signature } : approval } as UIMessage["parts"][number];
-      }),
-    }));
-    await deps.messages.save(mission.id, tampered);
-
-    await runtime.missions.decide(approvalId, "approve-once", HUMAN);
-    const resumed = await sse(await fetch(`${base}/api/missions/${mission.id}/chat/stream`));
-    expect(resumed.find((c) => c.type === "error")?.errorText).toContain("signature");
-    expect(await deps.store.getRevision(mission.id)).toBeNull();
-    expect(pipeline!.calls).toBe(0);
-  });
-
-  it("after a denial the agent can request the same action again: a new pending approval, no error", async () => {
-    const { deps, pipeline, runtime, mission, base } = await setup("ask", [proposeGolden, proposeGolden, { text: "Waiting for you." }]);
-    const first = await say(base, mission.id, golden.brief);
-    const firstId = String(first.find((c) => c.type === "tool-approval-request")!.approvalId);
-    await runtime.missions.decide(firstId, "deny", HUMAN);
-    const resumed = await sse(await fetch(`${base}/api/missions/${mission.id}/chat/stream`));
-    expect(resumed.some((c) => c.type === "error")).toBe(false);
-    const second = resumed.find((c) => c.type === "tool-approval-request");
-    expect(second?.approvalId).toBeDefined();
-    expect(second?.approvalId).not.toBe(firstId);
-    expect(deps.broker.all().map((r) => r.status)).toEqual(["denied", "pending"]);
-    expect((await runtime.missions.detail(mission.id)).pendingApprovals.map((a) => a.id)).toEqual([second!.approvalId]);
-    expect(pipeline!.calls).toBe(0);
-  });
-
-  it("an action a human already approved (not yet used) runs when the agent asks for it, exactly once", async () => {
-    const { deps, pipeline, mission, base } = await setup("ask", [proposeGolden, { text: "Saved." }, proposeGolden, { text: "Needs approval again." }]);
-    // Approve the same action out of band (e.g. MCP flow), then the agent issues exactly that call.
-    const policy = await deps.broker.evaluate({
-      missionId: mission.id,
-      mode: "ask",
-      actionClass: "state-changing",
-      action: "propose_design",
-      input: proposeGolden.toolCalls![0]!.input,
-      revisionHash: "none",
-      actor: HUMAN,
-      summary: "pre-approved",
-      consequence: "test",
-    });
-    await deps.broker.decide(policy.request!.id, "approve-once", HUMAN);
-    const chunks = await say(base, mission.id, golden.brief);
-    expect(chunks.some((c) => c.type === "tool-approval-request" && !c.isAutomatic)).toBe(false);
-    expect(chunks.some((c) => c.type === "tool-output-available")).toBe(true);
-    expect(pipeline!.calls).toBe(1);
-    expect(deps.broker.all().map((r) => r.status)).toEqual(["consumed"]);
-    // Asking again (new revision exists) is a new action: it needs a new approval.
-    const again = await say(base, mission.id, "Save it again.");
-    expect(again.some((c) => c.type === "tool-approval-request" && !c.isAutomatic)).toBe(true);
-    expect(pipeline!.calls).toBe(1);
-  });
-
-  it("a new message instead of a decision denies the open approval and the run continues", async () => {
-    const { deps, pipeline, mission, base } = await setup("ask", [proposeGolden, { text: "Okay, tell me more." }]);
-    const first = await say(base, mission.id, golden.brief);
-    const approvalId = String(first.find((c) => c.type === "tool-approval-request")!.approvalId);
-    const second = await say(base, mission.id, "Actually, use a green LED.");
-    expect(second.some((c) => c.type === "text-delta" && c.delta === "Okay, tell me more.")).toBe(true);
-    expect(deps.broker.all().map((r) => r.status)).toEqual(["denied"]);
-    expect(pipeline!.calls).toBe(0);
-    const part = (await deps.messages.list(mission.id)).flatMap((m) => m.parts).find((p) => "approval" in p && p.approval?.id === approvalId) as { state: string };
-    expect(part.state).toBe("output-denied");
+    expect(chunks.some((c) => c.type === "tool-approval-request")).toBe(false);
+    expect(chunks.find((c) => c.type === "tool-output-available")?.output).toMatchObject({ accepted: true, revision: 1 });
+    expect(pipeline.calls).toBe(1);
+    expect(deps.broker.all()).toEqual([]);
+    const offered = (design.doStreamCalls[0]!.tools ?? []).map((t) => t.name);
+    expect(offered).toContain("propose_design");
+    expect(offered).not.toContain("release_revision");
+    // Only the person releases: the agent's GO leaves the build target unset.
+    expect((await deps.store.getMission(mission.id))?.releasedRevision).toBeUndefined();
   });
 
   it("stop aborts the active run and ends its stream", async () => {
@@ -303,16 +187,37 @@ describe("design agent", () => {
     expect((await deps.messages.list(mission.id)).map((m) => m.role)).toEqual(["user", "assistant"]);
   });
 
-  it("say() runs one turn to completion for non-streaming channels and reports pending approvals", async () => {
-    const { runtime, mission, deps } = await setup("review", [
-      proposeGolden,
-      { text: "All consoles are GO.", toolCalls: [{ name: "release_revision", input: { revision: 1 } }] },
+  it("traces the run, every model call, and every tool call to the mission's debug log", async () => {
+    const { deps, runtime, mission } = await setup([proposeGolden, { text: "Ready." }]);
+    await runtime.missions.say(mission.id, golden.brief, HUMAN);
+    const mine = deps.debug.entries.filter((e) => e.missionId === mission.id);
+    const data = (area: string, match: (d: Record<string, unknown>) => boolean) =>
+      mine.filter((e) => e.area === area && match((e.data ?? {}) as Record<string, unknown>)).map((e) => e.data as Record<string, unknown>);
+
+    expect(data("agent", (d) => "actor" in d && !("outcome" in d))).toEqual([expect.objectContaining({ actor: { kind: "human", id: "operator", channel: "web" } })]);
+    expect(data("agent", (d) => d.outcome !== undefined)).toEqual([expect.objectContaining({ outcome: "done", steps: 2, toolCalls: ["propose_design"], usage: { input: 20, output: 20 } })]);
+    // Two design-model calls (tool call, then the reply) plus the independent test author and RETRO on the fast model.
+    const models = data("model", () => true);
+    expect(models.filter((d) => d.purpose === "design").map((d) => [d.model, d.credential, d.stop, d.usage])).toEqual([
+      ["mock-design", "server-key", "tool-calls", { input: 10, output: 10 }],
+      ["mock-design", "server-key", "stop", { input: 10, output: 10 }],
     ]);
+    expect(models.map((d) => d.purpose)).toEqual(expect.arrayContaining(["test-author", "retro"]));
+    expect(data("tool", (d) => d.tool === "propose_design")).toEqual([
+      expect.objectContaining({ actionClass: "state-changing", actor: expect.objectContaining({ kind: "agent" }), result: expect.objectContaining({ revision: 1, allGo: true }) }),
+    ]);
+    expect(data("agent", (d) => d.step === "retro")).toEqual([expect.objectContaining({ verdict: "GO", revision: 1 })]);
+    // Without VIBREAD_DEBUG=1 neither prompts nor full tool inputs are logged.
+    expect(JSON.stringify(mine)).not.toContain(golden.circuit.sketch.source.slice(0, 80));
+  });
+
+  it("say() runs one turn to completion for non-streaming channels", async () => {
+    const { runtime, mission, deps } = await setup([proposeGolden, { text: "All consoles are GO." }]);
     const imessage: Actor = { kind: "human", id: "operator", channel: "imessage" };
     const turn = await runtime.missions.say(mission.id, golden.brief, imessage);
     expect(turn.revision).toBe(1);
     expect(turn.text).toContain("All consoles are GO.");
-    expect(turn.pendingApprovals.map((a) => a.action)).toEqual(["release_revision"]);
+    expect(turn.pendingApprovals).toEqual([]);
     expect((await deps.store.getMission(mission.id))?.releasedRevision).toBeUndefined();
     const events = await runtime.missions.events(mission.id);
     expect(events.filter((e) => e.kind === "message").map((e) => e.channel)).toEqual(["imessage", "imessage"]);
@@ -335,7 +240,7 @@ describe("design agent", () => {
   });
 
   it("every chat route requires the signed-in owner (multi-user)", async () => {
-    const { deps, mission, base, runtime } = await setup("review", [{ text: "should never run" }]);
+    const { deps, mission, base, runtime } = await setup([{ text: "should never run" }]);
     const body = JSON.stringify({ message: { id: "u1", role: "user", parts: [{ type: "text", text: "hi" }] } });
     const routes: [string, string, string?][] = [
       ["GET", "/chat"],
@@ -360,7 +265,7 @@ describe("design agent", () => {
   });
 
   it("rejects client-authored assistant history", async () => {
-    const { base, mission } = await setup("review", []);
+    const { base, mission } = await setup([]);
     const response = await fetch(`${base}/api/missions/${mission.id}/chat`, {
       method: "POST",
       headers: { "content-type": "application/json" },

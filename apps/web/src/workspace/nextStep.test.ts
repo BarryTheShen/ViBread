@@ -5,7 +5,7 @@ import { nextStepOf, releaseReadiness } from "./nextStep.js";
 function detail(phase: MissionPhase, extra: { busy?: boolean; released?: number; current?: number; verdicts?: Record<string, ConsoleReport["verdict"]> } = {}): MissionDetail {
   const consoles = Object.entries(extra.verdicts ?? {}).map(([console, verdict]) => ({ console, verdict, summary: "", findings: [], revisionHash: "h", at: "" }) as ConsoleReport);
   return {
-    mission: { id: "m", title: "t", brief: "b", ownerId: "o", mode: "review", phase, inventory: [], currentRevision: extra.current, releasedRevision: extra.released, createdAt: "", updatedAt: "" },
+    mission: { id: "m", title: "t", brief: "b", ownerId: "o", phase, inventory: [], currentRevision: extra.current, releasedRevision: extra.released, createdAt: "", updatedAt: "" },
     revision: extra.current !== undefined ? { n: extra.current, hash: "h", author: { kind: "agent", id: "a", channel: "web" }, createdAt: "", verdicts: {} } : undefined,
     consoles,
     pendingApprovals: [],

@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { GOLDEN } from "@vibread/fixtures";
-import { policyFor } from "@vibread/core";
 import { loadConfig, derivePhoneUrl } from "./config.js";
 import { openDatabase, type OpenDatabase } from "./db/index.js";
 import { createMissionStore } from "./store/missions.js";
@@ -45,7 +44,7 @@ describe("server core persistence", () => {
     try {
       const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
       const fixture = GOLDEN[0];
-      const mission = await store.createMission({ title: "Moon lamp", brief: fixture.brief, ownerId: "operator", inventory: fixture.inventory, mode: "review" });
+      const mission = await store.createMission({ title: "Moon lamp", brief: fixture.brief, ownerId: "operator", inventory: fixture.inventory });
       const feed: string[] = [];
       const unsubscribe = store.subscribe((event) => feed.push(event.kind));
       const updated = await store.updateMission(mission.id, { inventory: fixture.inventory.slice(0, 1) });
@@ -73,7 +72,7 @@ describe("server core persistence", () => {
     const { dir, opened } = makeDatabase();
     try {
       const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
-      const mission = await store.createMission({ title: "Private", brief: "Private", ownerId: "owner", inventory: [], mode: "review" });
+      const mission = await store.createMission({ title: "Private", brief: "Private", ownerId: "owner", inventory: [] });
       const context = { store } as Parameters<typeof missionOwnerMiddleware>[0];
       const otherResponse = { locals: { user: { id: "other", name: "Other" } } } as unknown as Response;
       let ownerError: unknown;
@@ -88,21 +87,18 @@ describe("server core persistence", () => {
       });
       expect(anonymousError).toMatchObject({ status: 401, code: "UNAUTHORIZED" });
       const broker = createApprovalBroker({ db: opened.db, sqlite: opened.sqlite });
-      const approval = await broker.evaluate({
+      const approval = await broker.requestBench({
         missionId: mission.id,
-        mode: "ask",
-        actionClass: "state-changing",
-        action: "private",
+        action: "run-selftest",
         input: {},
         revisionHash: "r1",
         actor: { kind: "agent", id: "agent", channel: "mcp" },
         summary: "Private",
         consequence: "Private",
       });
-      if (!approval.request) throw new Error("approval missing");
       let approvalError: unknown;
       await approvalOwnerMiddleware({ store, broker } as Parameters<typeof approvalOwnerMiddleware>[0])(
-        { params: { approvalId: approval.request.id } } as unknown as Request,
+        { params: { approvalId: approval.id } } as unknown as Request,
         otherResponse,
         (error) => {
           approvalError = error;
@@ -152,55 +148,34 @@ describe("server core persistence", () => {
 
 
 
-  it("enforces policy, expiry, first decision, one-shot consume, and remote/physical boundaries", async () => {
+  it("bench requests: dedupe, first decision wins, remote actors can't decide, iMessage pre-approval, expiry", async () => {
     const { dir, opened } = makeDatabase();
     try {
-      expect(policyFor("plan", "state-changing")).toBe("denied");
-      expect(policyFor("ask", "state-changing")).toBe("user-approval");
-      expect(policyFor("autopilot", "release", { allGo: true })).toBe("approved");
-      expect(policyFor("review", "physical")).toBe("bench-click");
       const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
-      const mission = await store.createMission({ title: "Approvals", brief: "Approvals", ownerId: "operator", inventory: [], mode: "ask" });
+      const mission = await store.createMission({ title: "Approvals", brief: "Approvals", ownerId: "operator", inventory: [] });
       const broker = createApprovalBroker({ db: opened.db, sqlite: opened.sqlite });
       const actor = { kind: "human" as const, id: "operator", channel: "web" as const };
-      const pending = await broker.evaluate({ missionId: mission.id, mode: "ask", actionClass: "state-changing", action: "write", input: { x: 1 }, revisionHash: "r1", actor, summary: "Write", consequence: "Changes" });
-      if (!pending.request) throw new Error("missing request");
-      await expect(broker.decide(pending.request.id, "approve-once", { kind: "human", id: "remote", channel: "mcp" })).rejects.toThrow("remote actors");
-      const approved = await broker.decide(pending.request.id, "approve-once", actor);
-      expect(approved.status).toBe("approved");
-      expect((await broker.decide(pending.request.id, "deny", actor)).status).toBe("approved");
-      expect(await broker.consume(pending.request.id, pending.request.actionHash)).toBe(true);
-      expect(await broker.consume(pending.request.id, pending.request.actionHash)).toBe(false);
-      const retried = await broker.evaluate({ missionId: mission.id, mode: "ask", actionClass: "state-changing", action: "write", input: { x: 1 }, revisionHash: "r1", actor, summary: "Write", consequence: "Changes" });
-      expect(retried.outcome).toBe("user-approval");
-      expect(retried.request?.status).toBe("pending");
-      const reusable = await broker.evaluate({ missionId: mission.id, mode: "ask", actionClass: "state-changing", action: "reuse", input: { x: 1 }, revisionHash: "r1", actor, summary: "Reuse", consequence: "Changes" });
-      if (!reusable.request) throw new Error("missing reusable request");
-      const reusableApproved = await broker.decide(reusable.request.id, "approve-once", actor);
-      const approvedAgain = await broker.evaluate({ missionId: mission.id, mode: "ask", actionClass: "state-changing", action: "reuse", input: { x: 1 }, revisionHash: "r1", actor, summary: "Reuse", consequence: "Changes" });
-      expect(approvedAgain.outcome).toBe("approved");
-      expect(approvedAgain.request?.id).toBe(reusableApproved.id);
-      expect(await broker.consume(reusableApproved.id, reusableApproved.actionHash)).toBe(true);
-      const standing = await broker.evaluate({ missionId: mission.id, mode: "ask", actionClass: "state-changing", action: "always-write", input: { x: 1 }, revisionHash: "r1", actor, summary: "Always write", consequence: "Changes" });
-      if (!standing.request) throw new Error("missing standing request");
-      await broker.decide(standing.request.id, "approve-mission", actor);
-      expect((await broker.evaluate({ missionId: mission.id, mode: "ask", actionClass: "state-changing", action: "always-write", input: { x: 99 }, revisionHash: "r2", actor, summary: "Always write", consequence: "Changes" })).outcome).toBe("approved");
-      const release = await broker.evaluate({ missionId: mission.id, mode: "ask", actionClass: "release", action: "release", input: {}, revisionHash: "r1", actor, summary: "Release", consequence: "Publishes" });
-      if (!release.request) throw new Error("missing release request");
-      await broker.decide(release.request.id, "approve-mission", actor);
-      expect((await broker.evaluate({ missionId: mission.id, mode: "ask", actionClass: "release", action: "release", input: {}, revisionHash: "r2", actor, summary: "Release", consequence: "Publishes" })).outcome).toBe("approved");
-      await store.updateMission(mission.id, { mode: "review" });
-      await store.updateMission(mission.id, { mode: "ask" });
-      expect((await broker.evaluate({ missionId: mission.id, mode: "ask", actionClass: "state-changing", action: "always-write", input: { x: 99 }, revisionHash: "r2", actor, summary: "Always write", consequence: "Changes" })).outcome).toBe("user-approval");
-      const physical = await broker.evaluate({ missionId: mission.id, mode: "review", actionClass: "physical", action: "flash", input: {}, revisionHash: "r1", actor, summary: "Flash", consequence: "Runs on bench" });
-      if (!physical.request) throw new Error("missing physical request");
-      const preapproved = await broker.decide(physical.request.id, "approve-once", { kind: "human", id: "imessage-user", channel: "imessage" });
+      const agent = { kind: "agent" as const, id: "agent", channel: "mcp" as const };
+      const ask = (action: string, revisionHash = "r1") =>
+        broker.requestBench({ missionId: mission.id, action, input: {}, revisionHash, actor: agent, summary: action, consequence: "Runs only after a human clicks Start" });
+      const pending = await ask("flash-app");
+      expect([pending.actionClass, pending.status]).toEqual(["physical", "pending"]);
+      // An identical request while one is open is the same request.
+      expect((await ask("flash-app")).id).toBe(pending.id);
+      expect((await ask("flash-app", "r2")).id).not.toBe(pending.id);
+      await expect(broker.decide(pending.id, "approve-once", { kind: "human", id: "remote", channel: "mcp" })).rejects.toThrow("remote actors");
+      const denied = await broker.decide(pending.id, "deny", actor);
+      expect(denied.status).toBe("denied");
+      expect((await broker.decide(pending.id, "approve-once", actor)).status).toBe("denied");
+      // After a denial, asking again opens a new request.
+      expect((await ask("flash-app")).id).not.toBe(pending.id);
+      const selftest = await ask("run-selftest");
+      const preapproved = await broker.decide(selftest.id, "approve-once", { kind: "human", id: "imessage-user", channel: "imessage" });
       expect(preapproved.preApprovedBy?.channel).toBe("imessage");
-      expect(await broker.consume(preapproved.id, preapproved.actionHash)).toBe(false);
-      const expiring = await broker.evaluate({ missionId: mission.id, mode: "ask", actionClass: "bom-change", action: "bom", input: {}, revisionHash: "r2", actor, summary: "BOM", consequence: "Changes" });
-      if (!expiring.request) throw new Error("missing expiring request");
-      opened.sqlite.prepare('UPDATE "approvals" SET "expiresAt" = ? WHERE "id" = ?').run(Date.now() - 1, expiring.request.id);
-      expect((await broker.get(expiring.request.id))?.status).toBe("expired");
+      expect((await ask("run-selftest")).id).toBe(selftest.id);
+      const expiring = await ask("rail-checkpoint", "r2");
+      opened.sqlite.prepare('UPDATE "approvals" SET "expiresAt" = ? WHERE "id" = ?').run(Date.now() - 1, expiring.id);
+      expect((await broker.get(expiring.id))?.status).toBe("expired");
     } finally {
       opened.close();
       rmSync(dir, { recursive: true, force: true });
@@ -210,12 +185,10 @@ describe("server core persistence", () => {
     const { dir, opened } = makeDatabase();
     try {
       const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
-      const mission = await store.createMission({ title: "Bench", brief: "Bench", ownerId: "operator", inventory: [], mode: "review" });
+      const mission = await store.createMission({ title: "Bench", brief: "Bench", ownerId: "operator", inventory: [] });
       const broker = new SqlApprovalBroker({ db: opened.db, sqlite: opened.sqlite, store });
-      const request = await broker.evaluate({
+      const request = await broker.requestBench({
         missionId: mission.id,
-        mode: "review",
-        actionClass: "physical",
         action: "run-selftest",
         input: {},
         revisionHash: "r1",
@@ -223,28 +196,27 @@ describe("server core persistence", () => {
         summary: "Run self-test",
         consequence: "Runs only after a human clicks Start",
       });
-      if (!request.request) throw new Error("bench request missing");
-      await broker.decide(request.request.id, "approve-once", { kind: "human", id: "imessage", channel: "imessage" });
+      await broker.decide(request.id, "approve-once", { kind: "human", id: "imessage", channel: "imessage" });
       const listed = await broker.listBenchRequests(mission.id, "r1", 1);
       expect(listed).toHaveLength(1);
       expect(listed[0]?.status).toBe("approved");
       expect(listed[0]?.preApprovedBy?.channel).toBe("imessage");
       const started = await broker.startBenchRequest({
-        approvalId: request.request.id,
+        approvalId: request.id,
         missionId: mission.id,
         revisionHash: "r1",
         revision: 1,
         actor: { kind: "human", id: "operator", channel: "web" },
       });
-      expect(started).toEqual({ id: request.request.id, action: "run-selftest", revision: 1 });
+      expect(started).toEqual({ id: request.id, action: "run-selftest", revision: 1 });
       await expect(broker.startBenchRequest({
-        approvalId: request.request.id,
+        approvalId: request.id,
         missionId: mission.id,
         revisionHash: "r1",
         revision: 1,
         actor: { kind: "human", id: "operator", channel: "web" },
       })).rejects.toMatchObject({ status: 409, code: "request_not_runnable" });
-      expect(await broker.consume(request.request.id, request.request.actionHash)).toBe(false);
+      expect((await broker.get(request.id))?.status).toBe("consumed");
       expect((await store.listEvents(mission.id)).some((event) => event.kind === "bench.request.started")).toBe(true);
     } finally {
       opened.close();
@@ -256,7 +228,7 @@ describe("server core persistence", () => {
   it("restores the mission machine snapshot after a database restart", async () => {
     const { dir, opened } = makeDatabase();
     const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
-    const mission = await store.createMission({ title: "Restart", brief: "Restart", ownerId: "operator", inventory: [], mode: "review" });
+    const mission = await store.createMission({ title: "Restart", brief: "Restart", ownerId: "operator", inventory: [] });
     const machine = createMissionMachine({ db: opened.db, sqlite: opened.sqlite, store });
     await machine.send(mission.id, { type: "BRIEF_RECEIVED" });
     await machine.send(mission.id, { type: "DESIGN_STARTED" });
@@ -276,7 +248,7 @@ describe("server core persistence", () => {
     const { dir, opened } = makeDatabase();
     try {
       const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
-      const mission = await store.createMission({ title: "External design", brief: "External design", ownerId: "operator", inventory: [], mode: "review" });
+      const mission = await store.createMission({ title: "External design", brief: "External design", ownerId: "operator", inventory: [] });
       const machine = createMissionMachine({ db: opened.db, sqlite: opened.sqlite, store });
       expect(await machine.send(mission.id, { type: "DESIGN_READY", revision: 1 })).toBe("GONOGO");
     } finally {
@@ -289,7 +261,7 @@ describe("server core persistence", () => {
     const { dir, opened } = makeDatabase();
     try {
       const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
-      const mission = await store.createMission({ title: "Partial build", brief: "Partial build", ownerId: "operator", inventory: [], mode: "review" });
+      const mission = await store.createMission({ title: "Partial build", brief: "Partial build", ownerId: "operator", inventory: [] });
       const machine = createMissionMachine({ db: opened.db, sqlite: opened.sqlite, store });
       await machine.send(mission.id, { type: "BRIEF_RECEIVED" });
       await machine.send(mission.id, { type: "DESIGN_STARTED" });

@@ -1,12 +1,10 @@
-import { CONSOLE_LABELS, type Actor, type ApprovalBroker, type ConsoleId, type Mission, type MissionDetail, type MissionService, type MissionStore, type Revision, type ToolRegistry, type Verdict } from "@vibread/core";
-import { DETERMINISTIC_CONSOLES, TestsNotWrittenError, ToolInputError, invokeTool, reviewRevision, type DesignOps, type RegistryHooks } from "@vibread/tools";
-import type { ApprovalLinks } from "./approval-links.js";
-import type { RunManager } from "./runs.js";
+import { CONSOLE_LABELS, type Actor, type ConsoleId, type Mission, type MissionDetail, type MissionService, type MissionStore, type Revision, type Verdict } from "@vibread/core";
+import { DETERMINISTIC_CONSOLES, TestsNotWrittenError, ToolInputError, reviewRevision, type DesignOps, type RegistryHooks } from "@vibread/tools";
 
 export interface ReleaseInput {
   missionId: string;
   revision: number;
-  /** The human who clicked "GO for build" (web session). */
+  /** The person who pressed GO for build (web, or a linked iMessage handle). */
   actor: Actor;
   /** Release even though RETRO could not run (Claude isn't connected). */
   acknowledgeMissingReview?: boolean;
@@ -17,9 +15,8 @@ function conflict(code: string, message: string): ToolInputError {
 }
 
 /**
- * Human release (PLAN §1 "human GO", §5.10): the Flight Director releases a revision as the build target from the UI.
- * Runs the same `release_revision` ToolDef through the policy gate; the click itself is the approval, so a required
- * approval is decided approve-once by this human and consumed one-shot. Permission modes gate the agent, not the human.
+ * GO for build (PLAN §1 "human GO"): releasing a revision as the build target is only ever a person's action — the web's
+ * GO for build button or an iMessage "GO". Agents and MCP/A2A clients can't release; they tell the person to press it.
  *
  * Release rules (recorded in PLAN.md):
  *  - EECOM, GUIDO, FIDO, FAO must all be GO for the released revision. A revision without independent tests gets them
@@ -31,17 +28,14 @@ function conflict(code: string, message: string): ToolInputError {
  */
 export function createHumanRelease(deps: {
   store: MissionStore;
-  broker: ApprovalBroker;
-  tools: ToolRegistry;
   design: DesignOps;
   missions: MissionService;
-  runs: RunManager;
-  links: ApprovalLinks;
+  onReleased(missionId: string, n: number): Promise<void>;
   review?: RegistryHooks["review"];
   /** Some credential (owner's Claude account or server key) can run the reviewer for this owner. */
   claudeConnected(ownerId: string): Promise<boolean>;
 }): (input: ReleaseInput) => Promise<MissionDetail> {
-  const { store, broker, tools, design, missions, runs, links } = deps;
+  const { store, design, missions } = deps;
 
   async function requireMission(missionId: string): Promise<Mission> {
     const mission = await store.getMission(missionId);
@@ -105,26 +99,17 @@ export function createHumanRelease(deps: {
       }
     }
 
-    const args = { revision: n };
-    const ctx = { missionId, actor };
-    let result = await invokeTool({ registry: tools, broker, store, ctx, name: "release_revision", args });
-    if (result.status === "approval-required") {
-      const request = result.approval;
-      await links.hydrate(missionId);
-      const link = links.forBroker(request.id);
-      if (link) {
-        // The agent is waiting on this exact release: approving its card resumes it, and it executes the release.
-        await missions.decide(link.approvalId, "approve-once", actor).catch(() => undefined);
-        await runs.active(missionId)?.finished;
-      } else {
-        await broker.decide(request.id, "approve-once", actor);
-      }
-      const after = await requireMission(missionId);
-      if (after.releasedRevision !== n) result = await invokeTool({ registry: tools, broker, store, ctx, name: "release_revision", args, approvalId: request.id });
-      else result = { status: "executed", output: null };
-    }
-    if (result.status === "denied") throw conflict("release_denied", result.reason);
-    if (result.status !== "executed") throw new Error(`Unexpected release outcome: ${result.status}`);
+    await store.updateMission(missionId, { releasedRevision: n });
+    await store.appendEvent({
+      missionId,
+      channel: actor.channel,
+      actor,
+      kind: "revision.released",
+      text: `Revision ${n} released for building.`,
+      revision: n,
+      data: { hash: found.hash },
+    });
+    await deps.onReleased(missionId, n);
 
     const recordedVote = (retro?.evidence as { recorded?: { label?: string } } | undefined)?.recorded;
     if (!reviewMissing && recordedVote?.label) {

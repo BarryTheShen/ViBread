@@ -3,7 +3,6 @@ import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutlined";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlined";
 import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
-import HourglassTopIcon from "@mui/icons-material/HourglassTop";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -20,11 +19,10 @@ import { useId, useState } from "react";
 import { VerdictChip } from "../components/VerdictChip.js";
 import { isRecord } from "../lib/guards.js";
 import { INTER_FONT, MONO_FONT } from "../theme.js";
-import { ApprovalCard } from "./ApprovalCard.js";
 import { useMissionShell } from "./missionShell.js";
 import { useChatThread } from "./threadContext.js";
 import { toolLabel } from "./toolLabels.js";
-import { approvalMetaOf, approvalResponse, decisionOf, toolSummaryOf } from "./uiMessages.js";
+import { toolSummaryOf } from "./uiMessages.js";
 
 type Invocation = ChatToolInvocation | ChatDynamicToolInvocation;
 type Verdicts = Partial<Record<(typeof CONSOLE_IDS)[number], Verdict>>;
@@ -63,38 +61,16 @@ function Json({ value }: { value: unknown }) {
 
 /** A tool call as a compact one-line row ("Checked the circuit ✓ · No problems") that expands to its details. */
 export function ToolPartCard({ invocation, message }: { invocation: Invocation; message: ChatMessage }) {
-  const { missionId, detail, openPanel } = useMissionShell();
+  const { detail, openPanel } = useMissionShell();
   const { adapter } = useChatThread();
-  const chat = useChat();
   const [open, setOpen] = useState(false);
   const detailsId = useId();
   // MUI X Chat can create a tool part without its name when the part's first chunk arrives mid-stream (after a
   // reconnect); the adapter remembers the name from the stored history part with the same toolCallId.
   const toolName: string | undefined = invocation.toolName ?? adapter.toolNameOf(invocation.toolCallId);
-  const label = toolLabel(toolName);
+  const label = toolLabel(toolName, invocation.input);
 
   if (toolName === "ask_user") return <AskUserCard invocation={invocation} message={message} />;
-
-  if (invocation.state === "approval-requested" || (invocation.state === "approval-responded" && invocation.approvalId)) {
-    const approvalId = invocation.approvalId ?? invocation.toolCallId;
-    const meta = approvalMetaOf(message.metadata, approvalId);
-    const view = detail.pendingApprovals.find((a) => a.id === approvalId);
-    const summary = meta?.summary ?? view?.summary ?? (toolName ? `Claude wants to: ${toolName.replace(/_/g, " ")}` : "Claude wants your OK for its next step.");
-    const consequence = meta?.consequence ?? view?.consequence ?? "It will continue as soon as you decide.";
-    return (
-      <ApprovalCard
-        approvalId={approvalId}
-        missionId={missionId}
-        summary={summary}
-        consequence={consequence}
-        actionClass={meta?.actionClass ?? view?.actionClass ?? "state-changing"}
-        revisionHash={meta?.revisionHash ?? view?.revisionHash}
-        expiresAt={meta?.expiresAt ?? view?.expiresAt}
-        decided={invocation.approval ? { decision: decisionOf(invocation.approval) } : undefined}
-        onDecide={(decision) => chat.addToolApprovalResponse(approvalResponse(approvalId, decision))}
-      />
-    );
-  }
 
   const running = invocation.state === "input-streaming" || invocation.state === "input-available";
   const summary = invocation.state === "output-available" ? toolSummaryOf(invocation.output) : undefined;
@@ -116,11 +92,10 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
             text: `Couldn't finish: ${label.active.replace(/…$/, "").replace(/^\w/, (c) => c.toLowerCase())}`,
             word: "failed",
           }
-        : invocation.state === "output-denied"
-          ? { icon: <BlockIcon fontSize="small" sx={{ color: "warning.main" }} />, text: label.active.replace(/…$/, ""), word: "not allowed" }
-          : invocation.state === "approval-responded"
-            ? { icon: <HourglassTopIcon fontSize="small" sx={{ color: "info.main" }} />, text: label.active, word: "continuing" }
-            : { icon: <CircularProgress size={16} aria-hidden />, text: label.active, word: undefined };
+        : // Calls that waited for a permission that no longer exists (older chat history) never ran.
+          invocation.state === "output-denied" || invocation.state === "approval-requested" || invocation.state === "approval-responded"
+          ? { icon: <BlockIcon fontSize="small" sx={{ color: "text.secondary" }} />, text: label.active.replace(/…$/, ""), word: "not run" }
+          : { icon: <CircularProgress size={16} aria-hidden />, text: label.active, word: undefined };
   const opensPanel = outputRevision !== undefined && (toolName === "propose_design" || verdictList.length > 0);
 
   return (
@@ -155,11 +130,6 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
         <Alert severity="error" sx={{ mt: 0.5 }}>
           {invocation.errorText}
         </Alert>
-      )}
-      {invocation.state === "output-denied" && (
-        <Typography variant="body2" sx={{ px: 1, color: "text.secondary" }}>
-          {invocation.approval?.reason === "deny" || !invocation.approval?.reason ? "You said no, so Claude skipped this step." : invocation.approval.reason}
-        </Typography>
       )}
       <Collapse in={open} id={detailsId} unmountOnExit>
         <Stack sx={{ gap: 1, mt: 0.5, mb: 1, pl: 4.5, pr: 1 }}>

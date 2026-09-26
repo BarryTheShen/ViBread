@@ -4,7 +4,6 @@ import { pipeUIMessageStreamToResponse, type UIMessage } from "ai";
 import type { Express, Request, Response } from "express";
 import type { Logger } from "pino";
 import type { MessageStore } from "../store/messages.js";
-import type { ApprovalLinks } from "./approval-links.js";
 import { mountRecorded } from "./recorded.js";
 import type { RunManager } from "./runs.js";
 
@@ -20,7 +19,7 @@ function statusOf(error: unknown): { status: number; code: string } {
   };
 }
 
-/** Only a new user message with text/file parts is accepted: history (assistant/tool parts, approvals) is server-held. */
+/** Only a new user message with text/file parts is accepted: history (assistant and tool parts) is server-held. */
 function userMessage(body: unknown, actor: Actor): UIMessage | null {
   const message = (body as { message?: unknown } | undefined)?.message as Partial<UIMessage> | undefined;
   if (!message || message.role !== "user" || !Array.isArray(message.parts) || !message.parts.length) return null;
@@ -42,8 +41,8 @@ function userMessage(body: unknown, actor: Actor): UIMessage | null {
  *   GET  /api/missions/:id/chat/stream   → replay of the active run (or one that just finished unwatched) from its start, then live; 204 when idle
  *   POST /api/missions/:id/chat/stop     → { ok: true }; aborts the active run
  */
-export function mountChat(app: Express, deps: { store: MissionStore; messages: MessageStore; runs: RunManager; links: ApprovalLinks; log: Logger }): void {
-  const { store, runs, links, log } = deps;
+export function mountChat(app: Express, deps: { store: MissionStore; messages: MessageStore; runs: RunManager; log: Logger }): void {
+  const { store, messages, runs, log } = deps;
   mountRecorded(app); // GET /api/recorded/:file — the recorded photo-check example picture
 
   /**
@@ -71,7 +70,7 @@ export function mountChat(app: Express, deps: { store: MissionStore; messages: M
     try {
       const owner = await owned(req, res);
       if (!owner) return;
-      res.json(await links.hydrate(owner.id));
+      res.json(await messages.list(owner.id));
     } catch (error) {
       log.error({ err: errorMessage(error) }, "chat history failed");
       sendError(res, 500, "internal_error", "Could not load the chat.");

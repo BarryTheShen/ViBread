@@ -21,7 +21,6 @@ try {
       brief: golden.brief,
       ownerId: operator.id,
       inventory: golden.inventory,
-      mode: "review",
     });
     await ctx.machine.send(mission.id, { type: "DESIGN_STARTED" });
     const revision = await ctx.store.createRevision(mission.id, {

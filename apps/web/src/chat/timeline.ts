@@ -19,7 +19,7 @@ export type RowTone = "neutral" | "success" | "warning" | "error" | "info";
 
 /** What a row shows and opens (pure; rendered by chat/TimelineRow.tsx). */
 export interface RowModel {
-  icon: "design" | "tests" | "checks" | "go" | "steps" | "photo" | "bench" | "done" | "recorded" | "mode" | "parts" | "phase" | "info";
+  icon: "design" | "tests" | "checks" | "go" | "steps" | "photo" | "bench" | "done" | "recorded" | "parts" | "phase" | "info";
   title: string;
   /** Short trailing status ("all GO", "pass", "3 GO · 1 PENDING"). */
   status?: string;
@@ -41,6 +41,8 @@ const HIDDEN_KINDS: Record<string, true> = {
   "faults.ready": true,
   "approval.requested": true,
   "approval.decided": true,
+  // Permission modes were removed; older missions still carry these events.
+  "mode.changed": true,
   "bench.ask.opened": true,
   "bench.ask.closed": true,
   "bench.ask.answered": true,
@@ -326,8 +328,6 @@ function singleRow(event: TimelineEvent): RowModel {
       return { ...base, icon: "bench", title: "Bench action declined", tone: "warning", view: "telemetry" };
     case "inventory.added":
       return { ...base, icon: "parts", title: event.text.replace(/\.$/, ""), tone: "neutral", view: "parts" };
-    case "mode.changed":
-      return { ...base, icon: "mode", title: event.text, tone: "neutral" };
     case "mission.recorded":
       return { ...base, icon: "recorded", title: "Recorded run — replayed, not live", tone: "info" };
     case "mission.confirmed":

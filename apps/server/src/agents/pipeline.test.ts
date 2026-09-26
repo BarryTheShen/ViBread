@@ -9,7 +9,7 @@ const AUTHOR: Actor = { kind: "agent", id: "design-agent", channel: "web" };
 
 async function evaluate(circuit: Circuit, withSuite = true) {
   const store = memoryStore();
-  const mission = await store.createMission({ title: "t", brief: golden.brief, ownerId: "o", inventory: golden.inventory, mode: "review" });
+  const mission = await store.createMission({ title: "t", brief: golden.brief, ownerId: "o", inventory: golden.inventory });
   await store.createRevision(mission.id, { circuit, ...(withSuite ? { suite: golden.suite } : {}), author: AUTHOR });
   const results = await createPipeline({ store, faults: false }).evaluate(mission.id, 1);
   return { store, mission, results, byConsole: Object.fromEntries(results.reports.map((r) => [r.console, r])) };
@@ -19,7 +19,7 @@ describe("pipeline", () => {
   it("builds the fault dictionary in the background after returning the consoles", async () => {
     const knob = GOLDEN.find((g) => g.key === "knob-night-light")!;
     const store = memoryStore();
-    const mission = await store.createMission({ title: "t", brief: knob.brief, ownerId: "o", inventory: knob.inventory, mode: "review" });
+    const mission = await store.createMission({ title: "t", brief: knob.brief, ownerId: "o", inventory: knob.inventory });
     await store.createRevision(mission.id, { circuit: knob.circuit, suite: knob.suite, author: AUTHOR });
     const pipeline = createPipeline({ store });
     const results = await pipeline.evaluate(mission.id, 1);

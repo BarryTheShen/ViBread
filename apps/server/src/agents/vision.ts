@@ -33,7 +33,7 @@ export function createPhotoChecker(deps: { models: AgentModels; store: MissionSt
       if (!mission) throw new ToolInputError(`Mission ${input.missionId} does not exist.`, 404);
       let resolved: ResolvedModel;
       try {
-        resolved = await deps.models.fast(mission.ownerId);
+        resolved = await deps.models.fast(mission.ownerId, { missionId: mission.id, purpose: "photo-check" });
       } catch (error) {
         if (!isClaudeNotConnected(error)) throw error;
         // PLAN §4 named fallback: no credential → the user's photo is NOT analyzed; show a clearly labeled recorded example.

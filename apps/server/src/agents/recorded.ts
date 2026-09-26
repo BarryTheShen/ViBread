@@ -41,7 +41,7 @@ export const RecordedRunSchema = z.object({
   key: z.string().min(1),
   recordedOn: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   provenance: z.string().min(1),
-  mission: z.object({ title: z.string().min(1), brief: z.string().min(1), inventory: z.array(InventoryItemSchema), mode: z.literal("review") }),
+  mission: z.object({ title: z.string().min(1), brief: z.string().min(1), inventory: z.array(InventoryItemSchema) }),
   design: z.object({
     ...ModelInfo,
     startedAt: z.string(),
@@ -183,7 +183,7 @@ export async function seedRecordedMission(deps: {
   const designActor: Actor = { kind: "agent", id: "design-agent", name: `Design agent (${designMark.label})`, channel: "system" };
   const system: Actor = { kind: "system", id: "recorded-run", name: "Recorded run", channel: "system" };
 
-  const mission = await store.createMission({ title: run.mission.title, brief: run.mission.brief, ownerId: deps.ownerId, inventory: run.mission.inventory, mode: run.mission.mode });
+  const mission = await store.createMission({ title: run.mission.title, brief: run.mission.brief, ownerId: deps.ownerId, inventory: run.mission.inventory });
   const recording = missionRecording(run);
   await store.appendEvent({ missionId: mission.id, channel: "system", actor: system, kind: "mission.recorded", text: recording.label, data: recording });
   await deps.sendMachine(mission.id, { type: "DESIGN_STARTED" });

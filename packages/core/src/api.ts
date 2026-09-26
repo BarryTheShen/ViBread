@@ -8,7 +8,6 @@ import type {
   InventoryItem,
   Mission,
   MissionPhase,
-  PermissionMode,
   RevisionResults,
   TimelineEvent,
 } from "./mission.js";
@@ -28,7 +27,7 @@ import type { DeviceLine } from "./telemetry.js";
  *   GET    /api/missions                                        → MissionSummary[]
  *   POST   /api/missions                  CreateMissionRequest  → MissionSummary
  *   GET    /api/missions/:id                                    → MissionDetail
- *   PATCH  /api/missions/:id              { mode }              → MissionSummary
+ *   PATCH  /api/missions/:id              { title }             → MissionSummary
  *   GET    /api/missions/:id/timeline?after=<eventId>           → TimelineEvent[]
  *   GET    /api/missions/:id/revisions                          → RevisionSummary[]
  *   GET    /api/missions/:id/revisions/:n                       → RevisionDetail
@@ -37,8 +36,8 @@ import type { DeviceLine } from "./telemetry.js";
  *   POST   /api/missions/:id/chat         { message: UIMessage } → AI SDK UI message stream (SSE)
  *   GET    /api/missions/:id/chat/stream                        → resume the active stream (204 if none)
  *   POST   /api/missions/:id/chat/stop                          → { ok: true }
- *   POST   /api/approvals/:approvalId     { decision }          → ApprovalView
- *   POST   /api/missions/:id/release      ReleaseRequest        → MissionDetail (human "GO for build"; 409 not_all_go | retro_missing | retro_no_go)
+ *   POST   /api/approvals/:approvalId     { decision }          → ApprovalView (bench requests only)
+ *   POST   /api/missions/:id/release      ReleaseRequest        → MissionDetail (the person's "GO for build"; 409 not_all_go | tests_missing | retro_missing | retro_no_go)
  *   GET    /api/missions/:id/build                              → BuildState   (phone Build Mode polls every 1–2 s)
  *   POST   /api/missions/:id/build/step   { n }                 → BuildState   ("I did this")
  *   POST   /api/missions/:id/bench/firmware { kind }            → BenchFirmwareResponse  kind: "bench" | "app"
@@ -82,7 +81,6 @@ export interface CreateMissionRequest {
    */
   inventory?: InventoryItem[];
   inventoryEntryIds?: string[];
-  mode?: PermissionMode;
   title?: string;
 }
 
@@ -90,7 +88,6 @@ export interface MissionSummary {
   id: string;
   title: string;
   brief: string;
-  mode: PermissionMode;
   phase: MissionPhase;
   currentRevision?: number;
   releasedRevision?: number;

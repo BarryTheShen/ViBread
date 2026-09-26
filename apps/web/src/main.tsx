@@ -16,6 +16,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, Outlet, useLocation } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { RouteError } from "./components/RouteError.js";
+import { ClientErrorBoundary, installBrowserErrorReporter } from "./components/ClientErrorReporter.js";
 import { SignInRequired, useProviders } from "./components/SignIn.js";
 import { authClient } from "./api/auth.js";
 import { HttpError } from "./api/client.js";
@@ -109,7 +110,9 @@ function App() {
       <InitColorSchemeScript attribute="data" defaultMode="system" />
       <CssBaseline enableColorScheme />
       <QueryClientProvider client={queryClient}>
-        <RouterProvider router={router} />
+        <ClientErrorBoundary>
+          <RouterProvider router={router} />
+        </ClientErrorBoundary>
       </QueryClientProvider>
     </ThemeProvider>
   );
@@ -117,6 +120,7 @@ function App() {
 
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html is missing #root");
+installBrowserErrorReporter();
 createRoot(root).render(
   <StrictMode>
     <App />

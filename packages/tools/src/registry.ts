@@ -25,13 +25,14 @@ import {
   circuitInterface,
   crashFinding,
   defineTool,
-  deterministicGo,
   errorMessage,
   isClaudeNotConnected,
   requireRevision,
   statusReport,
   verdicts,
   type CircuitInterface,
+  traceTools,
+  type ToolTraceEvent,
 } from "./common.js";
 import { TestsNotWrittenError, createDesignOps, type DesignOps } from "./design.js";
 import type { Pipeline } from "./pipeline.js";
@@ -49,7 +50,6 @@ export interface RegistryHooks {
   /** RETRO reviewer: sees everything, can only vote. */
   review?(input: { mission: Mission; revision: Revision; signal?: AbortSignal }): Promise<ConsoleReport>;
   onEvaluated?(missionId: string, revision: Revision): Promise<void>;
-  onReleased?(missionId: string, n: number): Promise<void>;
 }
 
 const revisionArg = z.number().int().positive().optional().describe("Revision number; the latest revision when omitted.");
@@ -83,11 +83,18 @@ async function appHex(store: MissionStore, revision: Revision): Promise<string> 
  * The ViBread tool surface (PLAN §5.2). Defined once; adapted to AI SDK tools (ai-sdk.ts) and to MCP by Channels from
  * `list()`. Engines are imported inside handlers so one broken engine only breaks the tools that need it.
  */
-export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeline; hooks?: RegistryHooks; design?: DesignOps }): ToolRegistry {
+export function createToolRegistry(deps: {
+  store: MissionStore;
+  pipeline: Pipeline;
+  hooks?: RegistryHooks;
+  design?: DesignOps;
+  /** Called after every tool call (any caller) with its timing and outcome. */
+  trace?: (event: ToolTraceEvent) => void;
+}): ToolRegistry {
   const { store, pipeline, hooks = {} } = deps;
   const ops = deps.design ?? createDesignOps({ store, pipeline, hooks });
 
-  const tools: ToolDef[] = [
+  const defs: ToolDef[] = [
     defineTool({
       name: "list_modules",
       title: "List parts ViBread knows",
@@ -451,41 +458,6 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
       },
     }),
     defineTool({
-      name: "release_revision",
-      title: "Release for building",
-      description: "Release a revision as the build target (breadboard steps + firmware). Needs every console GO; asks the human unless Autopilot and all GO.",
-      actionClass: "release",
-      input: z.object({ revision: z.number().int().positive() }),
-      handler: async (ctx, input) => {
-        const revision = await requireRevision(store, ctx.missionId, input.revision);
-        const reports = revision.results.reports;
-        if (!deterministicGo(reports)) {
-          throw new ToolInputError(`Revision ${revision.n} is not GO (${verdictLine(reports)}); fix the findings first.`);
-        }
-        if (reports.find((r) => r.console === "RETRO")?.verdict === "NO-GO") {
-          throw new ToolInputError(`The independent review voted NO-GO on revision ${revision.n}.`);
-        }
-        await store.updateMission(ctx.missionId, { releasedRevision: revision.n });
-        await store.appendEvent({
-          missionId: ctx.missionId,
-          channel: ctx.actor.channel,
-          actor: ctx.actor,
-          kind: "revision.released",
-          text: `Revision ${revision.n} released for building.`,
-          revision: revision.n,
-          data: { hash: revision.hash },
-        });
-        await hooks.onReleased?.(ctx.missionId, revision.n);
-        return {
-          summary: `Revision ${revision.n} is the build target`,
-          revision: revision.n,
-          steps: revision.results.steps?.steps.length ?? 0,
-          buildUrl: `/b/${encodeURIComponent(ctx.missionId)}`,
-          benchUrl: `/m/${encodeURIComponent(ctx.missionId)}/bench`,
-        };
-      },
-    }),
-    defineTool({
       name: "request_bench_action",
       title: "Ask for a bench action",
       description:
@@ -517,7 +489,9 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
     defineTool({
       name: "add_part",
       title: "Add a part to your list",
-      description: "Add a part to the user's inventory (bill of materials change). Always asks the human first.",
+      description:
+        "Add a part to this mission's parts list when the design needs something the user didn't list. Say plainly that they " +
+        "need to have it; the output says whether it's in their inventory.",
       actionClass: "bom-change",
       input: z.object({
         module: z.enum(MODULE_KEYS),
@@ -527,6 +501,9 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
       }),
       handler: async (ctx, input) => {
         const mission = await requireMission(store, ctx.missionId);
+        const owned = mission.inventory.some(
+          (item) => item.module === input.module && Object.entries(input.params ?? {}).every(([key, value]) => item.params?.[key] === undefined || item.params[key] === value),
+        );
         const params = input.params ? MODULES[input.module].params.safeParse(input.params) : undefined;
         if (params && !params.success) throw new ToolInputError(`Invalid params for ${input.module}: ${params.error.message}`);
         const item: InventoryItem = {
@@ -544,11 +521,17 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
           text: `Added ${item.count}× ${MODULES[item.module].name} to the parts list.`,
           data: item,
         });
-        return { summary: `Added ${item.count}× ${MODULES[item.module].name}`, item };
+        const name = MODULES[item.module].name;
+        return {
+          summary: `Added ${item.count}× ${name}${owned ? "" : " — not in your inventory; make sure you have one"}`,
+          inInventory: owned,
+          item,
+        };
       },
     }),
   ];
 
+  const tools = deps.trace ? traceTools(defs, deps.trace) : defs;
   const byName = new Map(tools.map((t) => [t.name, t]));
   return {
     list: () => [...tools],

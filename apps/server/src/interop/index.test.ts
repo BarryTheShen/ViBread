@@ -27,17 +27,17 @@ function testContext() {
   const missions = {
     async detail(id: string) {
       return {
-        mission: { id, title: "Test mission", brief: "test", ownerId: "u1", mode: "review", phase: "DESIGN", inventory: [], createdAt: "", updatedAt: "" },
+        mission: { id, title: "Test mission", brief: "test", ownerId: "u1", phase: "DESIGN", inventory: [], createdAt: "", updatedAt: "" },
         consoles: [],
         pendingApprovals: [],
         agentBusy: false,
       };
     },
     async list() {
-      return [{ id: "m1", title: "Test mission", brief: "test", mode: "review", phase: "DESIGN", updatedAt: "" }];
+      return [{ id: "m1", title: "Test mission", brief: "test", phase: "DESIGN", updatedAt: "" }];
     },
     async create() {
-      return { id: "m1", title: "Test mission", brief: "test", ownerId: "u1", mode: "review", phase: "BRIEF", inventory: [], createdAt: "", updatedAt: "" };
+      return { id: "m1", title: "Test mission", brief: "test", ownerId: "u1", phase: "BRIEF", inventory: [], createdAt: "", updatedAt: "" };
     },
     async say(_missionId: string, answer: string) {
       sayCount += 1;
@@ -90,14 +90,15 @@ function testContext() {
     },
     store: {
       async getMission(id: string) {
-        return { id, title: "Test mission", brief: "test", ownerId: "u1", mode: "review", phase: "DESIGN", inventory: [], createdAt: "", updatedAt: "" };
+        return { id, title: "Test mission", brief: "test", ownerId: "u1", phase: "DESIGN", inventory: [], createdAt: "", updatedAt: "" };
       },
       async getRevision() {
         return null;
       },
     },
     missions,
-    broker: { async evaluate() { return { outcome: "bench-click" }; } },
+    // Only read-only tools are called here; they never reach the bench-request broker.
+    broker: {},
     inventory: {
       async entries(ownerId: string) {
         const at = "2026-09-26T00:00:00.000Z";

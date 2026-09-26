@@ -124,6 +124,12 @@ export function capcomLinkUrl(phoneUrl: string, pairToken?: string): string {
   return `${base}?pair=${encodeURIComponent(pairToken)}`;
 }
 
+export function capcomMissionLink(phoneUrl: string, missionId: string, pairToken?: string): string {
+  const base = `${phoneUrl.replace(/\/$/, "")}/b/${encodeURIComponent(missionId)}`;
+  if (!pairToken) return base;
+  return `${base}?pair=${encodeURIComponent(pairToken)}`;
+}
+
 function senderHandle(space: Space, message: Message): string {
   return message.sender?.id ?? space.id;
 }
@@ -164,7 +170,7 @@ function approvalFromEvent(event: TimelineEvent): ApprovalNotice | undefined {
   const id = stringValue(nested.id);
   const missionId = stringValue(nested.missionId) ?? event.missionId;
   const actionClass = nested.actionClass;
-  if (!id || !missionId || (actionClass !== "physical" && actionClass !== "read-only" && actionClass !== "state-changing" && actionClass !== "release" && actionClass !== "bom-change")) return undefined;
+  if (!id || !missionId || (actionClass !== "physical" && actionClass !== "read-only" && actionClass !== "state-changing" && actionClass !== "bom-change")) return undefined;
   return {
     id,
     missionId,
@@ -172,6 +178,10 @@ function approvalFromEvent(event: TimelineEvent): ApprovalNotice | undefined {
     summary: stringValue(nested.summary) ?? "Approval requested",
     consequence: stringValue(nested.consequence) ?? "This action changes the mission.",
   };
+}
+
+export function shouldSendApprovalPoll(actionClass: ApprovalRequest["actionClass"]): boolean {
+  return actionClass === "physical";
 }
 
 function benchAskFromEvent(event: TimelineEvent): BenchAsk | undefined {
@@ -506,7 +516,7 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
     }
     if (event.kind === "approval.requested") {
       const notice = approvalFromEvent(event);
-      if (notice) await sendApproval(space, notice);
+      if (notice && shouldSendApprovalPoll(notice.actionClass)) await sendApproval(space, notice);
     }
     if (isFaultAlertEvent(event)) {
       const summary = eventSummary(event);
@@ -579,6 +589,40 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
     await sendText(space, `${result.summary}\n${result.answers.map((answer: PhotoPartAnswer) => `${answer.part}: ${answer.status} — ${answer.note}`).join("\n")}`);
   };
 
+  const handleGoForBuild = async (space: Space, handle: string, userId: string): Promise<void> => {
+    const missionId = activeMissions.get(handle);
+    if (!missionId) {
+      await sendText(space, "No active mission. Reply `mission` to choose one or `brief <what you want to build>` to begin.");
+      return;
+    }
+    const detail = await ctx.missions.detail(missionId);
+    const revision = detail.mission.currentRevision;
+    if (revision === undefined) {
+      await sendText(space, "GO for build isn't ready: checks aren't finished.");
+      return;
+    }
+    try {
+      const released = await ctx.runtime.release({
+        missionId,
+        revision,
+        actor: { kind: "human", id: userId, channel: "imessage" },
+      });
+      if (released.mission.releasedRevision === undefined) {
+        await sendText(space, "GO for build isn't ready: checks aren't finished.");
+        return;
+      }
+      const link = capcomMissionLink(ctx.config.phoneUrl, missionId, ctx.lanGuard.pairToken());
+      await sendText(space, `GO for build — the build steps are ready: ${link}`);
+    } catch (error) {
+      const code = typeof error === "object" && error !== null && "code" in error ? String(error.code) : "";
+      if (code === "retro_missing") {
+        await sendText(space, "Open ViBread to confirm GO without the independent review.");
+      } else {
+        await sendText(space, "GO for build isn't ready: checks aren't finished.");
+      }
+    }
+  };
+
   const handleLinkedText = async (space: Space, handle: string, userId: string, value: string): Promise<void> => {
     if (awaitingFirstReply.delete(handle)) {
       await sendLinkAfterReply(space, userId);
@@ -587,6 +631,11 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
     if (await answerBenchAsk(space, handle, value)) return;
     const pendingVote = normalizedVote(value);
     if (pendingVote && (await handleVote(space, handle, pendingVote))) return;
+    const normalizedText = value.trim().toLowerCase();
+    if (normalizedText === "go" || normalizedText === "go for build") {
+      await handleGoForBuild(space, handle, userId);
+      return;
+    }
     const requested = missionSelection(value);
     if (requested !== undefined) {
       const missions = await ctx.missions.list(userId);
@@ -615,8 +664,15 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
         return;
       }
       const detail = await ctx.missions.detail(missionId);
-      await sendText(space, `${detail.mission.title}\nPhase: ${detail.mission.phase}\nRevision: ${detail.mission.currentRevision ?? "none"}\nPending approvals: ${detail.pendingApprovals.length}`);
-      return;
+      let next = "";
+      try {
+        const build = await ctx.missions.build(missionId);
+        const step = build.steps[build.current - 1];
+        if (step) next = `\nNext step: ${step.n} — ${step.title}`;
+      } catch {
+        // Status remains useful when no released build exists yet.
+      }
+      await sendText(space, `${detail.mission.title}\nPhase: ${detail.mission.phase}\nRevision: ${detail.mission.currentRevision ?? "none"}\nPending approvals: ${detail.pendingApprovals.length}${next}`);
     }
 
     const brief = missionBriefFrom(value);

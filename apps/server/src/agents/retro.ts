@@ -25,7 +25,7 @@ export type RetroVote = z.infer<typeof RetroVoteSchema>;
 export function createRetroReviewer(deps: { models: AgentModels; store: MissionStore }): { review: NonNullable<RegistryHooks["review"]> } {
   return {
     async review({ mission, revision, signal }) {
-      const { model, modelId } = await deps.models.fast(mission.ownerId);
+      const { model, modelId } = await deps.models.fast(mission.ownerId, { missionId: mission.id, purpose: "retro" });
       const consoles = revision.results.reports
         .filter((r) => r.console !== "RETRO")
         .map((r) => ({ console: r.console, verdict: r.verdict, summary: r.summary, findings: r.findings.map((f) => `${f.severity} ${f.ruleId}: ${f.title}`) }));

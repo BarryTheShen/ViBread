@@ -109,7 +109,7 @@ export async function identifyParts(
   deps: { models: AgentModels },
   input: { ownerId: string; photos: Buffer[]; types: PartType[]; signal?: AbortSignal },
 ): Promise<{ observations: ScanObservation[]; analyzed: AnalyzedPhoto[] }> {
-  const { model } = await deps.models.fast(input.ownerId);
+  const { model } = await deps.models.fast(input.ownerId, { missionId: null, purpose: "scan" });
   const analyzed = await Promise.all(input.photos.map((photo) => prepareForVision(photo)));
   const system = scanSystemPrompt(input.types);
   const known = new Set(input.types.map((t) => t.id));

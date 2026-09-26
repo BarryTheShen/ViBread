@@ -7,16 +7,6 @@ import type { TestSuite } from "./scenario.js";
 import type { SelfTestPlan } from "./selftest.js";
 import type { StepList } from "./steps.js";
 
-/** Claude-Code-style permission modes (PLAN §5.10). Review is the default. */
-export const PERMISSION_MODES = ["plan", "ask", "review", "autopilot"] as const;
-export type PermissionMode = (typeof PERMISSION_MODES)[number];
-export const MODE_LABELS: Record<PermissionMode, string> = {
-  plan: "Plan",
-  ask: "Ask every time",
-  review: "Review",
-  autopilot: "Autopilot",
-};
-
 export const MISSION_PHASES = ["BRIEF", "CLARIFY", "DESIGN", "GONOGO", "ASSEMBLE", "VERIFY", "DEBUG", "LAUNCH", "DONE"] as const;
 export type MissionPhase = (typeof MISSION_PHASES)[number];
 
@@ -47,14 +37,13 @@ export interface Mission {
   title: string;
   brief: string;
   ownerId: string;
-  mode: PermissionMode;
   phase: MissionPhase;
   inventory: InventoryItem[];
   /** Parts the owner has that ViBread can't design with (list-only types), passed to the design agent as text. */
   inventoryNotes?: string[];
   /** Latest revision number (1-based), if any. */
   currentRevision?: number;
-  /** Revision released as the build target (Go/No-Go passed and approved). */
+  /** Revision released as the build target (all checks GO and the person pressed GO for build). */
   releasedRevision?: number;
   createdAt: string;
   updatedAt: string;
@@ -89,34 +78,22 @@ export interface Revision {
   results: RevisionResults;
 }
 
-/** Action classes every tool and physical action carries. */
-export const ACTION_CLASSES = ["read-only", "state-changing", "release", "physical", "bom-change"] as const;
+/** Action classes every tool carries. Only `physical` needs a person: it runs from a click at the bench. */
+export const ACTION_CLASSES = ["read-only", "state-changing", "physical", "bom-change"] as const;
 export type ActionClass = (typeof ACTION_CLASSES)[number];
-
-/**
- * `bench-click` = never executed by an agent or remote client: the bench browser holding the serial port runs it after a
- * human click. iMessage may pre-approve it; OAuth/bearer clients (Claude Code, A2A) may only request it.
- */
-export type PolicyOutcome = "approved" | "denied" | "user-approval" | "bench-click";
-
-/** PLAN §5.10 table. `allGo` = every console including RETRO is GO for the revision being released. */
-export function policyFor(mode: PermissionMode, action: ActionClass, ctx: { allGo?: boolean } = {}): PolicyOutcome {
-  if (action === "read-only") return "approved";
-  if (action === "physical") return "bench-click";
-  if (action === "bom-change") return "user-approval";
-  if (action === "state-changing") return mode === "plan" ? "denied" : mode === "ask" ? "user-approval" : "approved";
-  // release
-  return mode === "autopilot" && ctx.allGo ? "approved" : "user-approval";
-}
 
 export type ApprovalDecision = "approve-once" | "approve-mission" | "deny";
 
+/**
+ * A physical bench request (flash, rail checkpoint, self-test). Never executed by an agent or remote client: the bench
+ * browser holding the serial port runs it after a human click. A linked iMessage handle may pre-approve it.
+ */
 export interface ApprovalRequest {
   id: string;
   missionId: string;
   revisionHash: string;
   actionClass: ActionClass;
-  /** Tool name or physical action ("flash-app", "run-selftest", "release-revision"). */
+  /** The bench action: "flash-bench", "rail-checkpoint", "run-selftest", "flash-app". */
   action: string;
   /** hashJson({ revisionHash, action, input }) — a decision only applies to this exact action. */
   actionHash: string;

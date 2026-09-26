@@ -11,7 +11,6 @@ import MemoryIcon from "@mui/icons-material/Memory";
 import RocketLaunchOutlinedIcon from "@mui/icons-material/RocketLaunchOutlined";
 import ScienceOutlinedIcon from "@mui/icons-material/ScienceOutlined";
 import TaskAltIcon from "@mui/icons-material/TaskAlt";
-import TuneIcon from "@mui/icons-material/Tune";
 import Box from "@mui/material/Box";
 import Chip from "@mui/material/Chip";
 import Tooltip from "@mui/material/Tooltip";
@@ -34,7 +33,6 @@ const ICONS: Record<RowModel["icon"], ComponentType<SvgIconProps>> = {
   bench: MemoryIcon,
   done: TaskAltIcon,
   recorded: HistoryIcon,
-  mode: TuneIcon,
   parts: Inventory2OutlinedIcon,
   phase: FlagOutlinedIcon,
   info: InfoOutlinedIcon,

@@ -14,11 +14,12 @@ import { createTokenService, type TokenService } from "./services/tokens.js";
 import { createCapcomSpaceStore, type CapcomSpaceStore } from "./services/capcom-spaces.js";
 import { createBenchAskStore, type BenchAskStore } from "./services/bench-asks.js";
 import { createLanGuard, type LanGuard } from "./services/lan-guard.js";
+import { createDebugLog, type DebugLog } from "./services/debug-log.js";
 import { createCatalogService, type CatalogService } from "./services/catalog.js";
 import { createInventoryService, type InventoryService } from "./services/inventory.js";
 import { createScanService, type ScanService } from "./services/scans.js";
-import { createMissionStore } from "./store/missions.js";
 import { createMessageStore, type MessageStore } from "./store/messages.js";
+import { createMissionStore } from "./store/missions.js";
 import { ensureOperatorUser } from "./auth.js";
 import type { AgentRuntime } from "./agents/index.js";
 export interface AppContext {
@@ -33,6 +34,7 @@ export interface AppContext {
   capcomSpaces: CapcomSpaceStore;
   benchAsks: BenchAskStore;
   lanGuard: LanGuard;
+  debug: DebugLog;
   catalog: CatalogService;
   inventory: InventoryService;
   scans: ScanService;
@@ -65,9 +67,10 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
   const scans = createScanService({ db: opened.db, sqlite: opened.sqlite, store });
   const benchAsks = createBenchAskStore({ store });
   const lanGuard = createLanGuard({ dataDir: config.dataDir, singleOperator: config.singleOperator, pairing: process.env.VIBREAD_LAN_PAIRING, sqlite: opened.sqlite });
+  const debug = createDebugLog(config.dataDir);
   const messages = createMessageStore({ db: opened.db, sqlite: opened.sqlite });
   const claudeAccounts = createClaudeAccountService({ config, db: opened.db, log });
-  const runtime = createAgentRuntime({ config, log, store, broker, machine, messages, claudeAccounts, inventory });
+  const runtime = createAgentRuntime({ config, log, store, broker, machine, messages, claudeAccounts, inventory, debug });
   const ctx: AppContext = {
     config,
     log,
@@ -80,6 +83,7 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
     capcomSpaces,
     benchAsks,
     lanGuard,
+    debug,
     catalog,
     inventory,
     scans,

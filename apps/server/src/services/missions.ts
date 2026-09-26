@@ -19,7 +19,6 @@ import {
 import { ToolInputError, artifactUrl, errorMessage } from "@vibread/tools";
 import type { UIMessage } from "ai";
 import type { AgentDeps, MissionEvent } from "../agents/deps.js";
-import type { ApprovalLinks } from "../agents/approval-links.js";
 import type { EventBus } from "../agents/events.js";
 import { AgentBusyError, type RunManager } from "../agents/runs.js";
 
@@ -37,7 +36,6 @@ function summary(mission: Mission): MissionSummary {
     id: mission.id,
     title: mission.title,
     brief: mission.brief,
-    mode: mission.mode,
     phase: mission.phase,
     ...(mission.currentRevision !== undefined ? { currentRevision: mission.currentRevision } : {}),
     ...(mission.releasedRevision !== undefined ? { releasedRevision: mission.releasedRevision } : {}),
@@ -57,19 +55,17 @@ function titleFrom(brief: string): string {
 }
 
 /**
- * MissionService (packages/core services.ts) on store + broker + machine + the design-agent run manager. Chat approvals
- * are exposed under their chat (AI SDK) approval id; `decide` accepts that id or the broker id, writes the decision into
- * the stored tool part, and resumes the agent exactly once when the assistant message has no approvals left open.
+ * MissionService (packages/core services.ts) on store + broker + machine + the design-agent run manager. There are no
+ * permission modes; the only approvals are physical bench requests (decide = a person's decision or iMessage pre-approval).
  */
 export function createMissionService(
-  deps: AgentDeps & { bus: EventBus; runs: RunManager; links: ApprovalLinks; sendMachine: (missionId: string, event: MissionEvent) => Promise<void> },
+  deps: AgentDeps & { bus: EventBus; runs: RunManager; sendMachine: (missionId: string, event: MissionEvent) => Promise<void> },
 ): MissionService {
-  const { store, broker, messages, runs, links } = deps;
+  const { store, broker, runs } = deps;
 
   function view(request: ApprovalRequest): ApprovalView {
-    const link = links.forBroker(request.id);
     return {
-      id: link?.approvalId ?? request.id,
+      id: request.id,
       missionId: request.missionId,
       actionClass: request.actionClass,
       action: request.action,
@@ -89,37 +85,6 @@ export function createMissionService(
     const mission = await store.getMission(missionId);
     if (!mission) throw new ToolInputError(`Mission ${missionId} does not exist.`, 404);
     return mission;
-  }
-
-  /** Writes the broker's decision into the stored tool part. Returns true if the part was still open (first decision). */
-  async function applyToHistory(missionId: string, approvalId: string, request: ApprovalRequest, decider: Actor): Promise<{ applied: boolean; ready: boolean }> {
-    const history = await messages.list(missionId);
-    let applied = false;
-    let ready = false;
-    const next = history.map((message): UIMessage => {
-      if (message.role !== "assistant") return message;
-      let touched = false;
-      const parts = message.parts.map((part) => {
-        if (!("approval" in part) || !part.approval || part.approval.id !== approvalId || !("state" in part) || part.state !== "approval-requested") return part;
-        touched = true;
-        const approved = request.status === "approved" || request.status === "consumed";
-        return {
-          ...part,
-          state: "approval-responded" as const,
-          approval: {
-            ...part.approval,
-            approved,
-            ...(approved ? {} : { reason: `${request.status === "expired" ? "Expired" : "Denied"} by ${decider.name ?? decider.id}` }),
-          },
-        };
-      });
-      if (!touched) return message;
-      applied = true;
-      ready = !parts.some((p) => "state" in p && p.state === "approval-requested");
-      return { ...message, parts } as UIMessage;
-    });
-    if (applied) await messages.save(missionId, next);
-    return { applied, ready };
   }
 
   const service: MissionService = {
@@ -142,7 +107,6 @@ export function createMissionService(
         ownerId: input.owner.id,
         inventory,
         ...(inventoryNotes ? { inventoryNotes } : {}),
-        mode: input.mode ?? "review",
       });
       // store.createMission records the "mission.created" timeline event itself (ServerCore's SQL store).
       await deps.sendMachine(mission.id, { type: "BRIEF_RECEIVED" });
@@ -155,7 +119,6 @@ export function createMissionService(
 
     async detail(missionId) {
       const mission = await requireMission(missionId);
-      await links.hydrate(missionId);
       const revision = await store.getRevision(missionId);
       const released = mission.releasedRevision !== undefined ? await store.getRevision(missionId, mission.releasedRevision) : null;
       const pending = await broker.listPending(missionId);
@@ -171,15 +134,6 @@ export function createMissionService(
         agentBusy: runs.active(missionId) !== undefined,
         ...(recording ? { recording } : {}),
       } satisfies MissionDetail;
-    },
-
-    async setMode(missionId, mode, actor) {
-      const before = await requireMission(missionId);
-      const mission = await store.updateMission(missionId, { mode });
-      if (before.mode !== mode) {
-        await store.appendEvent({ missionId, channel: actor.channel, actor, kind: "mode.changed", text: `Permission mode: ${before.mode} → ${mode}`, data: { from: before.mode, to: mode } });
-      }
-      return mission;
     },
 
     async say(missionId, text, actor) {
@@ -212,22 +166,15 @@ export function createMissionService(
     },
 
     async decide(approvalId, decision: ApprovalDecision, actor) {
-      let link = links.resolve(approvalId);
-      const direct = link ? null : await broker.get(approvalId);
-      if (!link && direct) {
-        await links.hydrate(direct.missionId);
-        link = links.forBroker(direct.id);
-      }
-      const brokerId = link?.brokerId ?? direct?.id;
-      const missionId = link?.missionId ?? direct?.missionId;
-      if (!brokerId || !missionId) throw new ApprovalNotFoundError(approvalId);
-      // Only the mission's owner decides (any channel: web session, linked iMessage handle). Chat approval ids aren't
-      // broker ids, so the REST owner middleware can't resolve them; this check is the authority. Someone else's → 404.
+      const existing = await broker.get(approvalId);
+      if (!existing) throw new ApprovalNotFoundError(approvalId);
+      const missionId = existing.missionId;
+      // Only the mission's owner decides (web session or their linked iMessage handle). Someone else's → 404.
       if (actor.kind === "human" && (await store.getMission(missionId))?.ownerId !== actor.id) throw new ApprovalNotFoundError(approvalId);
 
       let request: ApprovalRequest;
       try {
-        request = await broker.decide(brokerId, decision, actor);
+        request = await broker.decide(approvalId, decision, actor);
       } catch (error) {
         // The broker is the authority (e.g. remote/agent actors may request but never approve).
         throw Object.assign(new ToolInputError(errorMessage(error), 403), { code: "approval_forbidden" });
@@ -238,16 +185,8 @@ export function createMissionService(
         actor,
         kind: "approval.decided",
         text: `${request.summary}: ${request.status === "approved" ? "approved" : request.status}`,
-        data: { approvalId: link?.approvalId ?? request.id, decision, status: request.status, action: request.action },
+        data: { approvalId: request.id, decision, status: request.status, action: request.action },
       });
-
-      if (link && request.status !== "pending") {
-        const { applied, ready } = await applyToHistory(link.missionId, link.approvalId, request, actor);
-        // First decision on an open chat approval, and nothing else open in that message: resume exactly once.
-        if (applied && ready && !runs.active(link.missionId)) {
-          await runs.start(link.missionId, { actor: { ...actor } });
-        }
-      }
       return view(request);
     },
 

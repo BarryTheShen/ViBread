@@ -72,7 +72,7 @@ describe("per-mission Claude credential", () => {
     const accounts = fakeClaudeAccounts({ operator: { endpoint: { baseURL: gateway.baseURL, authToken: "gw-token" }, email: "flight@example.com" } });
     const models = anthropicModels({ config: { ...CONFIG, anthropicApiKey: "sk-server" }, claudeAccounts: accounts });
 
-    const resolved = await models.design("operator");
+    const resolved = await models.design("operator", { missionId: null, purpose: "design" });
     expect(resolved.credential).toEqual({ kind: "claude-account", email: "flight@example.com" });
     const { text } = await generateText({ model: resolved.model, prompt: "hi" });
     expect(text).toBe("from your account");
@@ -93,7 +93,7 @@ describe("per-mission Claude credential", () => {
     const accounts = fakeClaudeAccounts();
     const models = anthropicModels({ config: { ...CONFIG, anthropicApiKey: "sk-server" }, claudeAccounts: accounts, fetch: recordingFetch });
 
-    const resolved = await models.fast("someone-else");
+    const resolved = await models.fast("someone-else", { missionId: null, purpose: "retro" });
     expect(resolved.credential).toEqual({ kind: "server-key" });
     await generateText({ model: resolved.model, prompt: "hi" });
     expect(calls.map((c) => c.url)).toEqual(["https://api.anthropic.com/v1/messages"]);
