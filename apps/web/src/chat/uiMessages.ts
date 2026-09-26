@@ -139,6 +139,12 @@ export function normalizeChunks<T>(registry: ToolCallRegistry = new Map()): Tran
           controller.enqueue(completed);
           return;
         }
+        // A call whose input failed the tool's schema ends with `tool-input-error` carrying that input, which MUI X Chat
+        // drops (it sets only the error). Apply the input first, so e.g. an ask_user question still shows (issue #2).
+        if (chunk.type === "tool-input-error" && chunk.input !== undefined) {
+          const name = typeof chunk.toolName === "string" ? chunk.toolName : known?.toolName;
+          controller.enqueue({ type: "tool-input-available", toolCallId: chunk.toolCallId, toolName: name, input: chunk.input, ...(chunk.dynamic === true ? { dynamic: true } : {}) } as T);
+        }
       }
       if (isRecord(chunk) && chunk.type === "message-metadata" && "messageMetadata" in chunk && !("metadata" in chunk)) {
         // Same chunk with the field MUI X Chat reads; the union member is unchanged ("message-metadata").

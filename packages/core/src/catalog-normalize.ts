@@ -306,7 +306,7 @@ function findType(text: string, types: PartType[]): PartType | undefined {
 }
 
 function extractNumericTokens(text: string): string[] {
-  return text.match(/\d+(?:\.\d+)?(?:\s*[kKmMrR]\s*\d+|\s*[kKmMrR])?(?:\s*(?:Ω|ohms?|ohm))?/gi) ?? [];
+  return text.match(/(?<![A-Za-z0-9.])\d+(?:\.\d+)?(?:\s*[kKmMrR]\s*\d+|\s*[kKmMrR])?(?:\s*(?:Ω|ohms?|ohm))?(?![A-Za-z])/gi) ?? [];
 }
 
 function parsedValues(type: PartType, text: string): Record<string, FieldValue> {
@@ -348,7 +348,7 @@ export function parsePartsText(text: string, types: PartType[]): ParsedPartLine[
     .map((line): ParsedPartLine => {
       let remainder = line;
       let quantity = 1;
-      const countMatch = remainder.match(/^\s*(?:(\d+)|([a-z]+))(?:\s*x\b|\s+|\b)/i);
+      const countMatch = remainder.match(/^\s*(?:(\d+)|([a-z]+))(?:\s*[x×](?=[\s\d]|$)|\s+|\b)/i);
       if (countMatch) {
         const numeric = countMatch[1] ? Number(countMatch[1]) : NUMBER_WORDS[countMatch[2]!.toLowerCase()];
         if (numeric !== undefined) {

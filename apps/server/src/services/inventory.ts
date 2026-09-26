@@ -34,8 +34,10 @@ export class SqlInventoryService implements InventoryService {
     return {
       entries: entries.map((entry) => {
         const type = types.find((candidate) => candidate.id === entry.typeId);
-        const mappedModule = type && (type.mapping.kind === "module" || type.mapping.kind === "modelled") ? type.mapping.module : undefined;
-        const usedIn = mappedModule ? missions.filter((mission) => mission.inventory.some((item) => item.module === mappedModule)).map((mission) => ({ missionId: mission.id, title: mission.title })) : [];
+        const mapping = type?.mapping;
+        const module = mapping && (mapping.kind === "module" || mapping.kind === "modelled") ? mapping.module : undefined;
+        const mappedValues = mapping && (mapping.kind === "module" || mapping.kind === "modelled") ? { ...(mapping.fixed ?? {}), ...Object.fromEntries(Object.entries(mapping.params ?? {}).map(([moduleKey, fieldKey]) => [moduleKey, entry.values[fieldKey]])) } : {};
+        const usedIn = module ? missions.filter((mission) => mission.inventory.some((item) => item.module === module && Object.entries(mappedValues).every(([key, value]) => JSON.stringify(item.params?.[key]) === JSON.stringify(value)))).map((mission) => ({ missionId: mission.id, title: mission.title })) : [];
         return { ...entry, usedIn };
       }),
     };
@@ -48,15 +50,19 @@ export class SqlInventoryService implements InventoryService {
       for (const item of input.items) {
         const type = types.find((candidate) => candidate.id === item.typeId);
         if (!type) throw new Error(`unknown part type ${item.typeId}`);
-        const identity = inventoryIdentity(type, item.values);
-        const existing = this.deps.sqlite.prepare('SELECT * FROM "inventory_items" WHERE "ownerId" = ? AND "identity" = ?').get(ownerId, identity) as ItemRow | undefined;
+        const baseIdentity = inventoryIdentity(type, item.values);
+        const desiredStatus = item.status ?? "ready";
+        const readyExisting = this.deps.sqlite.prepare('SELECT * FROM "inventory_items" WHERE "ownerId" = ? AND "identity" = ?').get(ownerId, baseIdentity) as ItemRow | undefined;
+        const uncertainExisting = this.deps.sqlite.prepare('SELECT * FROM "inventory_items" WHERE "ownerId" = ? AND "typeId" = ? AND "identity" LIKE ? ORDER BY "createdAt" LIMIT 1').get(ownerId, item.typeId, `${baseIdentity}|needs-look|%`) as ItemRow | undefined;
+        const existing = desiredStatus === "needs-look" ? (readyExisting ? undefined : uncertainExisting) : (readyExisting ?? uncertainExisting);
+        const identity = desiredStatus === "needs-look" && readyExisting ? `${baseIdentity}|needs-look|${randomUUID()}` : (existing?.identity ?? baseIdentity);
         const quantity = existing && item.mode === "add" ? existing.quantity + item.quantity : item.quantity;
         const values = JSON.stringify(item.values);
         const candidates = item.candidates ? JSON.stringify(item.candidates) : null;
         if (existing) {
-          this.deps.sqlite.prepare('UPDATE "inventory_items" SET "typeId" = ?, "values" = ?, "quantity" = ?, "status" = ?, "source" = ?, "candidates" = ?, "photoUrl" = ?, "note" = ?, "updatedAt" = ? WHERE "id" = ? AND "ownerId" = ?').run(item.typeId, values, quantity, item.status ?? existing.status, item.source, candidates, item.photoUrl ?? existing.photoUrl, item.note ?? existing.note, now, existing.id, ownerId);
+          this.deps.sqlite.prepare('UPDATE "inventory_items" SET "typeId" = ?, "identity" = ?, "values" = ?, "quantity" = ?, "status" = ?, "source" = ?, "candidates" = ?, "photoUrl" = ?, "note" = ?, "updatedAt" = ? WHERE "id" = ? AND "ownerId" = ?').run(item.typeId, identity, values, quantity, desiredStatus, item.source, candidates, item.photoUrl ?? existing.photoUrl, item.note ?? existing.note, now, existing.id, ownerId);
         } else {
-          this.deps.sqlite.prepare('INSERT INTO "inventory_items" ("id", "ownerId", "typeId", "identity", "values", "quantity", "status", "source", "candidates", "photoUrl", "note", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), ownerId, item.typeId, identity, values, item.quantity, item.status ?? "ready", item.source, candidates, item.photoUrl ?? null, item.note ?? null, now, now);
+          this.deps.sqlite.prepare('INSERT INTO "inventory_items" ("id", "ownerId", "typeId", "identity", "values", "quantity", "status", "source", "candidates", "photoUrl", "note", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').run(randomUUID(), ownerId, item.typeId, identity, values, item.quantity, desiredStatus, item.source, candidates, item.photoUrl ?? null, item.note ?? null, now, now);
         }
       }
     });

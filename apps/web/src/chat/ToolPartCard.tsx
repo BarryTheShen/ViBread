@@ -2,14 +2,12 @@ import BlockIcon from "@mui/icons-material/Block";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutlined";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ErrorOutlineIcon from "@mui/icons-material/ErrorOutlined";
-import HelpOutlineIcon from "@mui/icons-material/HelpOutlineOutlined";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Collapse from "@mui/material/Collapse";
 import IconButton from "@mui/material/IconButton";
-import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { useChat } from "@mui/x-chat/headless";
@@ -20,6 +18,7 @@ import { VerdictChip } from "../components/VerdictChip.js";
 import { isRecord } from "../lib/guards.js";
 import { INTER_FONT, MONO_FONT } from "../theme.js";
 import { useMissionShell } from "./missionShell.js";
+import { AskUserCard } from "./AskUserCard.js";
 import { useChatThread } from "./threadContext.js";
 import { toolLabel } from "./toolLabels.js";
 import { toolSummaryOf } from "./uiMessages.js";
@@ -70,7 +69,7 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
   const toolName: string | undefined = invocation.toolName ?? adapter.toolNameOf(invocation.toolCallId);
   const label = toolLabel(toolName, invocation.input);
 
-  if (toolName === "ask_user") return <AskUserCard invocation={invocation} message={message} />;
+  if (toolName === "ask_user") return <AskUserPart invocation={invocation} message={message} />;
 
   const running = invocation.state === "input-streaming" || invocation.state === "input-available";
   const summary = invocation.state === "output-available" ? toolSummaryOf(invocation.output) : undefined;
@@ -170,41 +169,15 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
   );
 }
 
-/** `ask_user` (agent-only): the run stops after it; the question is shown with quick replies. */
-function AskUserCard({ invocation, message }: { invocation: Invocation; message: ChatMessage }) {
+/** `ask_user`: the run stops after it; answering (a choice or free text) sends a normal chat message. */
+function AskUserPart({ invocation, message }: { invocation: Invocation; message: ChatMessage }) {
   const chat = useChat();
-  const input = isRecord(invocation.input) ? invocation.input : {};
-  const question = typeof input.question === "string" ? input.question : "Claude has a question for you.";
-  const choices = Array.isArray(input.choices) ? input.choices.filter((c): c is string => typeof c === "string") : [];
   const isLatest = chat.messages[chat.messages.length - 1]?.id === message.id;
   return (
-    <Paper variant="outlined" sx={{ my: 1, p: 1.5, borderRadius: "12px", fontFamily: INTER_FONT }}>
-      <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 0.5 }}>
-        <HelpOutlineIcon color="primary" fontSize="small" />
-        <Typography variant="body2" sx={{ color: "primary.main", fontWeight: 600 }}>
-          Question for you
-        </Typography>
-      </Stack>
-      <Typography variant="body1">{question}</Typography>
-      {choices.length > 0 && (
-        <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap", mt: 1 }}>
-          {choices.map((choice) => (
-            <Button
-              key={choice}
-              variant="outlined"
-              disabled={!isLatest || chat.isStreaming}
-              onClick={() => void chat.sendMessage({ parts: [{ type: "text", text: choice }] })}
-            >
-              {choice}
-            </Button>
-          ))}
-        </Stack>
-      )}
-      {isLatest && (
-        <Typography variant="caption" sx={{ display: "block", mt: 1, color: "text.secondary" }}>
-          {choices.length > 0 ? "Pick one, or type your own answer below." : "Type your answer below."}
-        </Typography>
-      )}
-    </Paper>
+    <AskUserCard
+      input={invocation.input}
+      answerable={isLatest && !chat.isStreaming}
+      onAnswer={(text) => void chat.sendMessage({ parts: [{ type: "text", text }] })}
+    />
   );
 }

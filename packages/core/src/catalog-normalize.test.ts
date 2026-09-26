@@ -88,6 +88,14 @@ describe("typed inventory parsing", () => {
     expect(lines[0]).toMatchObject({ typeId: "led", quantity: 5, values: { color: "blue" } });
     expect(lines[1]).toMatchObject({ typeId: null, quantity: 1, status: "unknown" });
   });
+
+  it("never reads a model number or part of a longer number as a resistor value", () => {
+    const [runTogether] = parsePartsText("1 SG90 servo4 resistors", BUILT_IN_PART_TYPES);
+    expect(runTogether?.values.ohms).toBeUndefined();
+    expect(runTogether?.status).not.toBe("ready");
+    expect(parsePartsText("5x220 ohm resistors", BUILT_IN_PART_TYPES)[0]).toMatchObject({ typeId: "resistor", quantity: 5, values: { ohms: 220 }, status: "ready" });
+    expect(parsePartsText("2x 4k7 resistors", BUILT_IN_PART_TYPES)[0]).toMatchObject({ quantity: 2, values: { ohms: 4700 } });
+  });
 });
 
 describe("mission inventory conversion", () => {
