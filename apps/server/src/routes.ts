@@ -383,6 +383,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
       imessage: { linked: Boolean(await ctx.links.handleForUser(user.id)), handle: await ctx.links.handleForUser(user.id), capcomNumber: ctx.config.capcom.number },
       claudeCode: { tokens: await ctx.tokens.list(user.id) },
       mcpUrl: `${ctx.config.publicUrl}/mcp`,
+      phoneUrl: ctx.config.phoneUrl,
       claude: await ctx.claudeAccounts.view(user.id),
     });
   });

@@ -5,6 +5,7 @@ import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { GOLDEN } from "@vibread/fixtures";
 import { policyFor } from "@vibread/core";
+import { loadConfig, derivePhoneUrl } from "./config.js";
 import { openDatabase, type OpenDatabase } from "./db/index.js";
 import { createMissionStore } from "./store/missions.js";
 import { createMessageStore } from "./store/messages.js";
@@ -23,6 +24,19 @@ function makeDatabase(): { dir: string; opened: OpenDatabase } {
 }
 
 describe("server core persistence", () => {
+  it("derives phone URLs from env, HTTPS, LAN IPv4, or localhost fallback", () => {
+    expect(derivePhoneUrl({ publicUrl: "http://localhost:8787", port: 8787, configured: "http://phone.local:8787/" }, {})).toBe("http://phone.local:8787");
+    expect(derivePhoneUrl({ publicUrl: "https://vibread.example", port: 8787 }, {})).toBe("https://vibread.example");
+    expect(derivePhoneUrl({ publicUrl: "http://localhost:8787", port: 8787 }, { eth0: [{ address: "192.168.1.24", netmask: "255.255.255.0", family: "IPv4", mac: "", internal: false, cidr: "192.168.1.24/24" }] })).toBe("http://192.168.1.24:8787");
+    expect(derivePhoneUrl({ publicUrl: "http://localhost:8787", port: 8787 }, { lo: [{ address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "", internal: true, cidr: "127.0.0.1/8" }] })).toBe("http://localhost:8787");
+    const dir = `/tmp/vb-phone-${randomUUID()}`;
+    try {
+      expect(() => loadConfig({ DATA_DIR: dir, PUBLIC_URL: "http://192.168.1.24:8787", BETTER_AUTH_SECRET: "x".repeat(40), VIBREAD_APPROVAL_SECRET: "y".repeat(40) })).toThrow("PUBLIC_URL must be https:// (or localhost). For phones on your Wi-Fi");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("round-trips missions, revisions, messages, and deduplicated artifacts", async () => {
     const { dir, opened } = makeDatabase();
     try {
