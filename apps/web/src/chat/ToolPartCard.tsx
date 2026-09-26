@@ -81,7 +81,14 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
 
   const running = invocation.state === "input-streaming" || invocation.state === "input-available";
   const summary = invocation.state === "output-available" ? toolSummaryOf(invocation.output) : undefined;
-  const verdicts = invocation.state === "output-available" ? verdictsOf(invocation.output) : undefined;
+  // One source of truth: when the tool reports on the revision the mission detail describes, show the live console
+  // reports (MissionDetail.consoles, same as the console bar); older revisions keep the votes they got at the time.
+  const outputRevision = isRecord(invocation.output) && typeof invocation.output.revision === "number" ? invocation.output.revision : undefined;
+  const reported = invocation.state === "output-available" ? verdictsOf(invocation.output) : undefined;
+  const live = reported !== undefined && detail !== undefined && outputRevision !== undefined && outputRevision === detail.revision?.n;
+  const verdicts: Partial<Record<(typeof CONSOLE_IDS)[number], Verdict>> | undefined = live
+    ? Object.fromEntries(detail.consoles.map((c) => [c.console, c.verdict]))
+    : reported;
   const status =
     invocation.state === "output-available"
       ? { icon: <CheckCircleIcon color="success" fontSize="small" />, text: label.done, word: "Done" }
@@ -115,9 +122,14 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
           {summary}
         </Typography>
       )}
-      {verdicts && Object.keys(verdicts).length > 0 && (
-        <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap", mt: 1 }}>
-          {CONSOLE_IDS.filter((id) => verdicts[id]).map((id) => (
+      {verdicts && (live || Object.keys(verdicts).length > 0) && (
+        <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap", mt: 1, alignItems: "center" }}>
+          {!live && outputRevision !== undefined && (
+            <Typography variant="caption" sx={{ color: "text.secondary", width: "100%" }}>
+              Votes for design r{outputRevision} at the time:
+            </Typography>
+          )}
+          {CONSOLE_IDS.filter((id) => live || verdicts[id]).map((id) => (
             <Stack key={id} direction="row" sx={{ gap: 0.5, alignItems: "center" }}>
               <Typography variant="caption">{CONSOLE_LABELS[id]}</Typography>
               <VerdictChip verdict={verdicts[id]} />

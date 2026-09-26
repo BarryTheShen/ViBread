@@ -19,8 +19,8 @@ const BOARD_LEFT = 70;
 const BOARD_RIGHT = 1080;
 const BOARD_TOP = 112;
 const BOARD_BOTTOM = 530;
-const TOP_HOLE_Y = 236;
-const BOTTOM_HOLE_Y = 384;
+const TOP_HOLE_Y = 190;
+const BOTTOM_HOLE_Y = 370;
 const CHANNEL_Y = 310;
 const RAIL_Y = { "T-": 58, "T+": 82, "B+": 554, "B-": 578 } as const;
 
@@ -77,7 +77,6 @@ function escapeSvg(value: string): string {
 function cssColor(name: string): string {
   return COLORS[name] ?? name;
 }
-
 function classes(...names: (string | false | undefined)[]): string {
   return names.filter(Boolean).join(" ");
 }
@@ -93,16 +92,15 @@ function rowX(layout: Layout, row: number): number {
 
 function columnY(column: string): number {
   const index = COLUMNS.indexOf(column as (typeof COLUMNS)[number]);
-  return index < 5 ? TOP_HOLE_Y : BOTTOM_HOLE_Y;
+  if (index < 0) return TOP_HOLE_Y;
+  return index < 5 ? TOP_HOLE_Y + index * 22 : BOTTOM_HOLE_Y + (index - 5) * 22;
 }
 
 function holePoint(layout: Layout, hole: HoleId): Point | undefined {
   const parsed = parseHole(hole);
   if (!parsed) return undefined;
   if (parsed.kind === "terminal") return { x: rowX(layout, parsed.row), y: columnY(parsed.column) };
-  const profile = BREADBOARD_PROFILES[layout.breadboard];
-  const row = profile.railPositions.indexOf(parsed.position);
-  const x = rowX(layout, Math.max(1, row * Math.max(1, Math.round((profile.rows - 1) / Math.max(1, profile.railPositions.length - 1))) + 1));
+  const x = rowX(layout, parsed.position);
   return { x, y: RAIL_Y[parsed.rail] };
 }
 
@@ -127,10 +125,10 @@ function boardPinPoints(layout: Layout): Map<string, Point> {
   const analog = profile.pins.filter((pin) => /^A\d+$/.test(pin.name)).sort((a, b) => Number(a.name.slice(1)) - Number(b.name.slice(1)));
   const boardLeft = BOARD_LEFT + 80;
   const boardWidth = BOARD_RIGHT - boardLeft - 20;
-  digital.forEach((pin, index) => points.set(pin.name, { x: boardLeft + ((index + 0.5) / digital.length) * boardWidth, y: 596 }));
+  digital.forEach((pin, index) => points.set(pin.name, { x: boardLeft + ((index + 0.5) / digital.length) * boardWidth, y: 620 }));
   const lower = ["IOREF", "RESET", "3V3", "5V", "GND", "VIN", ...analog.map((pin) => pin.name), "AREF"];
   const unique = [...new Set(lower.filter((name) => profile.pins.some((pin) => pin.name === name)))];
-  unique.forEach((name, index) => points.set(name, { x: boardLeft + ((index + 0.5) / unique.length) * boardWidth, y: 668 }));
+  unique.forEach((name, index) => points.set(name, { x: boardLeft + ((index + 0.5) / unique.length) * boardWidth, y: 665 }));
   return points;
 }
 
@@ -200,7 +198,7 @@ function renderBoard(layout: Layout, pins: Map<string, Point>): string {
   }
   const left = 56;
   const width = 1088;
-  return `<rect x="${left}" y="582" width="${width}" height="108" rx="12" class="mcu uno"/><text x="${left + width / 2}" y="588" text-anchor="middle" class="board-title">Arduino Uno R3</text><text x="${left + 12}" y="610" class="header-label">DIGITAL HEADER</text><text x="${left + 12}" y="662" class="header-label">POWER / ANALOG HEADER</text>${[...pins.entries()].map(([pin, point]) => `<g id="pin-${escapeSvg(pin)}"><circle cx="${point.x}" cy="${point.y}" r="6" class="header-pin"/><text x="${point.x}" y="${point.y + (point.y < 620 ? -10 : 17)}" text-anchor="middle" class="pin-label">${escapeSvg(pin)}</text></g>`).join("")}`;
+  return `<rect x="${left}" y="582" width="${width}" height="108" rx="12" class="mcu uno"/><text x="${left + width / 2}" y="603" text-anchor="middle" class="board-title">Arduino Uno R3</text><text x="${left + 12}" y="612" class="header-label">DIGITAL HEADER</text><text x="${left + 12}" y="662" class="header-label">POWER / ANALOG HEADER</text>${[...pins.entries()].map(([pin, point]) => `<g id="pin-${escapeSvg(pin)}"><circle cx="${point.x}" cy="${point.y}" r="6" class="header-pin"/><text x="${point.x}" y="${point.y + (point.y < 620 ? -10 : 17)}" text-anchor="middle" class="pin-label">${escapeSvg(pin)}</text></g>`).join("")}`;
 }
 
 function partGeometry(layout: Layout, part: Part, placement: Layout["placements"][number]): { pins: Map<string, Point>; center: Point; angle: number } {
@@ -275,7 +273,7 @@ function renderPart(input: RenderInput, part: Part, placement: Layout["placement
   else body = `<rect x="${geometry.center.x - 24}" y="${geometry.center.y - 14}" width="48" height="28" rx="4" class="generic-body"/>`;
   const newItem = state.newParts.has(part.id);
   const highlighted = isHighlighted("part", part.id, input.highlight);
-  const label = state.final || newItem ? partLabel(geometry.center, `${part.id} ${valueLabel(part)}`) : "";
+  const label = state.final || newItem ? partLabel(geometry.center, state.final ? part.id : `${part.id} ${valueLabel(part)}`) : "";
   const pinTitle = pinNames(part).map((pin) => `${pin}:${placement.pins[pin] ?? "?"}`).join(" ");
   return `<g id="part-${escapeSvg(part.id)}" class="${classes("part", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(part.id)} ${escapeSvg(MODULES[part.module].name)}"><title>${escapeSvg(part.id)} — ${escapeSvg(pinTitle)}</title>${body}${label}</g>`;
 }
@@ -293,17 +291,16 @@ function renderJumper(input: RenderInput, jumper: Jumper, pins: Map<string, Poin
   const path = `M ${from.x} ${from.y} C ${from.x + bend * direction} ${from.y + 18}, ${to.x - bend * direction} ${to.y - 18}, ${to.x} ${to.y}`;
   const newItem = state.newJumpers.has(jumper.id);
   const highlighted = isHighlighted("jumper", jumper.id, input.highlight);
-  const showLabel = state.final || newItem;
-  const label = showLabel ? `<rect x="${(from.x + to.x) / 2 - 33}" y="${(from.y + to.y) / 2 - 11}" width="66" height="18" rx="5" class="wire-bg" stroke="${cssColor(String(jumper.color))}"/><text x="${(from.x + to.x) / 2}" y="${(from.y + to.y) / 2 + 2}" text-anchor="middle" class="wire-label">${escapeSvg(jumper.id)} ${escapeSvg(jumper.net)}</text>` : "";
+  const label = newItem ? `<rect x="${(from.x + to.x) / 2 - 33}" y="${(from.y + to.y) / 2 - 11}" width="66" height="18" rx="5" class="wire-bg" stroke="${cssColor(String(jumper.color))}"/><text x="${(from.x + to.x) / 2}" y="${(from.y + to.y) / 2 + 2}" text-anchor="middle" class="wire-label">${escapeSvg(`${jumper.id} ${jumper.net}`)}</text>` : "";
   return `<g id="wire-${escapeSvg(jumper.id)}" class="${classes("wire", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(jumper.id)} ${escapeSvg(jumper.net)}"><title>${escapeSvg(jumper.id)} — ${escapeSvg(jumper.net)}: ${escapeSvg(endpointLabel(jumper.from))} to ${escapeSvg(endpointLabel(jumper.to))}</title><path d="${path}" stroke="${cssColor(String(jumper.color))}" class="wire-path"/>${label}</g>`;
 }
 
 function renderRailLabels(layout: Layout): string {
   const profile = BREADBOARD_PROFILES[layout.breadboard];
   const end = BOARD_RIGHT;
-  const marks: string[] = [];
+  const marks: string[] = [`<style>.rail-label{fill:#f2ead8;paint-order:stroke;stroke:#0c1218;stroke-width:2px}</style>`];
   marks.push(`<line x1="${BOARD_LEFT}" y1="${RAIL_Y["T-"]}" x2="${end}" y2="${RAIL_Y["T-"]}" class="rail-minus"/><line x1="${BOARD_LEFT}" y1="${RAIL_Y["T+"]}" x2="${end}" y2="${RAIL_Y["T+"]}" class="rail-plus"/><line x1="${BOARD_LEFT}" y1="${RAIL_Y["B+"]}" x2="${end}" y2="${RAIL_Y["B+"]}" class="rail-plus"/><line x1="${BOARD_LEFT}" y1="${RAIL_Y["B-"]}" x2="${end}" y2="${RAIL_Y["B-"]}" class="rail-minus"/>`);
-  marks.push(`<text x="${BOARD_LEFT - 8}" y="${RAIL_Y["T-"] + 4}" text-anchor="end" class="rail-label">T− GND (−)</text><text x="${BOARD_LEFT - 8}" y="${RAIL_Y["T+"] + 4}" text-anchor="end" class="rail-label">T+ 5V (+)</text><text x="${BOARD_RIGHT + 8}" y="${RAIL_Y["B+"] + 4}" class="rail-label">B+ (+)</text><text x="${BOARD_RIGHT + 8}" y="${RAIL_Y["B-"] + 4}" class="rail-label">B− (−)</text>`);
+  marks.push(`<text x="${BOARD_LEFT + 5}" y="${RAIL_Y["T-"] - 6}" class="rail-label">T− GND (−)</text><text x="${BOARD_LEFT + 5}" y="${RAIL_Y["T+"] + 15}" class="rail-label">T+ 5V (+)</text><text x="${BOARD_RIGHT - 2}" y="${RAIL_Y["B+"] + 4}" text-anchor="end" class="rail-label">B+ (+)</text><text x="${BOARD_RIGHT - 2}" y="${RAIL_Y["B-"] + 4}" text-anchor="end" class="rail-label">B− (−)</text>`);
   for (const position of profile.railPositions) {
     const x = holePoint(layout, `T+${position}`)?.x;
     if (x === undefined) continue;
@@ -319,7 +316,10 @@ function renderRowLabels(layout: Layout): string {
     const x = rowX(layout, row);
     labels.push(`<text x="${x}" y="${TOP_HOLE_Y - 40}" text-anchor="middle" class="row-label">${row % 5 === 0 || row === 1 ? row : ""}</text>`);
   }
-  for (const column of COLUMNS) labels.push(`<text x="${BOARD_LEFT - 34}" y="${columnY(column) + 5}" text-anchor="end" class="column-label">${column}</text>`);
+  for (const column of COLUMNS) {
+    labels.push(`<text x="${BOARD_LEFT - 20}" y="${columnY(column) + 5}" text-anchor="end" class="column-label">${column}</text>`);
+    labels.push(`<text x="${BOARD_RIGHT + 20}" y="${columnY(column) + 5}" class="column-label">${column}</text>`);
+  }
   labels.push(`<text x="${(BOARD_LEFT + BOARD_RIGHT) / 2}" y="${CHANNEL_Y + 5}" text-anchor="middle" class="channel-label">CENTRE CHANNEL</text>`);
   return labels.join("");
 }
@@ -334,7 +334,7 @@ export function renderBreadboardSvg(input: RenderInput): string {
     return placement ? renderPart(input, part, placement, state) : "";
   }).join("");
   const jumpers = [...input.layout.jumpers].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })).map((jumper) => renderJumper(input, jumper, pins, state)).join("");
-  const columnLetters = COLUMNS.map((column) => `<text x="${rowX(input.layout, 1) - 4}" y="${columnY(column) + (columnY(column) < CHANNEL_Y ? -17 : 24)}" class="column-guide">${column}</text>`).join("");
+  const columnLetters = "";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="700" viewBox="0 0 ${width} 700" data-vibread="breadboard" role="img" aria-label="ViBread landscape breadboard assembly"><title>${escapeSvg(input.circuit.title)} breadboard</title><desc>Rows run left to right. Columns a through e are above the horizontal channel; f through j are below it. New step items glow; labels are repeated in text instructions.</desc><style>
 svg{font-family:Arial,"DejaVu Sans",sans-serif;background:#0c1218}.board-surface{fill:#d8b06f;stroke:#8c6336;stroke-width:3}.channel{fill:#806741;opacity:.72}.hole{fill:#26313a;stroke:#e6e9ed;stroke-width:1}.rail-hole{fill:#26313a;stroke:#fff;stroke-width:1}.row-label,.column-label,.rail-label,.channel-label{fill:#14212a;font-size:12px;font-weight:700}.column-label{font-size:15px}.column-guide{fill:#f2ead8;font-size:13px;font-weight:700}.rail-label{font-size:12px}.rail-plus{stroke:#e5484d;stroke-width:5}.rail-minus{stroke:#31506d;stroke-width:5}.rail-tick{stroke:#f4f6f8;stroke-width:1;opacity:.7}.lead{stroke:#3b454c;stroke-width:3}.led-dome{stroke:#f8fafc;stroke-width:2}.led-glow{filter:blur(3px)}.resistor-body{fill:#e7c48e;stroke:#653f23;stroke-width:2}.button-body{fill:#44515c;stroke:#eef2f5;stroke-width:2}.button-cap{fill:#bb4d52;stroke:#260d10;stroke-width:2}.sensor-body{fill:#9ca3af;stroke:#111827;stroke-width:2}.sensor-mark{stroke:#17212b;stroke-width:2}.pot-body{fill:#4f6570;stroke:#eef2f5;stroke-width:2}.pot-arrow{stroke:#f1c453;stroke-width:4}.pot-arrowhead{fill:#f1c453}.buzzer-body{fill:#20252a;stroke:#f2c94c;stroke-width:3}.generic-body{fill:#5f7880;stroke:#e5f2f4;stroke-width:2}.mcu{fill:#1b3339;stroke:#90c5bd;stroke-width:3}.board-title{fill:#f3f7f8;font-weight:700;font-size:15px}.header-label{fill:#90c5bd;font-size:11px;font-weight:700}.header-pin{fill:#f2c94c;stroke:#12181d;stroke-width:2}.pin-label{fill:#f3f7f8;font-size:12px;font-weight:700}.pin-cue{fill:#0b141b;font-size:11px;font-weight:700}.part-label{fill:#10191f;font-size:12px;font-weight:700}.label-bg{fill:#f7edcf;stroke:#715c3a;stroke-width:1}.leader{stroke:#32424b;stroke-width:1.5}.wire-path{fill:none;stroke-width:4;stroke-linecap:round;opacity:.9}.wire-bg{fill:#101820}.wire-label{fill:#fff;font-size:11px;font-weight:700}.vb-old{opacity:.48}.part.vb-hl,.wire.vb-hl{filter:drop-shadow(0 0 5px #fff)}.vb-new{filter:drop-shadow(0 0 8px #f7d774)}.hole.vb-hl,.rail-hole.vb-hl{fill:#ffe166;stroke:#111;stroke-width:2}
 </style><rect x="0" y="0" width="${width}" height="700" fill="#0c1218"/><rect x="${BOARD_LEFT - 16}" y="${BOARD_TOP - 28}" width="${BOARD_RIGHT - BOARD_LEFT + 32}" height="${BOARD_BOTTOM - BOARD_TOP + 50}" rx="18" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout)}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}<g class="legend"><rect x="${BOARD_RIGHT - 160}" y="${BOARD_TOP + 5}" width="148" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 150}" y="${BOARD_TOP + 22}" class="part-label">Rows left → right</text><text x="${BOARD_RIGHT - 150}" y="${BOARD_TOP + 38}" class="part-label">a–e top · f–j bottom</text></g></svg>`;

@@ -17,18 +17,7 @@ import type { RevisionDetail, Trace } from "@vibread/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useArtifactJson } from "../../api/hooks.js";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
-import { applyFrame, describePartState, frameIndexAt } from "../replay.js";
-
-/** The fully built breadboard: an explicit `breadboard.svg`, else the last step's drawing. */
-function breadboardUrl(artifactUrls: Record<string, string>): string | undefined {
-  if (artifactUrls["breadboard.svg"]) return artifactUrls["breadboard.svg"];
-  let best: { n: number; url: string } | undefined;
-  for (const [key, url] of Object.entries(artifactUrls)) {
-    const match = /^step-(\d+)\.svg$/.exec(key);
-    if (match && (!best || Number(match[1]) > best.n)) best = { n: Number(match[1]), url };
-  }
-  return best?.url;
-}
+import { applyFrame, breadboardUrl, describePartState, frameIndexAt } from "../replay.js";
 
 /** Replays a recorded simulation trace on the breadboard drawing by toggling `glow-<ID>` / `sound-<ID>` opacity. */
 export function ReplayTab({ revision }: { revision: RevisionDetail }) {

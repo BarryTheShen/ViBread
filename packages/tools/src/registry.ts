@@ -74,13 +74,6 @@ async function requireMission(store: MissionStore, missionId: string): Promise<M
   return mission;
 }
 
-/** Inventory = mission inventory + approved `add_part` additions (timeline "inventory.added"; MissionStore can't patch inventory). */
-export async function missionInventory(store: MissionStore, mission: Mission): Promise<InventoryItem[]> {
-  const events = await store.listEvents(mission.id);
-  const added = events.filter((e) => e.kind === "inventory.added").map((e) => e.data as InventoryItem);
-  return [...mission.inventory, ...added];
-}
-
 async function appHex(store: MissionStore, revision: Revision): Promise<string> {
   const key = revision.results.artifacts["app.hex"];
   const stored = key ? await store.getArtifact(key) : null;
@@ -158,8 +151,7 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
       actionClass: "read-only",
       input: z.object({}),
       handler: async (ctx) => {
-        const mission = await requireMission(store, ctx.missionId);
-        const inventory = await missionInventory(store, mission);
+        const { inventory } = await requireMission(store, ctx.missionId);
         return { summary: inventory.map((i) => `${i.count}× ${i.module}`).join(", ") || "No parts listed", inventory };
       },
     }),
@@ -553,7 +545,7 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
         note: z.string().max(200).optional().describe("Why the design needs it."),
       }),
       handler: async (ctx, input) => {
-        await requireMission(store, ctx.missionId);
+        const mission = await requireMission(store, ctx.missionId);
         const params = input.params ? MODULES[input.module].params.safeParse(input.params) : undefined;
         if (params && !params.success) throw new ToolInputError(`Invalid params for ${input.module}: ${params.error.message}`);
         const item: InventoryItem = {
@@ -562,6 +554,7 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
           ...(params?.success ? { params: params.data } : {}),
           ...(input.note ? { note: input.note } : {}),
         };
+        await store.updateMission(ctx.missionId, { inventory: [...mission.inventory, item] });
         await store.appendEvent({
           missionId: ctx.missionId,
           channel: ctx.actor.channel,

@@ -21,7 +21,7 @@ import {
   Stepper,
   Typography,
 } from "@mui/material";
-import type { BenchRunResult, BoardProfileId, Circuit, DeviceLine, MissionDetail, RevisionDetail, SelfTestPlan } from "@vibread/core";
+import type { BenchRunResult, BoardProfileId, Circuit, DeviceLine, Layout, MissionDetail, RevisionDetail, SelfTestPlan } from "@vibread/core";
 import { BOARD_PROFILES, revisionHash } from "@vibread/core";
 import { evaluateRun, planSelfTest, promptFor } from "@vibread/bench";
 import { BenchRunner, type BenchRunnerState } from "./runner.js";
@@ -50,6 +50,7 @@ interface LoadedBench {
   mission: MissionDetail;
   revision: RevisionDetail;
   plan: SelfTestPlan;
+  layout?: Layout;
   boardSvg: string;
 }
 
@@ -95,7 +96,7 @@ async function loadBench(missionId: string): Promise<LoadedBench> {
       if (candidate.includes("data-vibread=\"breadboard\"") || candidate.includes("data-vibread='breadboard'")) boardSvg = candidate;
     }
   }
-  return { mission, revision, plan, boardSvg };
+  return { mission, revision, plan, layout: revision.results.layout, boardSvg };
 }
 
 function progressText(progress: FlashProgress | undefined): string {
@@ -236,7 +237,7 @@ export default function BenchPage(): ReactElement {
           runnerRef.current?.fail(message);
         },
       });
-      const simulatedCircuit = circuitWithFault(loaded.revision.circuit, fault);
+      const simulatedCircuit = circuitWithFault(loaded.revision.circuit, fault, loaded.layout);
       const nextRunner = attachRunner(virtual, loaded.plan, simulatedCircuit, loaded.revision.n);
       virtualRef.current = virtual;
       virtual.start({ circuit: simulatedCircuit, hex: firmware.hex, fault });
@@ -383,7 +384,7 @@ export default function BenchPage(): ReactElement {
 
   const resetForFault = useCallback((): void => {
     if (mode !== "virtual" || !loaded || !benchHex || !virtualRef.current) return;
-    const simulatedCircuit = circuitWithFault(loaded.revision.circuit, fault);
+    const simulatedCircuit = circuitWithFault(loaded.revision.circuit, fault, loaded.layout);
     const nextRunner = attachRunner(virtualRef.current, loaded.plan, simulatedCircuit, loaded.revision.n);
     virtualRef.current.start({ circuit: simulatedCircuit, hex: benchHex, fault });
     setRunner(nextRunner);

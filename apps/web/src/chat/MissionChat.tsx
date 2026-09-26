@@ -64,7 +64,10 @@ function ActiveRunFollower({ adapter, missionId, agentBusy }: { adapter: Mission
   return null;
 }
 
-/** A new mission's run starts with the brief as the first user message (missions.create does not start a run). */
+/**
+ * A brand-new mission's run starts with the brief as the first user message (missions.create does not start a run).
+ * Only for missions still in BRIEF with no revision: pre-warmed/seeded missions already have a design.
+ */
 function BriefKickoff({ adapter, brief, agentBusy }: { adapter: MissionChatAdapter; brief: string; agentBusy: boolean }) {
   const chat = useChat();
   const [historyReady, setHistoryReady] = useState(false);
@@ -102,6 +105,7 @@ export function MissionChat({
   adapter,
   brief,
   hasDesign,
+  isNewMission,
   onApprovalIdsChange,
 }: {
   missionId: string;
@@ -110,6 +114,8 @@ export function MissionChat({
   brief: string;
   /** Follow-up suggestions only make sense once a design exists. */
   hasDesign: boolean;
+  /** Phase BRIEF and no revision yet: the only case where the brief is auto-sent. */
+  isNewMission: boolean;
   onApprovalIdsChange(ids: string[]): void;
 }) {
   return (
@@ -127,12 +133,14 @@ export function MissionChat({
         composerInputAriaLabel: "Message the agent",
         messageAuthorAssistantLabel: "ViBread agent",
         messageAuthorUserLabel: "You",
-        threadNoMessagesLabel: "No conversation yet",
-        threadNoMessagesHelperText: "The agent explains each step here. Ask it anything about your circuit.",
+        threadNoMessagesLabel: hasDesign ? "This design was prepared ahead of time" : "No conversation yet",
+        threadNoMessagesHelperText: hasDesign
+          ? "Ask the agent anything about it: why a part was chosen, what the tests check, or what to change."
+          : "The agent explains each step here. Ask it anything about your circuit.",
       }}
     >
       <ActiveRunFollower adapter={adapter} missionId={missionId} agentBusy={agentBusy} />
-      <BriefKickoff adapter={adapter} brief={brief} agentBusy={agentBusy} />
+      {isNewMission && <BriefKickoff adapter={adapter} brief={brief} agentBusy={agentBusy} />}
       <ApprovalIdsReporter onChange={onApprovalIdsChange} />
     </ChatBox>
   );

@@ -45,8 +45,8 @@ function revisionLines(revision: Revision | null): string {
 }
 
 /** Design agent system prompt: library, inventory, IR rules, safety, sketch rules, iteration and ask-back policy. */
-export function designSystemPrompt(input: { mission: Mission; inventory: InventoryItem[]; revision: Revision | null }): string {
-  const { mission, inventory, revision } = input;
+export function designSystemPrompt(input: { mission: Mission; revision: Revision | null }): string {
+  const { mission, revision } = input;
   return `You are ViBread's design agent — "Flight" in a Mission Control for breadboards. You help people with no electronics
 background build a working Arduino prototype. Speak plainly and briefly; explain any term you must use.
 
@@ -57,7 +57,7 @@ ${revisionLines(revision)}
 Released build target: ${mission.releasedRevision ?? "none"}.
 
 # Parts the user has
-${inventoryLines(inventory)}
+${inventoryLines(mission.inventory)}
 Design only with these parts. If the brief needs a part they don't have, say so and use add_part (the user must approve).
 
 # Module library (the only part kinds that exist)

@@ -42,7 +42,7 @@ const CLASS_LABEL: Record<ActionClass, string> = {
 
 const DECISION_LABEL: Record<ApprovalDecision, string> = {
   "approve-once": "You allowed this once",
-  "approve-mission": "You allowed this for the whole mission",
+  "approve-mission": "You allowed this kind of change for the rest of the mission",
   deny: "You said no",
 };
 
@@ -129,7 +129,11 @@ export function ApprovalCard(props: ApprovalCardProps) {
           </Button>
           {!perActionOnly && (
             <Button variant="outlined" color="primary" disabled={pending !== null} onClick={() => void decide("approve-mission")}>
-              {pending === "approve-mission" ? "Allowing…" : "Always for this mission"}
+              {pending === "approve-mission"
+                ? "Allowing…"
+                : actionClass === "release"
+                  ? "Always allow releasing designs in this mission"
+                  : "Always allow design changes in this mission"}
             </Button>
           )}
           <Button variant="outlined" color="error" disabled={pending !== null} onClick={() => void decide("deny")}>

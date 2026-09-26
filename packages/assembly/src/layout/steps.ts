@@ -22,6 +22,20 @@ function partById(circuit: Circuit): Map<string, Part> {
   return new Map(circuit.parts.map((part) => [part.id, part]));
 }
 
+type InventoryGroup = { part: Part; count: number };
+
+function inventoryGroups(circuit: Circuit): InventoryGroup[] {
+  const groups = new Map<string, InventoryGroup>();
+  for (const part of [...circuit.parts].sort((a, b) => a.id.localeCompare(b.id))) {
+    const params = Object.entries(part.params).sort(([a], [b]) => a.localeCompare(b));
+    const key = `${part.module}:${JSON.stringify(params)}`;
+    const existing = groups.get(key);
+    if (existing) existing.count += 1;
+    else groups.set(key, { part, count: 1 });
+  }
+  return [...groups.values()];
+}
+
 function partCallout(part: Part): string {
   if (part.module === "resistor") {
     const ohms = Number(part.params.ohms);
@@ -68,12 +82,36 @@ function jumperText(jumper: Jumper): string {
   return `Connect ${jumper.id} on net ${jumper.net} from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. The label and endpoints are authoritative; wire color is only a visual aid.`;
 }
 
+function countedCallout(group: InventoryGroup): string {
+  const single = partCallout(group.part);
+  return `${group.count}×${single.slice(2)}`;
+}
+
 function inventoryText(circuit: Circuit): string {
-  const items = [...circuit.parts]
-    .sort((a, b) => a.id.localeCompare(b.id))
-    .map((part) => `${part.id} (${MODULES[part.module].name})`)
-    .join(", ");
-  return `Find these exact parts before starting: ${items}. Do not connect USB yet.`;
+  const groups = inventoryGroups(circuit);
+  const buttons = groups.filter((group) => group.part.module === "button");
+  const sensors = groups.filter((group) => group.part.module === "photoresistor");
+  const leds = groups.filter((group) => group.part.module === "led");
+  const resistors = groups.filter((group) => group.part.module === "resistor");
+  const other = groups.filter((group) => !["button", "photoresistor", "led", "resistor"].includes(group.part.module));
+  const items: string[] = [];
+  for (const group of buttons) items.push(`${group.count} push button${group.count === 1 ? "" : "s"}`);
+  for (const group of sensors) items.push(`${group.count} light sensor${group.count === 1 ? "" : "s"}`);
+  for (const group of leds) {
+    const color = typeof group.part.params.color === "string" ? group.part.params.color : "red";
+    items.push(`${group.count} ${color} LED${group.count === 1 ? "" : "s"}`);
+  }
+  if (resistors.length > 0) {
+    const total = resistors.reduce((sum, group) => sum + group.count, 0);
+    const values = resistors.map((group) => `${group.count}× ${formatOhms(Number(group.part.params.ohms))}`).join(", ");
+    items.push(`${total} resistor${total === 1 ? "" : "s"} (${values})`);
+  }
+  for (const group of other) items.push(`${group.count} ${MODULES[group.part.module].name.toLowerCase()}${group.count === 1 ? "" : "s"}`);
+  return `Find these parts: ${items.join(", ")}. Do not connect USB yet.`;
+}
+
+function inventoryCallouts(circuit: Circuit): string[] {
+  return inventoryGroups(circuit).map(countedCallout);
 }
 
 function orientationText(layout: Layout): string {
@@ -84,9 +122,8 @@ function orientationText(layout: Layout): string {
 function railJumpers(layout: Layout): Jumper[] {
   return layout.jumpers.filter((jumper) => {
     const isPowerRail = jumper.net === "5V" || jumper.net === "GND";
-    const touchesRail = [jumper.from, jumper.to].some((endpoint) => "hole" in endpoint && endpoint.hole.startsWith("T"));
     const hasBoardEndpoint = "board" in jumper.from || "board" in jumper.to;
-    return isPowerRail && (touchesRail || hasBoardEndpoint);
+    return isPowerRail && hasBoardEndpoint;
   });
 }
 
@@ -114,7 +151,7 @@ export function buildSteps(circuit: Circuit, layout: Layout): StepList {
     plug: "unplugged",
     adds: { parts: [], jumpers: [] },
     holes: [],
-    callouts: [...circuit.parts].sort((a, b) => a.id.localeCompare(b.id)).map(partCallout),
+    callouts: inventoryCallouts(circuit),
   });
   push({
     kind: "orientation",

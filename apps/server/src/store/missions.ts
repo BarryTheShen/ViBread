@@ -70,7 +70,7 @@ export interface MissionStoreDependencies {
 
 export class SqlMissionStore implements MissionStore {
   private readonly artifactsDir: string;
-
+  private readonly listeners = new Set<(event: TimelineEvent) => void>();
   constructor(private readonly deps: MissionStoreDependencies) {
     this.artifactsDir = join(deps.dataDir, "artifacts");
     mkdirSync(this.artifactsDir, { recursive: true });
@@ -116,7 +116,7 @@ export class SqlMissionStore implements MissionStore {
 
   async updateMission(
     id: string,
-    patch: Partial<Pick<Mission, "title" | "mode" | "phase" | "currentRevision" | "releasedRevision">>,
+    patch: Partial<Pick<Mission, "title" | "mode" | "phase" | "currentRevision" | "releasedRevision" | "inventory">>,
   ): Promise<Mission> {
     const current = await this.getMission(id);
     if (!current) throw new Error("mission not found");
@@ -124,15 +124,19 @@ export class SqlMissionStore implements MissionStore {
       title: patch.title ?? current.title,
       mode: patch.mode ?? current.mode,
       phase: patch.phase ?? current.phase,
+      inventory: patch.inventory ?? current.inventory,
       currentRevision: patch.currentRevision ?? current.currentRevision ?? null,
       releasedRevision: patch.releasedRevision ?? current.releasedRevision ?? null,
     };
+    if (next.mode !== current.mode) {
+      this.deps.sqlite.prepare('DELETE FROM "approval_grants" WHERE "missionId" = ?').run(id);
+    }
     const now = Date.now();
     this.deps.sqlite
       .prepare(
-        'UPDATE "missions" SET "title" = ?, "mode" = ?, "phase" = ?, "currentRevision" = ?, "releasedRevision" = ?, "updatedAt" = ? WHERE "id" = ?',
+        'UPDATE "missions" SET "title" = ?, "mode" = ?, "phase" = ?, "inventory" = ?, "currentRevision" = ?, "releasedRevision" = ?, "updatedAt" = ? WHERE "id" = ?',
       )
-      .run(next.title, next.mode, next.phase, next.currentRevision, next.releasedRevision, now, id);
+      .run(next.title, next.mode, next.phase, JSON.stringify(next.inventory), next.currentRevision, next.releasedRevision, now, id);
     const mission = await this.getMission(id);
     if (!mission) throw new Error("mission disappeared during update");
     if (next.phase !== current.phase) {
@@ -262,7 +266,18 @@ export class SqlMissionStore implements MissionStore {
         full.revision ?? null,
         full.data === undefined ? null : JSON.stringify(full.data),
       );
+    for (const listener of this.listeners) {
+      try {
+        listener(full);
+      } catch {
+        // A change-feed consumer must not make a committed timeline write fail.
+      }
+    }
     return full;
+  }
+  subscribe(listener: (event: TimelineEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
   }
 
   async listEvents(missionId: string, afterId?: string): Promise<TimelineEvent[]> {

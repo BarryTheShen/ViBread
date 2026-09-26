@@ -24,6 +24,7 @@ import type { AgentModels } from "./models.js";
  * (apps/server/src/agents/scratch-server.ts). Semantics mirror ServerCore's SQL store and broker.
  */
 export function memoryStore(): MissionStore {
+  const listeners = new Set<(event: TimelineEvent) => void>();
   const missions = new Map<string, Mission>();
   const revisions = new Map<string, Revision[]>();
   const artifacts = new Map<string, { data: Uint8Array; contentType: string }>();
@@ -105,7 +106,12 @@ export function memoryStore(): MissionStore {
     async appendEvent(event) {
       const saved: TimelineEvent = { ...event, id: String(events.length + 1).padStart(8, "0"), at: now() };
       events.push(saved);
+      for (const listener of listeners) listener(structuredClone(saved));
       return structuredClone(saved);
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
     },
     async listEvents(missionId, afterId) {
       return events.filter((e) => e.missionId === missionId && (afterId === undefined || e.id > afterId)).map((e) => structuredClone(e));

@@ -1,6 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const REPO_ROOT = fileURLToPath(new URL("../../..", import.meta.url));
 
 export interface ServerConfig {
   port: number;
@@ -19,7 +22,8 @@ export interface ServerConfig {
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const port = parsePort(env.PORT);
-  const dataDir = resolve(env.DATA_DIR ?? "./data");
+  // Relative DATA_DIR values resolve against the repo root, so the server (cwd apps/server) and root scripts share one store.
+  const dataDir = resolve(REPO_ROOT, env.DATA_DIR ?? "./data");
   mkdirSync(dataDir, { recursive: true });
   const googleClientId = env.GOOGLE_CLIENT_ID?.trim();
   const googleClientSecret = env.GOOGLE_CLIENT_SECRET?.trim();

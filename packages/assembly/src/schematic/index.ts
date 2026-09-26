@@ -36,6 +36,28 @@ function decodeResponse(value: unknown): WorkerResponse | undefined {
   if (typeof candidate.error === "string") return { id: candidate.id, error: candidate.error };
   return undefined;
 }
+type Refable = { ref?: () => void; unref?: () => void };
+
+function setHandleRef(handle: unknown, method: "ref" | "unref"): void {
+  if (!handle || typeof handle !== "object") return;
+  const refable = handle as Refable;
+  refable[method]?.();
+}
+
+function releaseWorker(processChild: ChildProcessWithoutNullStreams): void {
+  processChild.unref();
+  setHandleRef(processChild.stdin, "unref");
+  setHandleRef(processChild.stdout, "unref");
+  setHandleRef(processChild.stderr, "unref");
+}
+
+function retainWorker(processChild: ChildProcessWithoutNullStreams): void {
+  processChild.ref();
+  setHandleRef(processChild.stdin, "ref");
+  setHandleRef(processChild.stdout, "ref");
+  setHandleRef(processChild.stderr, "ref");
+}
+
 
 function rejectPending(error: Error): void {
   for (const [id, request] of pending) {
@@ -64,7 +86,7 @@ function attachOutput(processChild: ChildProcessWithoutNullStreams): void {
         clearTimeout(request.timer);
         if (response.svg !== undefined) request.resolve(response.svg);
         else request.reject(new Error(response.error ?? "schematic worker failed"));
-        if (pending.size === 0 && child === processChild) processChild.unref();
+        if (pending.size === 0 && child === processChild) releaseWorker(processChild);
       } catch {
         // Keep the protocol stream alive if a child-side diagnostic is malformed.
       }
@@ -106,7 +128,7 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
 
 function sendRender(circuit: Circuit): Promise<string> {
   const processChild = ensureWorker();
-  processChild.ref();
+  retainWorker(processChild);
   const id = `schematic-${requestNumber++}`;
   return new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => {

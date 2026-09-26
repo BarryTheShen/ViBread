@@ -137,7 +137,8 @@ export interface BuildState {
   missionId: string;
   revision?: number;
   layout?: Layout;
-  steps: (Step & { imageUrl?: string })[];
+  /** imageUrl = whole board (step-<n>.png); focusImageUrl = cropped around this step's new items (step-<n>-focus.png). */
+  steps: (Step & { imageUrl?: string; focusImageUrl?: string })[];
   /** 1-based index of the step the builder is on. */
   current: number;
   plug: "unplugged" | "plugged";
