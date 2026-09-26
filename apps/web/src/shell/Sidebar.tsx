@@ -164,7 +164,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       earlier: list.filter((mission) => !isToday(mission.updatedAt)),
     };
   }, [missions.data]);
-  const claudeReady = connections.data?.claude?.using !== "none";
+  const claudeReady = connections.data ? connections.data.claude.using !== "none" : undefined;
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -236,19 +236,23 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </Box>
 
       <Box sx={{ px: collapsed ? 1 : 1.25, pb: 1.25, display: "grid", gap: 0.5 }}>
-        <Tooltip title={claudeReady ? "Claude ready" : "Claude not connected · Connect"} placement={collapsed ? "right" : "top"}>
-          <Chip
-            component={RouterLink}
-            to="/settings"
-            clickable
-            icon={claudeReady ? <CheckCircleOutlinedIcon /> : <CircleOutlinedIcon />}
-            color={claudeReady ? "success" : "default"}
-            variant={claudeReady ? "outlined" : "filled"}
-            label={collapsed ? undefined : claudeReady ? "Claude ready" : "Claude not connected · Connect"}
-            aria-label={claudeReady ? "Claude ready" : "Claude not connected. Connect"}
-            sx={{ width: "100%", justifyContent: collapsed ? "center" : "flex-start", overflow: "hidden", "& .MuiChip-label": { overflow: "hidden", textOverflow: "ellipsis" } }}
-          />
-        </Tooltip>
+        {claudeReady === undefined ? (
+          <Skeleton variant="rounded" height={30} sx={{ width: "100%" }} aria-label="Loading Claude connection" />
+        ) : (
+          <Tooltip title={claudeReady ? "Claude ready" : "Claude not connected · Connect"} placement={collapsed ? "right" : "top"}>
+            <Chip
+              component={RouterLink}
+              to="/settings"
+              clickable
+              icon={claudeReady ? <CheckCircleOutlinedIcon /> : <CircleOutlinedIcon />}
+              color={claudeReady ? "success" : "default"}
+              variant={claudeReady ? "outlined" : "filled"}
+              label={collapsed ? undefined : claudeReady ? "Claude ready" : "Claude not connected · Connect"}
+              aria-label={claudeReady ? "Claude ready" : "Claude not connected. Connect"}
+              sx={{ width: "100%", justifyContent: collapsed ? "center" : "flex-start", overflow: "hidden", "& .MuiChip-label": { overflow: "hidden", textOverflow: "ellipsis" } }}
+            />
+          </Tooltip>
+        )}
         <SidebarButton collapsed={collapsed} label="Settings" icon={<SettingsOutlinedIcon />} to="/settings" active={location.pathname === "/settings"} />
         {!collapsed && <Typography variant="caption" sx={{ px: 1, color: "text.secondary" }}>⌘N new mission</Typography>}
       </Box>

@@ -9,6 +9,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { BOARD_PROFILES, MODULES, formatOhms, type Part, type RevisionDetail } from "@vibread/core";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
+import { MONO_FONT } from "../../theme.js";
 
 function partDescription(part: Part): string {
   const mod = MODULES[part.module];
@@ -44,7 +45,7 @@ export function SchematicTab({ revision }: { revision: RevisionDetail }) {
         <List dense disablePadding>
           {circuit.intent.map((c) => (
             <ListItem key={c.id} disableGutters>
-              <Chip size="small" label={c.id} variant="outlined" sx={{ mr: 1, fontFamily: "monospace" }} />
+              <Chip size="small" label={c.id} variant="outlined" sx={{ mr: 1, fontFamily: MONO_FONT }} />
               <ListItemText primary={c.text} />
             </ListItem>
           ))}

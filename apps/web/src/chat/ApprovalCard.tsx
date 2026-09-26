@@ -13,6 +13,7 @@ import type { ActionClass, ApprovalDecision } from "@vibread/core";
 import { useState } from "react";
 import { Link as RouterLink } from "react-router";
 import { expiryLabel, useNow } from "../lib/time.js";
+import { INTER_FONT } from "../theme.js";
 
 export interface ApprovalCardProps {
   approvalId: string;
@@ -74,7 +75,7 @@ export function ApprovalCard(props: ApprovalCardProps) {
       variant="outlined"
       role="group"
       aria-label={`${heading}: ${summary}`}
-      sx={{ borderColor: decided ? "divider" : "primary.main", borderWidth: decided ? 1 : 1.5, borderRadius: "12px", bgcolor: "background.paper", my: 1, fontFamily: "fontFamily" }}
+      sx={{ borderColor: decided ? "divider" : "primary.main", borderWidth: decided ? 1 : 1.5, borderRadius: "12px", bgcolor: "background.paper", my: 1, fontFamily: INTER_FONT }}
     >
       <CardContent sx={{ pb: 1, ...(dense ? { pt: 1.5, px: 2 } : {}) }}>
         <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 1 }}>

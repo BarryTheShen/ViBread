@@ -19,7 +19,7 @@ import { CONSOLE_IDS, CONSOLE_LABELS, type Verdict } from "@vibread/core";
 import { useId, useState } from "react";
 import { VerdictChip } from "../components/VerdictChip.js";
 import { isRecord } from "../lib/guards.js";
-import { MONO_FONT } from "../theme.js";
+import { INTER_FONT, MONO_FONT } from "../theme.js";
 import { ApprovalCard } from "./ApprovalCard.js";
 import { useMissionShell } from "./missionShell.js";
 import { useChatThread } from "./threadContext.js";
@@ -124,7 +124,7 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
   const opensPanel = outputRevision !== undefined && (toolName === "propose_design" || verdictList.length > 0);
 
   return (
-    <Box sx={{ my: 0.25, fontFamily: "fontFamily" }} data-tool={toolName ?? "unknown"}>
+    <Box sx={{ my: 0.25, fontFamily: INTER_FONT }} data-tool={toolName ?? "unknown"}>
       <Box sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: 32, px: 1 }}>
         {status.icon}
         <Typography variant="body2" noWrap sx={{ fontWeight: 500, minWidth: 0 }} aria-live={running ? "polite" : undefined}>
@@ -208,7 +208,7 @@ function AskUserCard({ invocation, message }: { invocation: Invocation; message:
   const choices = Array.isArray(input.choices) ? input.choices.filter((c): c is string => typeof c === "string") : [];
   const isLatest = chat.messages[chat.messages.length - 1]?.id === message.id;
   return (
-    <Paper variant="outlined" sx={{ my: 1, p: 1.5, borderRadius: "12px", fontFamily: "fontFamily" }}>
+    <Paper variant="outlined" sx={{ my: 1, p: 1.5, borderRadius: "12px", fontFamily: INTER_FONT }}>
       <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 0.5 }}>
         <HelpOutlineIcon color="primary" fontSize="small" />
         <Typography variant="body2" sx={{ color: "primary.main", fontWeight: 600 }}>

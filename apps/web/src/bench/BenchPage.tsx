@@ -38,6 +38,7 @@ import {
 import { faultLabel, VirtualBenchTransport, type VirtualFault, type VirtualPartTelemetry } from "./virtual.js";
 import { BenchAskBridge, type RemoteAskStatus } from "./askBridge.js";
 import { approvalGate } from "./approval.js";
+import { MONO_FONT } from "../theme.js";
 
 const STEPS = ["Connect your board", "Make it safe", "Check power", "Test each part", "Find the problem", "Run your project", "Celebrate"];
 const BOARD_LOST_POWER = "Board lost power — unplug, then check the rails and the cable";
@@ -723,7 +724,7 @@ export default function BenchPage(): ReactElement | null {
               <Paper variant="outlined" sx={{ mt: 2, p: 2 }}>
                 <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ alignItems: "center" }}>
                   <Box aria-hidden sx={{ width: 104, height: 64, border: "2px solid", borderColor: "primary.main", borderRadius: 2, p: 1, position: "relative" }}>
-                    <Typography sx={{ fontFamily: "monospace", fontSize: 12, textAlign: "center" }}>USB ↔ Arduino</Typography>
+                    <Typography sx={{ fontFamily: MONO_FONT, fontSize: 12, textAlign: "center" }}>USB ↔ Arduino</Typography>
                     <Box sx={{ position: "absolute", bottom: 6, left: 12, right: 12, height: 6, borderRadius: 3, bgcolor: "success.main" }} />
                   </Box>
                   <Box>
@@ -830,7 +831,7 @@ export default function BenchPage(): ReactElement | null {
               {runnerState?.done && <Alert severity="info" sx={{ mt: 2 }}>All device tests finished. Preparing the Houston diagnosis…</Alert>}
               <Divider sx={{ my: 2 }} />
               <Typography variant="subtitle2">Live line log</Typography>
-              <Box component="pre" ref={logRef} onScroll={(event) => { const element = event.currentTarget; setLogPinned(element.scrollHeight - element.scrollTop - element.clientHeight < 32); }} aria-live="polite" sx={{ maxHeight: 220, overflow: "auto", p: 1.5, mt: 1, borderRadius: 1, bgcolor: "background.default", color: "text.secondary", fontFamily: "monospace", fontSize: 12, whiteSpace: "pre-wrap" }}>{allLines.length > 0 ? allLines.join("\n") : "Waiting for NDJSON…"}</Box>
+              <Box component="pre" ref={logRef} onScroll={(event) => { const element = event.currentTarget; setLogPinned(element.scrollHeight - element.scrollTop - element.clientHeight < 32); }} aria-live="polite" sx={{ maxHeight: 220, overflow: "auto", p: 1.5, mt: 1, borderRadius: 1, bgcolor: "background.default", color: "text.secondary", fontFamily: MONO_FONT, fontSize: 12, whiteSpace: "pre-wrap" }}>{allLines.length > 0 ? allLines.join("\n") : "Waiting for NDJSON…"}</Box>
             </CardContent>
           </Card>
         )}
@@ -882,7 +883,7 @@ export default function BenchPage(): ReactElement | null {
               {appArtifactUrl ? <Button component="a" href={appArtifactUrl} download="app.hex" variant="outlined" sx={actionButtonSx}>Download app.hex</Button> : <Button onClick={() => void downloadFirmware("app")} disabled={Boolean(busy)} variant="outlined" sx={actionButtonSx}>Download app.hex</Button>}
             </Stack>
             {fallbackUpload && <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ mt: 1, alignItems: { md: "center" } }}>
-              <Box component="code" sx={{ display: "block", flex: 1, fontFamily: "monospace", overflowX: "auto" }}>{fallbackCommand(fallbackUpload)}</Box>
+              <Box component="code" sx={{ display: "block", flex: 1, fontFamily: MONO_FONT, overflowX: "auto" }}>{fallbackCommand(fallbackUpload)}</Box>
               <Button variant="outlined" size="small" onClick={() => void navigator.clipboard?.writeText(fallbackCommand(fallbackUpload))}>Copy command</Button>
             </Stack>}
             <Typography variant="body2" sx={{ mt: 1 }}>After flashing, connect the board here again to run the self-test.</Typography>

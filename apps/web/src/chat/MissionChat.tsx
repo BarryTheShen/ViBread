@@ -20,6 +20,7 @@ import { placeTimeline } from "./timeline.js";
 import { TimelineRows } from "./TimelineRow.js";
 import { ToolPartCard } from "./ToolPartCard.js";
 import { recordedLabelOf } from "./uiMessages.js";
+import { INTER_FONT, LORA_FONT } from "../theme.js";
 
 /** Width of the conversation column (plan §3.2). */
 export const CHAT_MAX_WIDTH = 760;
@@ -145,7 +146,7 @@ function InlineMetaWithRecording(props: ChatMessageInlineMetaProps) {
   const { message } = useMessageContext();
   const recorded = recordedLabelOf(message?.metadata);
   return (
-    <Stack direction="row" sx={{ gap: 1, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", fontFamily: "fontFamily" }}>
+    <Stack direction="row" sx={{ gap: 1, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", fontFamily: INTER_FONT }}>
       {recorded && <RecordedChip label={recorded} />}
       <ChatMessageInlineMeta {...props} />
     </Stack>
@@ -308,7 +309,7 @@ export function MissionChat({ missionId, detail, adapter, events, canChat, mode,
           border: 0,
           "& .MuiChatMessage-root": { maxWidth: "100%" },
           // Claude's replies: no bubble, the serif reading font (theme typography variant `reply`).
-          "& .MuiChatMessage-roleAssistant .MuiChatMessage-bubble": { bgcolor: "transparent", color: "text.primary", px: 0, typography: "reply", maxWidth: "100%" },
+          "& .MuiChatMessage-roleAssistant .MuiChatMessage-bubble": { bgcolor: "transparent", color: "text.primary", px: 0, fontFamily: LORA_FONT, fontSize: "1.05rem", lineHeight: 1.7, maxWidth: "100%" },
           // Yours: a soft rounded bubble on the right.
           "& .MuiChatMessage-roleUser .MuiChatMessage-bubble": {
             bgcolor: "action.hover",
