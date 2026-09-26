@@ -73,6 +73,30 @@ describe("GUIDO firmware checks", () => {
     expect(report.verdict).toBe("NO-GO");
     expect(ids(report)).toEqual(expect.arrayContaining(["PIN-MODE-MISMATCH", "PIN-UNDECLARED-OUTPUT"]));
   });
+  it("surfaces sketch warnings but only counts core warnings in evidence", () => {
+    const circuit = GOLDEN[0].circuit;
+    const compile: CompileResult = {
+      ok: true,
+      fqbn: "arduino:avr:uno",
+      diagnostics: [
+        { severity: "warning", file: "/tmp/cores/arduino/new.cpp", message: "unused parameter 'tag'" },
+        { severity: "warning", file: "/tmp/build/sketch/sketch.ino", message: "comparison is always true" },
+      ],
+      durationMs: 1,
+      log: "",
+    };
+    const report = runFirmwareChecks({
+      circuit,
+      compile,
+      pinModes: circuit.roles.map((role) => ({ pin: role.pin, mode: role.mode, toggled: false })),
+      revisionHash: revisionHash(circuit),
+    });
+    const warningFindings = report.findings.filter((finding) => finding.ruleId === "FW-WARNING");
+    expect(warningFindings).toHaveLength(1);
+    expect(warningFindings[0]?.detail).toContain("comparison is always true");
+    expect(warningFindings[0]?.detail).not.toContain("unused parameter");
+    expect(report.evidence).toMatchObject({ compilerWarnings: { sketchWarnings: 1, otherWarnings: 1 } });
+  });
 });
 
 describe("SPICE cross-check", () => {

@@ -184,15 +184,6 @@ export class SqlMissionStore implements MissionStore {
     await this.updateMission(missionId, { currentRevision: n });
     const revision = await this.getRevision(missionId, n);
     if (!revision) throw new Error("revision was not persisted");
-    await this.appendEvent({
-      missionId,
-      channel: input.author.channel,
-      actor: input.author,
-      kind: "revision.created",
-      text: `Revision ${n} created`,
-      revision: n,
-      data: { hash },
-    });
     return revision;
   }
 

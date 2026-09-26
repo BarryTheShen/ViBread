@@ -30,7 +30,7 @@ export function assemblyReport(input: { circuit: Circuit; layout: Layout; lvs: L
   return {
     console: "FAO",
     verdict,
-    summary: verdict === "GO" ? "GO — the breadboard fits and LVS is clean." : "NO-GO — fix the highlighted assembly finding before powering the build.",
+    summary: verdict === "GO" ? "The breadboard fits and LVS is clean." : "Fix the highlighted assembly finding before powering the build.",
     findings,
     evidence: {
       fits: input.lvs.issues.every((issue) => issue.kind !== "invalid-hole" && issue.kind !== "unplaced-part"),

@@ -18,7 +18,7 @@ function fixedPipeline(store: MissionStore, fao: Verdict = "GO"): Pipeline {
       const revision = (await store.getRevision(missionId, n))!;
       const reports: ConsoleReport[] = (["EECOM", "GUIDO", "FIDO", "FAO"] as const).map((console) => ({
         console,
-        verdict: console === "FAO" ? fao : "GO",
+        verdict: console === "FAO" ? fao : console === "FIDO" && !revision.suite ? "PENDING" : "GO",
         summary: "fixed",
         findings: [],
         revisionHash: revision.hash,
@@ -29,18 +29,26 @@ function fixedPipeline(store: MissionStore, fao: Verdict = "GO"): Pipeline {
   };
 }
 
-async function setup(input: { mode: PermissionMode; models?: AgentModels; fao?: Verdict; vote?: object; script?: ScriptStep[] }) {
+async function setup(input: { mode: PermissionMode; models?: AgentModels; fao?: Verdict; vote?: object; script?: ScriptStep[]; withSuite?: boolean }) {
   const deps = testDeps();
   const pipeline = fixedPipeline(deps.store, input.fao);
-  const models = input.models ?? mockModels(scriptedModel(input.script ?? []), jsonModel([input.vote ?? GO_VOTE]));
+  // The fast model answers as RETRO or as the independent test author, depending on the system prompt.
+  const fast = jsonModel((call) => (JSON.stringify(call.prompt).includes("You are RETRO") ? (input.vote ?? GO_VOTE) : golden.suite));
+  const models = input.models ?? mockModels(scriptedModel(input.script ?? []), fast);
   const runtime = createAgentRuntime({ ...deps, models, pipeline });
   const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, mode: input.mode, owner: FLIGHT });
   // A pre-warmed revision (like scripts/seed-golden.ts): pipeline only, no RETRO vote yet.
-  const revision = await deps.store.createRevision(mission.id, { circuit: golden.circuit, suite: golden.suite, author: { kind: "system", id: "golden", channel: "system" } });
+  const revision = await deps.store.createRevision(mission.id, {
+    circuit: golden.circuit,
+    ...(input.withSuite === false ? {} : { suite: golden.suite }),
+    author: { kind: "system", id: "golden", channel: "system" },
+  });
   await deps.store.updateMission(mission.id, { currentRevision: revision.n });
   await pipeline.evaluate(mission.id, revision.n);
-  return { deps, runtime, mission };
+  return { deps, runtime, mission, fast };
 }
+
+const authorCalls = (fast: ReturnType<typeof jsonModel>) => fast.doGenerateCalls.filter((c) => JSON.stringify(c.prompt).includes("independent test author")).length;
 
 describe("human release (GO for build)", () => {
   it("releases a GO revision, runs RETRO first when it never ran, and sends RELEASED", async () => {
@@ -107,5 +115,56 @@ describe("human release (GO for build)", () => {
     const part = history.flatMap((m) => m.parts).find((p) => p.type === "tool-release_revision") as { state: string };
     expect(part.state).toBe("output-available");
     expect(history.at(-1)!.parts.some((p) => p.type === "text" && p.text === "Released — time to build.")).toBe(true);
+  });
+
+  it("a revision saved without tests gets them written, recorded as revision n+1, and that revision is released", async () => {
+    const { deps, runtime, mission, fast } = await setup({ mode: "review", withSuite: false });
+    const detail = await runtime.release({ missionId: mission.id, revision: 1, actor: FLIGHT });
+    expect(detail.mission.releasedRevision).toBe(2);
+    const recorded = (await deps.store.getRevision(mission.id, 2))!;
+    expect(recorded.parent).toBe(1);
+    expect(recorded.circuit).toEqual((await deps.store.getRevision(mission.id, 1))!.circuit);
+    expect(recorded.suite?.author).toBe("test-author");
+    expect(recorded.results.reports.map((r) => [r.console, r.verdict])).toEqual([["EECOM", "GO"], ["GUIDO", "GO"], ["FIDO", "GO"], ["FAO", "GO"], ["RETRO", "GO"]]);
+    expect(authorCalls(fast)).toBe(1);
+    expect(deps.machine.events.map((e) => e.event)).toContainEqual({ type: "RELEASED", revision: 2 });
+  });
+
+  it("without a credential, a revision without tests can't be released (plain message), and nothing is recorded", async () => {
+    const { deps, runtime, mission } = await setup({ mode: "review", withSuite: false, models: anthropicModels({ config: { model: "m", fastModel: "f" } }) });
+    await expect(runtime.release({ missionId: mission.id, revision: 1, actor: FLIGHT, acknowledgeMissingReview: true })).rejects.toMatchObject({
+      status: 409,
+      code: "tests_missing",
+      message:
+        "The simulation tests haven't been written yet because Claude isn't connected — connect your Claude account in Settings (or set ANTHROPIC_API_KEY), then press GO for build again.",
+    });
+    expect(await deps.store.listRevisions(mission.id)).toHaveLength(1);
+    expect((await deps.store.getMission(mission.id))?.releasedRevision).toBeUndefined();
+  });
+
+  it("run_scenarios writes missing tests and runs them; the later release reuses the same suite", async () => {
+    const { deps, runtime, mission, fast } = await setup({ mode: "review", withSuite: false });
+    const runScenarios = runtime.tools.get("run_scenarios")!;
+    const output = (await runScenarios.handler({ missionId: mission.id, actor: FLIGHT, mode: "review" }, { revision: 1 })) as {
+      testsWrittenNow?: boolean;
+      scenarios: { ok: boolean }[];
+      coverage: { ok: boolean };
+    };
+    expect(output.testsWrittenNow).toBe(true);
+    expect(output.scenarios.length).toBe(golden.suite.scenarios.length);
+    expect(output.scenarios.every((s) => s.ok)).toBe(true);
+    expect(output.coverage.ok).toBe(true);
+    expect(await deps.store.listRevisions(mission.id)).toHaveLength(1); // read-only: nothing recorded yet
+
+    await runtime.release({ missionId: mission.id, revision: 1, actor: FLIGHT });
+    expect(authorCalls(fast)).toBe(1); // cached: the author is not paid twice
+    expect((await deps.store.getRevision(mission.id, 2))!.suite).toEqual(golden.suite);
+  }, 60_000);
+
+  it("run_scenarios without a credential says the tests haven't been written", async () => {
+    const { runtime, mission } = await setup({ mode: "review", withSuite: false, models: anthropicModels({ config: { model: "m", fastModel: "f" } }) });
+    await expect(runtime.tools.get("run_scenarios")!.handler({ missionId: mission.id, actor: FLIGHT, mode: "review" }, { revision: 1 })).rejects.toThrow(
+      "The simulation tests haven't been written yet because Claude isn't connected",
+    );
   });
 });

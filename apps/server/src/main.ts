@@ -80,7 +80,7 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   mountApi(app, ctx);
   ctx.runtime.mountChat(app);
   mountMcp(app, ctx, auth);
-  mountA2a(app, ctx);
+  mountA2a(app, ctx, auth);
 
   const candidateWebDirs = [resolve(process.cwd(), "apps/web/dist"), resolve(process.cwd(), "../../apps/web/dist")];
   const webDist = candidateWebDirs.find((directory) => existsSync(resolve(directory, "index.html")));

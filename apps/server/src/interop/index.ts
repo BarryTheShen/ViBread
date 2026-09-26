@@ -407,7 +407,7 @@ function mountOAuthPages(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOp
   // `oauth_query` resumes the authorization request (then /consent, then the client's redirect with a code).
   app.get("/login", async (request, response, next) => {
     const oauthQuery = rawQuery(request);
-    if (auth && !ctx.config.google) {
+    if (auth && !ctx.config.google && !ctx.config.github) {
       try {
         const password = await operatorPassword(auth, ctx);
         // Through the HTTP handler (not auth.api): the authorization flow that resumes after sign-in needs a real Request.
@@ -428,12 +428,17 @@ function mountOAuthPages(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOp
       }
       return;
     }
-    const signIn = `<button id="google">Sign in with Google</button><script>
-document.getElementById("google").onclick = async () => {
+    const socialButtons = [
+      ...(ctx.config.google ? [`<button data-provider="google">Sign in with Google</button>`] : []),
+      ...(ctx.config.github ? [`<button data-provider="github">Sign in with GitHub</button>`] : []),
+    ].join("");
+    const signIn = `${socialButtons}<script>
+document.querySelectorAll("[data-provider]").forEach((button) => button.addEventListener("click", async () => {
+  const provider = button.getAttribute("data-provider");
   const r = await fetch("/api/auth/sign-in/social", { method: "POST", credentials: "include", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ provider: "google", callbackURL: "/", oauth_query: location.search.slice(1) }) });
+    body: JSON.stringify({ provider, callbackURL: "/", oauth_query: location.search.slice(1) }) });
   const d = await r.json(); if (d.url) location.href = d.url;
-};</script>`;
+}));</script>`;
     response.type("html").send(oauthPage("ViBread Mission Control Login", `<h1>Mission Control Login</h1><p>Sign in to let this app use your ViBread missions.</p>${signIn}`));
   });
   app.get("/consent", async (request, response) => {
@@ -640,26 +645,44 @@ function makeAgentCard(ctx: AppContext): AgentCard {
           value: { description: "ViBread bearer token", scheme: "bearer", bearerFormat: "JWT" },
         },
       },
+      oauth: {
+        scheme: {
+          $case: "oauth2SecurityScheme",
+          value: {
+            description: "Better Auth OAuth 2.1 authorization code + PKCE",
+            oauth2MetadataUrl: `${baseUrl}/.well-known/oauth-authorization-server`,
+            flows: {
+              flow: {
+                $case: "authorizationCode",
+                value: {
+                  authorizationUrl: `${baseUrl}/api/auth/oauth2/authorize`,
+                  tokenUrl: `${baseUrl}/api/auth/oauth2/token`,
+                  refreshUrl: `${baseUrl}/api/auth/oauth2/token`,
+                  scopes: { "circuits:read": "Read missions", "circuits:write": "Propose software changes", "bench:request": "Request bench actions" },
+                  pkceRequired: true,
+                },
+              },
+            },
+          },
+        },
+      },
     },
-    securityRequirements: [{ schemes: { Bearer: { list: [] } } }],
+    securityRequirements: [{ schemes: { Bearer: { list: [] } } }, { schemes: { oauth: { list: ["circuits:read"] } } }],
     defaultInputModes: ["text"],
     defaultOutputModes: ["text"],
-    skills: [
-      {
-        id: "mission-control",
-        name: "Mission Control",
-        description: "Design, check, and verify Arduino breadboard missions.",
-        tags: ["arduino", "breadboard", "mission"],
-        examples: ["Build a moon-phase lamp", "Check my wiring"],
-        inputModes: ["text"],
-        outputModes: ["text"],
-        securityRequirements: [{ schemes: { Bearer: { list: [] } } }],
-      },
-    ],
+    skills: [{
+      id: "mission-control",
+      name: "Mission Control",
+      description: "Design, check, and verify Arduino breadboard missions.",
+      tags: ["arduino", "breadboard", "mission"],
+      examples: ["Build a moon-phase lamp", "Check my wiring"],
+      inputModes: ["text"],
+      outputModes: ["text"],
+      securityRequirements: [{ schemes: { Bearer: { list: [] } } }, { schemes: { oauth: { list: ["circuits:read"] } } }],
+    }],
     signatures: [],
   };
 }
-
 function a2aUserBuilder(): UserBuilder {
   return async (request) => {
     const userName = authUserId(request);
@@ -676,14 +699,16 @@ function a2aUserBuilder(): UserBuilder {
 }
 
 /** Mount the authenticated A2A JSON-RPC handler and public v1 agent card. */
-export function mountA2a(app: Express, ctx: AppContext): void {
+export function mountA2a(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
   const card = makeAgentCard(ctx);
   const requestHandler = new DefaultRequestHandler(card, new InMemoryTaskStore(), createA2aExecutor(ctx));
+  const bearer = requireBearerAuth({ verifier: tokenVerifier(ctx) });
+  const hybridAuth = auth ? oauthMiddleware(auth, ctx, bearer) : bearer;
   app.use("/.well-known/agent-card.json", agentCardHandler({ agentCardProvider: requestHandler }));
   app.use(
     A2A_PATH,
     express.json(),
-    requireBearerAuth({ verifier: tokenVerifier(ctx) }),
+    hybridAuth,
     jsonRpcHandler({ requestHandler, userBuilder: a2aUserBuilder() }),
   );
 }

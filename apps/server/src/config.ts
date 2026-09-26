@@ -12,13 +12,13 @@ export interface ServerConfig {
   dataDir: string;
   singleOperator: boolean;
   google?: { clientId: string; clientSecret: string };
+  github?: { clientId: string; clientSecret: string };
   authSecret: string;
   anthropicApiKey?: string;
   model: string;
   fastModel: string;
   approvalSecret: string;
   capcom: { provider: "cloud" | "terminal" | "off"; projectId?: string; projectSecret?: string; number?: string };
-  /** PLAN item 16 — "Connect your Claude account" through oh-my-pi's auth broker + gateway. */
   claudeAccounts: { ompBin: string; home: string; brokerPort: number };
 }
 
@@ -29,7 +29,12 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   mkdirSync(dataDir, { recursive: true });
   const googleClientId = env.GOOGLE_CLIENT_ID?.trim();
   const googleClientSecret = env.GOOGLE_CLIENT_SECRET?.trim();
+  const githubClientId = env.GITHUB_CLIENT_ID?.trim();
+  const githubClientSecret = env.GITHUB_CLIENT_SECRET?.trim();
   if (googleClientId && !googleClientSecret) throw new Error("GOOGLE_CLIENT_SECRET is required when GOOGLE_CLIENT_ID is set");
+  if (githubClientId && !githubClientSecret) throw new Error("GITHUB_CLIENT_SECRET is required when GITHUB_CLIENT_ID is set");
+  const google = googleClientId && googleClientSecret ? { clientId: googleClientId, clientSecret: googleClientSecret } : undefined;
+  const github = githubClientId && githubClientSecret ? { clientId: githubClientId, clientSecret: githubClientSecret } : undefined;
   const provider = env.CAPCOM_PROVIDER ?? "off";
   if (provider !== "off" && provider !== "terminal" && provider !== "cloud") throw new Error(`invalid CAPCOM_PROVIDER: ${provider}`);
   return {
@@ -37,8 +42,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     host: env.HOST ?? "0.0.0.0",
     publicUrl: (env.PUBLIC_URL ?? `http://localhost:${port}`).replace(/\/$/, ""),
     dataDir,
-    singleOperator: !googleClientId,
-    google: googleClientId && googleClientSecret ? { clientId: googleClientId, clientSecret: googleClientSecret } : undefined,
+    singleOperator: !google && !github,
+    google,
+    github,
     authSecret: env.BETTER_AUTH_SECRET?.trim() || readOrCreateSecret(dataDir, "better-auth-secret"),
     anthropicApiKey: env.ANTHROPIC_API_KEY?.trim() || undefined,
     model: env.VIBREAD_MODEL?.trim() || "claude-opus-5-5",

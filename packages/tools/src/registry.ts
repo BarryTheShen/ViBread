@@ -31,6 +31,7 @@ import {
   verdicts,
   type CircuitInterface,
 } from "./common.js";
+import { TestsNotWrittenError, createDesignOps, type DesignOps } from "./design.js";
 import type { Pipeline } from "./pipeline.js";
 
 /** Model-backed collaborators the registry calls; the agents slice supplies them (tests use mock models). */
@@ -84,58 +85,12 @@ async function appHex(store: MissionStore, revision: Revision): Promise<string> 
 }
 
 /**
- * RETRO for one revision (PLAN §5.4): PENDING until EECOM/GUIDO/FIDO/FAO are GO; SKIPPED when no reviewer or Claude isn't
- * connected; a reviewer crash is NO-GO. Replaces the revision's RETRO report and records a timeline event.
- */
-export async function reviewRevision(input: {
-  store: MissionStore;
-  mission: Mission;
-  n: number;
-  review?: RegistryHooks["review"];
-  signal?: AbortSignal;
-}): Promise<Revision> {
-  const { store, mission, n, review, signal } = input;
-  const revision = await requireRevision(store, mission.id, n);
-  let retro: ConsoleReport;
-  if (!deterministicGo(revision.results.reports)) {
-    retro = statusReport("RETRO", "PENDING", "The independent review runs once every other console is GO.", revision.hash);
-  } else if (!review) {
-    retro = statusReport("RETRO", "SKIPPED", "No independent reviewer is configured.", revision.hash);
-  } else {
-    try {
-      retro = await review({ mission, revision, ...(signal ? { signal } : {}) });
-    } catch (error) {
-      retro = isClaudeNotConnected(error)
-        ? statusReport("RETRO", "SKIPPED", errorMessage(error), revision.hash)
-        : { ...statusReport("RETRO", "PENDING", "The independent review failed.", revision.hash), verdict: "NO-GO", findings: [crashFinding("RETRO", "independent review", error)] };
-    }
-  }
-  const saved = await store.saveResults(mission.id, n, { reports: [...revision.results.reports.filter((r) => r.console !== "RETRO"), retro] });
-  await store.appendEvent({
-    missionId: mission.id,
-    channel: "system",
-    actor: { kind: "agent", id: "retro", name: "RETRO reviewer", channel: "system" },
-    kind: "console.report",
-    text: `${CONSOLE_LABELS.RETRO} (RETRO): ${retro.verdict} — ${retro.summary}`,
-    revision: n,
-    data: { console: "RETRO", verdict: retro.verdict, reasons: retro.evidence?.reasons },
-  });
-  return saved;
-}
-
-/**
  * The ViBread tool surface (PLAN §5.2). Defined once; adapted to AI SDK tools (ai-sdk.ts) and to MCP by Channels from
  * `list()`. Engines are imported inside handlers so one broken engine only breaks the tools that need it.
  */
-export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeline; hooks?: RegistryHooks }): ToolRegistry {
+export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeline; hooks?: RegistryHooks; design?: DesignOps }): ToolRegistry {
   const { store, pipeline, hooks = {} } = deps;
-
-  async function evaluateWithReview(mission: Mission, n: number, signal?: AbortSignal): Promise<Revision> {
-    await pipeline.evaluate(mission.id, n);
-    const revision = await reviewRevision({ store, mission, n, ...(hooks.review ? { review: hooks.review } : {}), ...(signal ? { signal } : {}) });
-    await hooks.onEvaluated?.(mission.id, revision);
-    return revision;
-  }
+  const ops = deps.design ?? createDesignOps({ store, pipeline, hooks });
 
   const tools: ToolDef[] = [
     defineTool({
@@ -202,21 +157,12 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
         let testsNote: string | undefined;
         if (previous?.suite && interfaceKey(circuitInterface(previous.circuit)) === interfaceKey(design)) {
           suite = previous.suite;
-        } else if (hooks.writeTests) {
+        } else {
           try {
-            const { coverageOf } = await import("@vibread/sim");
-            suite = await hooks.writeTests({
-              missionId: ctx.missionId,
-              brief: mission.brief,
-              design,
-              coverageGaps: (candidate) => coverageOf(circuit, candidate).missing,
-              ...(ctx.signal ? { signal: ctx.signal } : {}),
-            });
+            suite = await ops.suiteFor(mission, circuit, ctx.signal);
           } catch (error) {
             testsNote = `Independent tests were not written: ${errorMessage(error)}`;
           }
-        } else {
-          testsNote = "No independent test author is configured.";
         }
 
         const revision = await store.createRevision(ctx.missionId, {
@@ -237,7 +183,7 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
           data: { hash: revision.hash, parent: previous?.n },
         });
 
-        const evaluated = await evaluateWithReview(mission, revision.n, ctx.signal);
+        const evaluated = await ops.evaluate(mission, revision.n, ctx.signal);
         const reports = evaluated.results.reports;
         const go = allGo(reports);
         return {
@@ -375,20 +321,33 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
       input: z.object({ revision: revisionArg, only: z.array(z.string().regex(/^T\d+$/)).optional().describe("Scenario ids to run; all when omitted.") }),
       handler: async (ctx, input) => {
         const revision = await requireRevision(store, ctx.missionId, input.revision);
-        if (!revision.suite) throw new ToolInputError(`Revision ${revision.n} has no independent tests yet.`);
+        // No suite yet (written while Claude wasn't connected): write it now (cached; recorded by the next revision).
+        let suite = revision.suite;
+        if (!suite) {
+          const mission = await requireMission(store, ctx.missionId);
+          suite = await ops.suiteFor(mission, revision.circuit, ctx.signal).catch((error: unknown) => {
+            if (error instanceof TestsNotWrittenError) {
+              throw new ToolInputError("The simulation tests haven't been written yet because Claude isn't connected — connect your Claude account in Settings (or set ANTHROPIC_API_KEY), then try again.");
+            }
+            throw error;
+          });
+        }
         const only = input.only;
-        const scenarios = only?.length ? revision.suite.scenarios.filter((s) => only.includes(s.id)) : revision.suite.scenarios;
+        const scenarios = only?.length ? suite.scenarios.filter((s) => only.includes(s.id)) : suite.scenarios;
         if (!scenarios.length) throw new ToolInputError(`No scenarios match ${only?.join(", ")}.`);
         const hex = await appHex(store, revision);
         const r = await (await import("@vibread/sim")).runSuite({
           circuit: revision.circuit,
           hex,
-          suite: { ...revision.suite, scenarios },
+          suite: { ...suite, scenarios },
           revisionHash: revision.hash,
         });
         const passed = r.scenarios.filter((s) => s.ok).length;
         return {
           summary: `${passed}/${r.scenarios.length} tests pass; coverage ${r.coverage.ok ? "complete" : "has gaps"}`,
+          ...(revision.suite
+            ? {}
+            : { testsWrittenNow: true, note: `These tests were written just now and aren't part of revision ${revision.n} yet; GO for build (or propose_design with the same circuit) records them.` }),
           scenarios: r.scenarios.map((s) => ({ id: s.id, title: s.title, ok: s.ok, failures: s.steps.filter((st) => !st.ok).map((st) => st.message) })),
           coverage: r.coverage,
           verdict: r.report.verdict,

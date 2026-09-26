@@ -111,6 +111,19 @@ describe("server core persistence", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  it("moves a fresh mission to Go/No-Go when an external agent submits a design", async () => {
+    const { dir, opened } = makeDatabase();
+    try {
+      const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
+      const mission = await store.createMission({ title: "External design", brief: "External design", ownerId: "operator", inventory: [], mode: "review" });
+      const machine = createMissionMachine({ db: opened.db, sqlite: opened.sqlite, store });
+      expect(await machine.send(mission.id, { type: "DESIGN_READY", revision: 1 })).toBe("GONOGO");
+    } finally {
+      opened.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("starts verification from a partially assembled mission", async () => {
     const { dir, opened } = makeDatabase();
     try {

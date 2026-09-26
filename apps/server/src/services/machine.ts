@@ -39,10 +39,14 @@ const machine = createMachine({
         BRIEF_RECEIVED: "CLARIFY",
         NEEDS_CLARIFICATION: "CLARIFY",
         DESIGN_STARTED: "DESIGN",
+        DESIGN_READY: { target: "GONOGO", actions: assign({ revision: ({ event }) => event.revision }) },
       },
     },
     CLARIFY: {
-      on: { DESIGN_STARTED: "DESIGN" },
+      on: {
+        DESIGN_STARTED: "DESIGN",
+        DESIGN_READY: { target: "GONOGO", actions: assign({ revision: ({ event }) => event.revision }) },
+      },
     },
     DESIGN: {
       on: {

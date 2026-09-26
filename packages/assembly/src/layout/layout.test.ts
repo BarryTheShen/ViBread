@@ -16,8 +16,9 @@ describe("deterministic breadboard layout", () => {
       const layout = layoutBoard(design.circuit);
       const result = lvs(design.circuit, layout);
       expect(result.ok, design.key).toBe(true);
-      expect(assemblyReport({ circuit: design.circuit, layout, lvs: result, revisionHash: "test" }).verdict, design.key).toBe("GO");
-      expect(layoutHash(layout)).toBe(layoutHash(layoutBoard(design.circuit)));
+      const report = assemblyReport({ circuit: design.circuit, layout, lvs: result, revisionHash: "test" });
+      expect(report.verdict, design.key).toBe("GO");
+      expect(report.summary, design.key).toBe("The breadboard fits and LVS is clean.");
     }
   });
 

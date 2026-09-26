@@ -28,7 +28,7 @@ const USING: Record<ClaudeAccountView["using"], string> = {
 
 /** Plain-language messages for the server's Claude-login error codes. */
 const ERRORS: Record<string, string> = {
-  login_failed: "Claude didn't accept that code. Copy it again (or the whole address from the address bar) and paste it here, or start over.",
+  login_failed: "Claude didn't accept that code, so this sign-in has ended. Click Connect to start a new one, then paste the newest code (or the whole address).",
   login_not_found: "That sign-in expired or was already used. Click Connect to start a new one.",
   login_busy: "A sign-in is already in progress. Finish or cancel it first.",
   claude_account_unknown: "Signed in, but ViBread couldn't tell which Claude account it was. Try connecting again.",
@@ -151,8 +151,10 @@ export function ClaudeAccountSection() {
                     Cancel
                   </Button>
                 </Stack>
-                <Typography variant="body2" sx={{ color: "text.secondary" }}>
-                  If you're on the same computer as ViBread, this may finish by itself after you approve.
+                <Typography variant="body2" sx={{ color: "text.secondary" }} aria-live="polite">
+                  {complete.isPending
+                    ? "Checking with Claude… this can take up to a minute."
+                    : "If you're on the same computer as ViBread, this may finish by itself after you approve."}
                 </Typography>
               </Stack>
             ) : (
