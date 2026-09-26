@@ -20,6 +20,10 @@ interface CapcomApp {
   stop(): Promise<void>;
 }
 
+interface SpaceProvider {
+  readonly space: { get(spaceId: string): Promise<Space> };
+}
+
 interface ApprovalNotice {
   id: string;
   missionId: string;
@@ -33,6 +37,8 @@ export interface CapcomSpaces {
   put(input: { spaceId: string; handle: string; userId: string; missionId?: string | null }): Promise<{ spaceId: string; handle: string; userId: string; missionId?: string | null }>;
   setMission(spaceId: string, missionId: string | null): Promise<{ spaceId: string; handle: string; userId: string; missionId?: string | null } | null>;
   listForMission(missionId: string): Promise<{ spaceId: string; handle: string; userId: string; missionId?: string | null }[]>;
+  listAll?(): Promise<{ spaceId: string; handle: string; userId: string; missionId?: string | null }[]>;
+  list?(): Promise<{ spaceId: string; handle: string; userId: string; missionId?: string | null }[]>;
 }
 
 interface PendingApproval {
@@ -294,9 +300,12 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
   const provider = ctx.config.capcom.provider;
   if (provider === "off") return { stop: async () => undefined };
 
-  const app = (provider === "terminal"
+  const spectrum = (provider === "terminal"
     ? await Spectrum({ providers: [terminal.config()] })
-    : await Spectrum({ ...configForCloud(ctx), providers: [imessage.config()] })) as unknown as CapcomApp;
+    : await Spectrum({ ...configForCloud(ctx), providers: [imessage.config()] }));
+  const app = spectrum as unknown as CapcomApp;
+  const spaceProviderFactory = provider === "terminal" ? terminal : imessage;
+  const spaceProvider = (spaceProviderFactory as unknown as (instance: unknown) => unknown)(spectrum) as SpaceProvider;
   const sendState: SendState = { cloud: provider === "cloud", lastSentAt: 0 };
   const send = createSender(ctx, sendState);
   const capcomSpaces = (ctx as AppContext & { capcomSpaces?: CapcomSpaces }).capcomSpaces;
@@ -347,6 +356,24 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
       ctx.log.warn({ err: error, spaceId: space.id, missionId }, "CAPCOM mission attachment failed");
     }
   };
+
+  const restorePersistedSpaces = async (): Promise<void> => {
+    if (!capcomSpaces) return;
+    const list = capcomSpaces.listAll ?? capcomSpaces.list;
+    if (!list) return;
+    try {
+      const bindings = await list.call(capcomSpaces);
+      for (const binding of bindings) {
+        if (!binding.missionId) continue;
+        const space = await spaceProvider.space.get(binding.spaceId);
+        spacesByMission.set(binding.missionId, space);
+      }
+    } catch (error) {
+      ctx.log.warn({ err: error }, "CAPCOM persisted spaces restore failed");
+    }
+  };
+
+  await restorePersistedSpaces();
 
   const rememberClosedBenchAsk = (space: Space, pending: { ask: BenchAsk; pollTitle: string }): void => {
     openBenchAskBySpace.delete(space.id);
