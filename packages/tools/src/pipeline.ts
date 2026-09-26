@@ -192,7 +192,9 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
       return { layout, layoutHash: lib.layoutHash(layout), lvs: lib.lvs(circuit, layout) };
     });
     if (!laid.ok) {
-      run.reports.set("FAO", report("FAO", [crashFinding("FAO", "breadboard layout", laid.error)], "The breadboard layout crashed.", hash, { stageMs: laid.ms }));
+      // A circuit that can't be placed is reported as such (tool-side unless the design contradicts itself), not as a crash.
+      const failure = laid.error instanceof lib.LayoutFitError ? lib.layoutFailureReport({ error: laid.error, revisionHash: hash }) : undefined;
+      run.reports.set("FAO", failure ? { ...failure, evidence: { ...failure.evidence, stageMs: laid.ms } } : report("FAO", [crashFinding("FAO", "breadboard layout", laid.error)], "The breadboard layout crashed.", hash, { stageMs: laid.ms }));
       return;
     }
     const { layout, lvs } = laid.value;

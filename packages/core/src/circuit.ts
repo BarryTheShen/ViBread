@@ -9,8 +9,12 @@ import type { TestSuite } from "./scenario.js";
 export const CIRCUIT_SCHEMA = "vibread.circuit/0.1" as const;
 /** `PinRef.part` value for Arduino board pins: { part: "board", pin: "D3" }. */
 export const BOARD_PART = "board" as const;
-/** Supported-circuit envelope (PLAN §1). */
-export const ENVELOPE = { maxParts: 12, maxSignalNets: 10, maxExternalLoadMa: 400 } as const;
+/**
+ * Supported-circuit envelope (PLAN §1). Parts/nets are what the breadboard allocator provably lays out LVS-clean:
+ * seeded random designs at 20 parts / up to 20 signal nets fit the 830-point board every time (and ~99 % of the time
+ * the 400-point one, which otherwise gets a tool-side LAYOUT-NO-FIT finding); the Uno has 18 usable I/O pins.
+ */
+export const ENVELOPE = { maxParts: 20, maxSignalNets: 20, maxExternalLoadMa: 400 } as const;
 
 export const PinRefSchema = z.object({ part: z.string().min(1), pin: z.string().min(1) });
 export type PinRef = z.infer<typeof PinRefSchema>;

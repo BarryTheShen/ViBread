@@ -23,8 +23,8 @@ async function recordedCircuit(): Promise<Circuit> {
 
 /**
  * fixtures/schematic/*.json: the issue #1 dishwasher (4 resistors, and the shared-resistor variant the generated
- * design used) plus stress designs. Two of them are over the IR envelope (10 signal nets) on purpose, so they are
- * parsed with the schema only: the renderer must still draw them.
+ * design used) plus stress designs. They are parsed with the schema only (no envelope check): the renderer must draw
+ * whatever it is given.
  */
 async function schematicFixtures(): Promise<[string, Circuit][]> {
   const directory = new URL("schematic/", FIXTURES);
