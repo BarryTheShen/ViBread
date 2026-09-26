@@ -66,6 +66,8 @@ export function createServerAuth(config: ServerConfig, db: DB): ServerAuth {
         consentPage: "/consent",
         resource: `${config.publicUrl}/mcp`,
         scopes: ["circuits:read", "circuits:write", "bench:request"],
+        allowUnauthenticatedClientRegistration: true,
+        allowDynamicClientRegistration: true,
       }),
       cimd({
         fetchClientMetadataResource,
@@ -95,7 +97,7 @@ export function ensureOperatorUser(sqlite: SqliteDatabase): void {
   const now = Date.now();
   sqlite
     .prepare(
-      'INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT("id") DO UPDATE SET "name" = excluded."name", "updatedAt" = excluded."updatedAt"',
+      'INSERT INTO "user" ("id", "name", "email", "emailVerified", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT("id") DO UPDATE SET "name" = excluded."name", "email" = excluded."email", "emailVerified" = excluded."emailVerified", "updatedAt" = excluded."updatedAt"',
     )
     .run("operator", "Operator", "operator@vibread.local", 1, now, now);
 }

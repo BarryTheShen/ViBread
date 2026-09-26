@@ -288,14 +288,18 @@ function ruleLikelihood(fault: FaultId, observed: BenchRunResult): number {
 }
 
 function signatureAgreement(predicted: BenchRunResult, observed: BenchRunResult): number {
+  if (predicted.verdict !== observed.verdict) return 0;
   const predictedByTest = new Map(predicted.results.map((result) => [result.test, result.status]));
   const observedByTest = new Map(observed.results.map((result) => [result.test, result.status]));
+  const tests = new Set([...predictedByTest.keys(), ...observedByTest.keys()]);
   let matched = 0;
   let total = 0;
-  for (const [test, status] of observedByTest) {
-    if (status === "unknown") continue;
+  for (const test of tests) {
+    const predictedStatus = predictedByTest.get(test) ?? "unknown";
+    const observedStatus = observedByTest.get(test) ?? "unknown";
+    if (predictedStatus === "pass" && observedStatus === "pass") continue;
     total += 1;
-    if (predictedByTest.get(test) === status) matched += 1;
+    if (predictedStatus === observedStatus) matched += 1;
   }
   return total === 0 ? 0 : matched / total;
 }
@@ -337,7 +341,9 @@ export function rankFaults(input: {
     let likelihood = ruleLikelihood(fault.id, input.observed);
     let mutantLayout = input.layout;
     if (dictionaryEntry !== undefined) {
-      likelihood = Math.max(likelihood, 0.35 + 0.6 * signatureAgreement(dictionaryEntry.result, input.observed));
+      const agreement = signatureAgreement(dictionaryEntry.result, input.observed);
+      const dictionaryLikelihood = dictionaryEntry.result.verdict !== input.observed.verdict ? 0.05 : agreement === 0 ? 0.1 : 0.35 + 0.6 * agreement;
+      likelihood = Math.max(likelihood, (likelihood + dictionaryLikelihood) / 2);
       mutantLayout = dictionaryEntry.layout;
     } else {
       try {

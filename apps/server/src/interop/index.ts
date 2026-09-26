@@ -6,6 +6,8 @@ import { AgentEvent, DefaultRequestHandler, InMemoryTaskStore, type AgentExecuto
 import { agentCardHandler, jsonRpcHandler, type UserBuilder } from "@a2a-js/sdk/server/express";
 import { requireMcpAuth } from "@better-auth/mcp";
 import type { Auth, BetterAuthOptions } from "better-auth";
+import { fromNodeHeaders } from "better-auth/node";
+import { eq } from "drizzle-orm";
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -13,6 +15,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { AgentTurnResult, Actor, ApprovalRequest, InventoryItem, MissionDetail, ToolDef } from "@vibread/core";
 import { invokeTool } from "@vibread/tools";
 import type { AppContext } from "../context.js";
+import { oauthClient } from "../db/schema.js";
 
 const MCP_VERSION = "1.0.0";
 const MCP_PATH = "/mcp";
@@ -351,7 +354,10 @@ function oauthMiddleware(auth: Auth<BetterAuthOptions>, ctx: AppContext, bearer:
     next();
   };
 }
-async function operatorSessionToken(auth: Auth<BetterAuthOptions>, ctx: AppContext): Promise<string> {
+const OPERATOR_EMAIL = "operator@vibread.local";
+
+/** Single-operator mode: gives the operator user a credential account whose password is derived from the auth secret. */
+async function operatorPassword(auth: Auth<BetterAuthOptions>, ctx: AppContext): Promise<string> {
   await ctx.operator();
   const context = await auth.$context;
   const password = `${ctx.config.authSecret}:vibread-operator`;
@@ -359,16 +365,30 @@ async function operatorSessionToken(auth: Auth<BetterAuthOptions>, ctx: AppConte
   const account = await context.internalAdapter.findCredentialAccount("operator");
   if (account) await context.internalAdapter.updateAccount(account.id, { password: hash });
   else await context.internalAdapter.linkAccount({ userId: "operator", providerId: "credential", accountId: "operator", password: hash });
-  const result = await auth.api.signInEmail({ body: { email: "operator@vibread.local", password } });
-  if (!result.token) throw new Error("Better Auth did not return an operator session token");
-  return result.token;
+  return password;
 }
 
-function setSessionCookie(response: Response, token: string, secure: boolean): void {
-  response.setHeader("Set-Cookie", `better-auth.session_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax${secure ? "; Secure" : ""}`);
+/** The raw query string of the page the authorization server redirected to — Better Auth's signed `oauth_query`. */
+function rawQuery(request: Request): string {
+  const index = request.originalUrl.indexOf("?");
+  return index < 0 ? "" : request.originalUrl.slice(index + 1);
 }
 
-function mountOAuthPages(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
+/** Copies a Better Auth web Response (cookies + redirect or JSON `{ url }`) onto the Express response as a redirect. */
+async function forwardAuthRedirect(result: globalThis.Response, response: Response, fallback: string): Promise<void> {
+  const cookies = result.headers.getSetCookie();
+  if (cookies.length > 0) response.setHeader("Set-Cookie", cookies);
+  const location = result.headers.get("location");
+  if (result.status >= 300 && result.status < 400 && location) {
+    response.redirect(location);
+    return;
+  }
+  const body: unknown = await result.json().catch(() => null);
+  const url = body && typeof body === "object" && "url" in body && typeof body.url === "string" ? body.url : undefined;
+  response.redirect(url ?? fallback);
+}
+
+function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
 }
 
@@ -382,29 +402,65 @@ function oauthPage(title: string, content: string): string {
   </style></head><body><main>${content}</main></body></html>`;
 }
 
-function mountOAuthPages(app: Express, config: AppContext["config"]): void {
-  app.get("/login", (request, response) => {
-    const oauthQuery = typeof request.query.oauth_query === "string" ? request.query.oauth_query : "";
-    const query = encodeURIComponent(oauthQuery);
-    const google = config.google
-      ? `<a class="button" href="/api/auth/sign-in/social?provider=google&callbackURL=%2Flogin%3Foauth_query%3D${query}">Sign in with Google</a>`
-      : `<p>Single-operator Mission Control is ready. Continue to the consent screen.</p><a class="button" href="/consent?oauth_query=${query}">Continue as Operator</a>`;
-    response.type("html").send(oauthPage("ViBread Mission Control Login", `<h1>Mission Control Login</h1>${google}`));
+function mountOAuthPages(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
+  // Better Auth's authorize endpoint redirects here with a signed query (…&sig=…); signing in with that query as
+  // `oauth_query` resumes the authorization request (then /consent, then the client's redirect with a code).
+  app.get("/login", async (request, response, next) => {
+    const oauthQuery = rawQuery(request);
+    if (auth && !ctx.config.google) {
+      try {
+        const password = await operatorPassword(auth, ctx);
+        // Through the HTTP handler (not auth.api): the authorization flow that resumes after sign-in needs a real Request.
+        const headers = fromNodeHeaders(request.headers);
+        headers.set("content-type", "application/json");
+        headers.set("origin", ctx.config.publicUrl);
+        headers.delete("content-length");
+        const result = await auth.handler(
+          new globalThis.Request(`${ctx.config.publicUrl}/api/auth/sign-in/email`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({ email: OPERATOR_EMAIL, password, ...(oauthQuery ? { oauth_query: oauthQuery } : {}) }),
+          }),
+        );
+        await forwardAuthRedirect(result, response, "/");
+      } catch (error) {
+        next(error);
+      }
+      return;
+    }
+    const signIn = `<button id="google">Sign in with Google</button><script>
+document.getElementById("google").onclick = async () => {
+  const r = await fetch("/api/auth/sign-in/social", { method: "POST", credentials: "include", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ provider: "google", callbackURL: "/", oauth_query: location.search.slice(1) }) });
+  const d = await r.json(); if (d.url) location.href = d.url;
+};</script>`;
+    response.type("html").send(oauthPage("ViBread Mission Control Login", `<h1>Mission Control Login</h1><p>Sign in to let this app use your ViBread missions.</p>${signIn}`));
   });
-  app.get("/consent", (request, response) => {
-    const oauthQuery = typeof request.query.oauth_query === "string" ? request.query.oauth_query : "";
-    const parsed = new URLSearchParams(oauthQuery);
-    const client = parsed.get("client_id") ?? "Claude Code";
+  app.get("/consent", async (request, response) => {
+    const parsed = new URLSearchParams(rawQuery(request));
+    const clientId = parsed.get("client_id") ?? "";
+    const [client] = clientId ? await ctx.db.select({ name: oauthClient.name }).from(oauthClient).where(eq(oauthClient.clientId, clientId)).limit(1) : [];
+    const clientName = client?.name ?? "An app";
     const scopes = (parsed.get("scope") ?? "").split(/\s+/).filter(Boolean);
     const labels: Record<string, string> = {
-      "circuits:read": "Read missions and checked circuit status",
-      "circuits:write": "Propose design and software changes",
-      "bench:request": "Ask for bench actions (never approve or run them)",
+      "circuits:read": "Read your missions and checked circuit status",
+      "circuits:write": "Propose design and software changes (your permission mode still applies)",
+      "bench:request": "Ask for bench actions (a person still clicks Start at the bench; it can never approve or run them)",
+      offline_access: "Stay connected without asking again",
     };
-    const scopeHtml = scopes.length > 0 ? scopes.map((scope) => `<div class="scope">${escapeHtml(labels[scope] ?? scope)}</div>`).join("") : `<div class="scope">No additional scopes requested</div>`;
-    const hidden = escapeHtml(oauthQuery);
-    const form = (selected: boolean, label: string, className = "") => `<form method="post" action="/api/auth/oauth2/continue" style="display:inline"><input type="hidden" name="oauth_query" value="${hidden}"><input type="hidden" name="selected" value="${selected}"><button class="${className}">${label}</button></form>`;
-    response.type("html").send(oauthPage("ViBread OAuth Consent", `<h1>Authorize ${escapeHtml(client)}</h1><p>Claude Code is requesting access to ViBread.</p>${scopeHtml}<p>Physical actions remain human-controlled at the bench.</p>${form(true, "Allow")}${form(false, "Deny", "deny")}`));
+    const scopeHtml = scopes.map((scope) => `<div class="scope">${escapeHtml(labels[scope] ?? scope)}</div>`).join("") || `<div class="scope">Basic access to your account</div>`;
+    const script = `<script>
+async function decide(accept) {
+  const r = await fetch("/api/auth/oauth2/consent", { method: "POST", credentials: "include", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ accept, oauth_query: location.search.slice(1) }) });
+  const d = await r.json().catch(() => ({}));
+  if (d.url || d.redirect_uri) location.href = d.url || d.redirect_uri;
+  else document.getElementById("error").textContent = d.error_description || d.message || "Authorization failed.";
+}
+document.getElementById("allow").onclick = () => decide(true);
+document.getElementById("deny").onclick = () => decide(false);
+</script>`;
+    response.type("html").send(oauthPage("ViBread OAuth Consent", `<h1>Authorize ${escapeHtml(clientName)}</h1><p>${escapeHtml(clientName)} wants to connect to ViBread and:</p>${scopeHtml}<p>Physical actions always stay with a person at the bench.</p><button id="allow">Allow</button><button id="deny" class="deny">Deny</button><p id="error" role="alert"></p>${script}`));
   });
 }
 
@@ -414,7 +470,7 @@ export function mountMcp(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOp
   const sessions = new Map<string, McpSession>();
   const bearer = requireBearerAuth({ verifier });
   const hybridAuth = auth ? oauthMiddleware(auth, ctx, bearer) : bearer;
-  mountOAuthPages(app, ctx.config);
+  mountOAuthPages(app, ctx, auth);
   app.use(MCP_PATH, express.json(), hybridAuth, async (request, response) => {
     const sessionIdHeader = request.header("Mcp-Session-Id");
     const existing = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;

@@ -112,6 +112,18 @@ function isLostPowerError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error);
   return /disconnect|serial|power|banner|timeout|port/i.test(message);
 }
+function virtualPromptHint(ask: Extract<DeviceLine, { t: "ask" }>): string | undefined {
+  const part = ask.part ?? "that part";
+  const hints: Record<string, string> = {
+    "press-hold": `ViBread's virtual hand is holding ${part}.`,
+    release: `ViBread's virtual hand released ${part}.`,
+    cover: `ViBread's virtual hand is covering ${part}.`,
+    uncover: `ViBread's virtual hand uncovered ${part}.`,
+    "knob-min": `ViBread's virtual hand turned ${part} to minimum.`,
+    "knob-max": `ViBread's virtual hand turned ${part} to maximum.`,
+  };
+  return hints[ask.kind];
+}
 
 const actionButtonSx = { minHeight: 46, borderRadius: 2 } as const;
 
@@ -539,9 +551,10 @@ export default function BenchPage(): ReactElement {
                 <Stack spacing={2} sx={{ mt: 2 }}>
                   {pendingAsks.map((ask) => {
                     const prompt = promptFor(ask, loaded.plan);
+                    const hint = mode === "virtual" ? virtualPromptHint(ask) : undefined;
                     return <Paper key={ask.id} sx={{ p: 2.5, border: "2px solid", borderColor: "secondary.main", background: "rgba(101,78,163,.15)" }}>
                       <Typography variant="h6" sx={{ fontWeight: 700 }}>{prompt.title}</Typography>
-                      <Typography color="text.secondary" sx={{ mb: 2 }}>{prompt.body}</Typography>
+                      <Typography color="text.secondary" sx={{ mb: 2 }}>{hint ? `${hint} Tap Done to continue.` : prompt.body}</Typography>
                       <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                         {prompt.choices.map((choice) => <Button key={choice.value} variant="contained" onClick={() => void answerAsk(ask.id, choice.value)} disabled={Boolean(busy)} sx={actionButtonSx}>{choice.label}</Button>)}
                       </Stack>

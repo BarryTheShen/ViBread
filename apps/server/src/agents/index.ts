@@ -1,5 +1,5 @@
 import type { MissionService, PhotoCheckResult, ToolRegistry } from "@vibread/core";
-import { createPipeline, createToolRegistry, type Pipeline } from "@vibread/tools";
+import { createPipeline, createToolRegistry, type BackgroundPipeline, type Pipeline } from "@vibread/tools";
 import type { Express } from "express";
 import { mountChat } from "./chat.js";
 import type { AgentDeps } from "./deps.js";
@@ -18,7 +18,8 @@ export type { AgentModels } from "./models.js";
 export interface AgentRuntime {
   missions: MissionService;
   tools: ToolRegistry;
-  pipeline: Pipeline;
+  /** Contract Pipeline plus `idle()`, which waits for background fault dictionaries (seed script, tests). */
+  pipeline: BackgroundPipeline;
   /** /api/missions/:id/chat (GET history, POST turn), /chat/stream (resume), /chat/stop. Mount after express.json(). */
   mountChat(app: Express): void;
   checkPhoto(input: { missionId: string; step: number; jpeg: Uint8Array }): Promise<PhotoCheckResult>;
@@ -33,7 +34,10 @@ export interface AgentRuntime {
 export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pipeline?: Pipeline }): AgentRuntime {
   const models = deps.models ?? anthropicModels(deps.config);
   const bus = createEventBus(deps.store);
-  const pipeline = deps.pipeline ?? createPipeline({ store: deps.store });
+  const injected = deps.pipeline;
+  const pipeline: BackgroundPipeline = injected
+    ? { evaluate: (missionId, n) => injected.evaluate(missionId, n), idle: async () => {} }
+    : createPipeline({ store: deps.store, log: deps.log });
   const author = createTestAuthor({ models });
   const reviewer = createRetroReviewer({ models, store: deps.store });
   const links = createApprovalLinks({ messages: deps.messages });
