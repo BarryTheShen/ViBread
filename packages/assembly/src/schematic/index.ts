@@ -23,9 +23,9 @@ function runtimePath(): string {
   return fileURLToPath(new URL("../../schematic-runtime/render.ts", import.meta.url));
 }
 
-function loaderPath(): string {
-  const resolved = import.meta.resolve("tsx/esm");
-  return fileURLToPath(resolved);
+/** `--import` takes a URL; a Windows path (`C:\…`) would be read as an unsupported URL scheme. */
+function loaderUrl(): string {
+  return import.meta.resolve("tsx/esm");
 }
 
 function decodeResponse(value: unknown): WorkerResponse | undefined {
@@ -95,7 +95,7 @@ function attachOutput(processChild: ChildProcessWithoutNullStreams): void {
 }
 
 function startWorker(): ChildProcessWithoutNullStreams {
-  const processChild = spawn(process.execPath, ["--import", loaderPath(), runtimePath()], {
+  const processChild = spawn(process.execPath, ["--import", loaderUrl(), runtimePath()], {
     cwd: fileURLToPath(new URL("../../schematic-runtime/", import.meta.url)),
     stdio: ["pipe", "pipe", "pipe"],
   });

@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import type { Circuit, InventoryItem, TestSuite } from "@vibread/core";
 import { knobNightLight, knobNightLightBrief, knobNightLightInventory, knobNightLightSuite, knobNightLightSuiteYaml } from "./knob-night-light.js";
 import { launchControl, launchControlBrief, launchControlInventory, launchControlSuite, launchControlSuiteYaml } from "./launch-control.js";
@@ -18,7 +19,7 @@ export interface GoldenDesign {
   hexFile: string;
 }
 
-const hex = (key: GoldenDesign["key"]) => new URL(`../hex/${key}.uno.hex`, import.meta.url).pathname;
+const hex = (key: GoldenDesign["key"]) => fileURLToPath(new URL(`../hex/${key}.uno.hex`, import.meta.url));
 
 export const GOLDEN: GoldenDesign[] = [
   { key: "moon-phase-lamp", brief: moonPhaseBrief, inventory: moonPhaseInventory, circuit: moonPhaseLamp, suite: moonPhaseSuite, suiteYaml: moonPhaseSuiteYaml, hexFile: hex("moon-phase-lamp") },
