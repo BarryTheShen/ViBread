@@ -13,7 +13,7 @@ import type {
   RevisionResults,
 } from "@vibread/core";
 import { MODULES } from "@vibread/core";
-import { applyCalibration, compileBenchFirmware, compileSketch } from "@vibread/firmware";
+import { applyCalibration, compileBenchFirmware, compileSketch, uploadCommand } from "@vibread/firmware";
 import { calibrationMacros, evaluateRun, planSelfTest } from "@vibread/bench";
 import { loadFaultDictionary } from "@vibread/tools";
 import { runs } from "./db/schema.js";
@@ -147,6 +147,11 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const missionId = String(req.params.id);
     const mission = await ctx.store.getMission(missionId);
     if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
+    const released = mission.releasedRevision === undefined ? null : await ctx.store.getRevision(missionId, mission.releasedRevision);
+    const latestBench = released?.results.bench?.at(-1);
+    if (!latestBench || latestBench.verdict !== "pass" || latestBench.runId.startsWith("virtual-")) {
+      throw httpError(409, "real_board_required", "The virtual board passed. Run the bench with your real Arduino to complete the mission.");
+    }
     const phase = await ctx.machine.phase(missionId);
     if (phase !== "LAUNCH") throw httpError(409, "bad_phase", "mission can only be confirmed after launch");
     const next = await ctx.machine.send(missionId, { type: "USER_CONFIRMED" });
@@ -217,8 +222,9 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.post("/missions/:id/bench/asks", async (req, res) => {
     const body = req.body as { askId?: unknown; test?: unknown; kind?: unknown; part?: unknown; prompt?: unknown; choices?: unknown; timeoutMs?: unknown };
-    if (typeof body.askId !== "string" || typeof body.test !== "string" || typeof body.kind !== "string" || typeof body.prompt !== "string" || !Array.isArray(body.choices) || body.choices.some((choice) => typeof choice !== "string") || typeof body.timeoutMs !== "number") {
-      throw httpError(400, "INVALID_REQUEST", "askId, test, kind, prompt, choices, and timeoutMs are required");
+    const choices = Array.isArray(body.choices) ? body.choices : [];
+    if (typeof body.askId !== "string" || typeof body.test !== "string" || typeof body.kind !== "string" || typeof body.prompt !== "string" || body.prompt.length > 300 || choices.length < 1 || choices.some((choice) => typeof choice !== "string" || choice.length === 0) || typeof body.timeoutMs !== "number" || !Number.isInteger(body.timeoutMs) || body.timeoutMs < 1_000 || body.timeoutMs > 300_000) {
+      throw httpError(400, "INVALID_REQUEST", "askId, test, kind, prompt (≤300 chars), non-empty choices, and timeoutMs (1-300 seconds) are required");
     }
     const ask = ctx.benchAsks.open({
       missionId: String(req.params.id),
@@ -240,9 +246,12 @@ export function mountApi(app: Express, ctx: AppContext): void {
   router.post("/missions/:id/bench/asks/:askId/close", async (req, res) => {
     const missionId = String(req.params.id);
     const askId = String(req.params.askId);
-    if (!ctx.benchAsks.get(missionId, askId)) throw httpError(404, "ASK_NOT_FOUND", "bench ask not found");
+    const ask = ctx.benchAsks.get(missionId, askId);
+    if (!ask) throw httpError(404, "ASK_NOT_FOUND", "bench ask not found");
     const body = req.body as { answer?: unknown };
-    if (body.answer !== undefined && typeof body.answer !== "string") throw httpError(400, "INVALID_REQUEST", "answer must be a string");
+    if (body.answer !== undefined && (typeof body.answer !== "string" || (body.answer !== "timeout" && !ask.choices.includes(body.answer)))) {
+      throw httpError(400, "INVALID_REQUEST", "answer must be one of the ask choices or timeout");
+    }
     ctx.benchAsks.close(missionId, askId, body.answer as string | undefined);
     res.status(204).send();
   });
@@ -283,10 +292,11 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const revision = await ctx.store.getRevision(missionId, mission.releasedRevision);
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "released revision not found");
     const key = body.kind === "bench" ? "bench.hex" : "app.hex";
+    const fallbackUpload = uploadCommand({ hexPath: "<downloaded .hex file>", port: "<port>", board: revision.circuit.board.profile });
     const cachedHash = revision.results.artifacts[key];
     if (cachedHash) {
       const cached = await ctx.store.getArtifact(cachedHash);
-      if (cached) return res.json({ hex: Buffer.from(cached.data).toString("utf8"), design: revision.hash, ...(body.kind === "bench" ? { plan: revision.results.selftest } : {}) });
+      if (cached) return res.json({ hex: Buffer.from(cached.data).toString("utf8"), design: revision.hash, fallbackUpload, ...(body.kind === "bench" ? { plan: revision.results.selftest } : {}) });
     }
     let plan = revision.results.selftest;
     let compile: CompileResult;
@@ -313,7 +323,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
       ...(body.kind === "bench" && plan ? { selftest: plan } : {}),
     };
     await ctx.store.saveResults(missionId, revision.n, resultPatch);
-    res.json({ hex: compile.hex, design: revision.hash, ...(body.kind === "bench" ? { plan } : {}) });
+    res.json({ hex: compile.hex, design: revision.hash, fallbackUpload, ...(body.kind === "bench" ? { plan } : {}) });
   });
   router.post("/missions/:id/bench/runs", async (req, res) => {
     const missionId = String(req.params.id);
