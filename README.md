@@ -59,13 +59,11 @@ USB bench works the same on every OS). How it works inside: [HOW-IT-WORKS.md](HO
 - **Phones:** menu **ViBread → Show phone link / QR** (same Wi-Fi). Phones pair by scanning the QR code; other devices
   on the Wi-Fi can't open your ViBread. Allow ViBread through the firewall when your OS asks (Windows/macOS prompt on
   first phone connection; private networks only).
-- **AI agents:** the primary route is **Settings → Connect your Claude account** (the desktop app provides the official
-  oh-my-pi `omp` helper). It runs `omp login anthropic` and keeps the grant in the app's private broker directory. The
-  secondary route is menu **ViBread → Set Anthropic API key…**; that key is encrypted with the OS keychain (macOS Keychain,
-  Windows DPAPI, GNOME Keyring/KWallet on Linux). On a Linux desktop without a keyring it is stored obfuscated, not
-  encrypted, in `settings.json` (readable only by your user), and the key window says so. If the download is unavailable,
-  an `omp` on your login-shell `PATH` (plus `~/.bun/bin`, `~/.npm-global/bin`, `~/.local/bin`) can still be used; an
-  explicit `VIBREAD_OMP_BIN` always overrides the downloaded helper.
+- **AI agents:** the primary route is **Settings → Connect your Claude account**: ViBread's server runs the Claude sign-in
+  itself (pi-ai's Anthropic OAuth) and keeps the grant in its database, so no helper program is needed. The secondary
+  route is menu **ViBread → Set Anthropic API key…**; that key is encrypted with the OS keychain (macOS Keychain, Windows
+  DPAPI, GNOME Keyring/KWallet on Linux). On a Linux desktop without a keyring it is stored obfuscated, not encrypted, in
+  `settings.json` (readable only by your user), and the key window says so.
 - **Your data** lives in `~/.config/ViBread` (Linux), `%APPDATA%\ViBread` (Windows), `~/Library/Application Support/ViBread`
   (macOS): `data/` (missions), `toolchain/`, `logs/server.log`, `logs/setup.log`. Menu: *Open data folder*, *Open logs*,
   *Reset example missions*.
@@ -87,8 +85,8 @@ Tested from a clean clone of this repository (install → toolchain → build �
 | Browser | Chrome or Edge | — | Needed for the bench (Web Serial talks to the Arduino). Other screens work in any modern browser |
 | Disk / network | ~1.5 GB, internet for the first install | — | node_modules + Arduino toolchain |
 
-Optional: **ngspice** for the SPICE cross-check (`brew install ngspice` / `sudo apt install ngspice`), the **oh-my-pi**
-`omp` CLI on the server for "Connect your Claude account", **Claude Code** to drive ViBread over MCP.
+Optional: **ngspice** for the SPICE cross-check (`brew install ngspice` / `sudo apt install ngspice`), **Claude Code** to
+drive ViBread over MCP.
 
 ### 2. Install and run
 
@@ -140,7 +138,8 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 | `VIBREAD_LAN_PAIRING=off` | Disable the single-operator LAN pairing guard (only on a trusted network) |
 | Tunnels (cloudflared/ngrok) | Treated as remote devices; `ssh -R`-style raw forwarding looks like the laptop itself, so use multi-user sign-in for any public tunnel |
 | `DATA_DIR` | SQLite database, artifacts and generated secrets (default `./data`, relative to the repo root) |
-| `ANTHROPIC_API_KEY` | ViBread's server key for the agents (design, test author, RETRO, photo check). Users can instead connect their own Claude account (below). Without either, everything except the agents works and the chat says Claude is not connected |
+| `ANTHROPIC_API_KEY` | ViBread's server key for the agents (design, test author, RETRO, photo check, scan). Users can instead connect their own Claude account (below). Without either, everything except the agents works and the chat says Claude is not connected |
+| `ANTHROPIC_BASE_URL` | Anthropic API origin for every Claude call (a proxy or local bridge; default `https://api.anthropic.com`) |
 | `VIBREAD_MODEL`, `VIBREAD_FAST_MODEL` | Default `claude-opus-5-5`, `claude-sonnet-5` |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in (callback `${PUBLIC_URL}/api/auth/callback/google`) |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub sign-in (callback `${PUBLIC_URL}/api/auth/callback/github`). With Google or GitHub configured, single-operator mode (no sign-in) is turned off |
@@ -148,7 +147,6 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 | `CAPCOM_PROVIDER` | `off` (default), `terminal` (local test chat), or `cloud` (iMessage) with `PHOTON_PROJECT_ID`, `PHOTON_PROJECT_SECRET`, `CAPCOM_NUMBER`; `CAPCOM_ALLOW_OFF_HOURS=1` disables the quiet-hours guard |
 | `VIBREAD_ARDUINO_CLI`, `VIBREAD_ARDUINO_CONFIG`, `VIBREAD_COMPILE_TIMEOUT_MS` | Override the toolchain location / compile timeout |
 | `VIBREAD_NO_STATIC=1` | Don't serve `apps/web/dist` |
-| `VIBREAD_OMP_BIN` | oh-my-pi CLI used for "Connect your Claude account" (default `omp` on `PATH`); ViBread starts its auth broker on a private random loopback port |
 
 ## Using it
 
@@ -167,13 +165,13 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 ### Connect your Claude account
 
 Settings → **Connect your Claude account** is the primary way to let your own Claude account power missions instead of
-ViBread's key. The desktop app provides the pinned official oh-my-pi helper and runs its Claude sign-in
-(`omp login anthropic`): open the claude.ai link, approve, then paste the code Claude shows — or the address of the page
-that fails to load (`localhost:54545/…`) — into ViBread. If your browser runs on the server machine, the sign-in finishes
-by itself. The grant is kept by an oh-my-pi auth broker under `DATA_DIR/claude-accounts` (never your own `~/.omp`), and
-your agent calls go through an oh-my-pi auth gateway restricted to your account. Disconnect removes it. When your account
-can't serve the model, ViBread falls back to its server key; menu **Set Anthropic API key…** remains the secondary
-option. Note: Anthropic's terms restrict using Claude.ai login in third-party apps — see PLAN.md §9.
+ViBread's key. ViBread runs the Claude sign-in itself (pi-ai's Anthropic OAuth, no helper program): open the claude.ai
+link, approve, then paste the code Claude shows — or the address of the page that fails to load
+(`localhost:53692/callback?code=…`) — into ViBread; that works when your browser is on a different machine than the
+server. If your browser runs on the server machine, the sign-in finishes by itself. You can connect an Anthropic API key
+instead (`POST /api/connections/claude/key`). The credential is stored in ViBread's database for your user only (pi-ai
+refreshes the sign-in when it expires); Disconnect removes it. When your credential can't be used, ViBread falls back to
+its server key. Note: Anthropic's terms restrict using Claude.ai login in third-party apps — see PLAN.md §9.
 
 ### Claude Code (MCP) and other agents (A2A)
 
@@ -212,7 +210,7 @@ packages/tools     Tool registry + pipeline (every console for a revision) + AI 
 packages/checks    EECOM + GUIDO rules and the ngspice cross-check
 packages/firmware  arduino-cli service, bench self-test firmware template (Eta + ArduinoJson), calibration injection
 packages/sim       avr8js ATmega328P simulator, device models, scenario runner, coverage (Node workers + browser)
-packages/assembly  Breadboard allocator, LVS, steps, SVG/PNG rendering; schematic via an isolated tscircuit runtime
+packages/assembly  Breadboard allocator, LVS, steps, SVG/PNG rendering; schematic via elkjs layout + a geometry check (isolated runtime)
 packages/bench     Self-test plan, NDJSON decoding, telemetry evaluation, diagnosis rules, fault catalog + fault dictionary
 fixtures           Golden designs with test suites and pre-built HEX
 scripts            Toolchain setup, golden seeding
@@ -223,11 +221,12 @@ scripts            Toolchain setup, golden seeding
 ViBread's own code is MIT (see [LICENSE](LICENSE)). Main dependencies: Vercel AI SDK (`ai`, `@ai-sdk/anthropic`,
 Apache-2.0), Material UI + MUI X Chat (MIT), Better Auth and its MCP/OAuth plugins (MIT),
 Model Context Protocol SDK (MIT), A2A JS SDK (Apache-2.0), Photon `spectrum-ts` (MIT), Express (MIT), XState (MIT),
-Drizzle ORM (Apache-2.0), better-sqlite3 (MIT), tscircuit core / circuit-json / circuit-to-svg (MIT/ISC, isolated in
+Drizzle ORM (Apache-2.0), better-sqlite3 (MIT), elkjs (EPL-2.0, schematic layout; isolated in
 `packages/assembly/schematic-runtime`), json-rules-engine (ISC), avr8js (MIT), webserial-flasher (MIT), Eta (MIT),
 ArduinoJson (MIT, compiled into the bench firmware), yaml (ISC), zod (MIT), sharp (Apache-2.0).
 
-Notices: `@resvg/resvg-js` is MPL-2.0 (used unmodified as a library). `heif2jpeg` is MIT but statically bundles libheif and
+Notices: `@resvg/resvg-js` is MPL-2.0 and `elkjs` is EPL-2.0 (both used unmodified as libraries; elkjs sources:
+https://github.com/kieler/elkjs). `heif2jpeg` is MIT but statically bundles libheif and
 libde265 (LGPL-3.0); their sources are available from their upstream projects. arduino-cli (GPL-3.0) and ngspice
 (BSD-3-Clause) are external tools invoked as separate programs and not redistributed in this repository; the Arduino AVR
 core (LGPL) is installed by `setup:toolchain` and linked into sketches as Arduino libraries normally are.

@@ -1,0 +1,363 @@
+{
+  "schema": "vibread.circuit/0.1",
+  "title": "Six-LED Chaser",
+  "summary": "Six lights chase each other left to right.",
+  "board": {
+    "profile": "uno-r3-atmega328p-5v"
+  },
+  "breadboard": {
+    "profile": "bb-830"
+  },
+  "parts": [
+    {
+      "id": "LED1",
+      "module": "led",
+      "label": "Red chaser light",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "LED2",
+      "module": "led",
+      "label": "Orange chaser light",
+      "params": {
+        "color": "orange"
+      }
+    },
+    {
+      "id": "LED3",
+      "module": "led",
+      "label": "Yellow chaser light",
+      "params": {
+        "color": "yellow"
+      }
+    },
+    {
+      "id": "LED4",
+      "module": "led",
+      "label": "Green chaser light",
+      "params": {
+        "color": "green"
+      }
+    },
+    {
+      "id": "LED5",
+      "module": "led",
+      "label": "Blue chaser light",
+      "params": {
+        "color": "blue"
+      }
+    },
+    {
+      "id": "LED6",
+      "module": "led",
+      "label": "White chaser light",
+      "params": {
+        "color": "white"
+      }
+    },
+    {
+      "id": "R1",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R2",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R3",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R4",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R5",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R6",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    }
+  ],
+  "nets": [
+    {
+      "id": "GND",
+      "kind": "ground",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "GND"
+        },
+        {
+          "part": "LED1",
+          "pin": "K"
+        },
+        {
+          "part": "LED2",
+          "pin": "K"
+        },
+        {
+          "part": "LED3",
+          "pin": "K"
+        },
+        {
+          "part": "LED4",
+          "pin": "K"
+        },
+        {
+          "part": "LED5",
+          "pin": "K"
+        },
+        {
+          "part": "LED6",
+          "pin": "K"
+        }
+      ]
+    },
+    {
+      "id": "D8",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D8"
+        },
+        {
+          "part": "R1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L1",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R1",
+          "pin": "2"
+        },
+        {
+          "part": "LED1",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "D9",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D9"
+        },
+        {
+          "part": "R2",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R2",
+          "pin": "2"
+        },
+        {
+          "part": "LED2",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "D10",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D10"
+        },
+        {
+          "part": "R3",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L3",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R3",
+          "pin": "2"
+        },
+        {
+          "part": "LED3",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "D11",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D11"
+        },
+        {
+          "part": "R4",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L4",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R4",
+          "pin": "2"
+        },
+        {
+          "part": "LED4",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "D12",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D12"
+        },
+        {
+          "part": "R5",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L5",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R5",
+          "pin": "2"
+        },
+        {
+          "part": "LED5",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "D13",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D13"
+        },
+        {
+          "part": "R6",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L6",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R6",
+          "pin": "2"
+        },
+        {
+          "part": "LED6",
+          "pin": "A"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "pin": "D8",
+      "mode": "OUTPUT",
+      "part": "LED1",
+      "purpose": "chaser"
+    },
+    {
+      "pin": "D9",
+      "mode": "OUTPUT",
+      "part": "LED2",
+      "purpose": "chaser"
+    },
+    {
+      "pin": "D10",
+      "mode": "OUTPUT",
+      "part": "LED3",
+      "purpose": "chaser"
+    },
+    {
+      "pin": "D11",
+      "mode": "OUTPUT",
+      "part": "LED4",
+      "purpose": "chaser"
+    },
+    {
+      "pin": "D12",
+      "mode": "OUTPUT",
+      "part": "LED5",
+      "purpose": "chaser"
+    },
+    {
+      "pin": "D13",
+      "mode": "OUTPUT",
+      "part": "LED6",
+      "purpose": "chaser"
+    }
+  ],
+  "sketch": {
+    "source": "void setup() {}\nvoid loop() {}\n"
+  },
+  "intent": [
+    {
+      "id": "C1",
+      "text": "Six lights chase each other left to right."
+    }
+  ],
+  "assumptions": [
+    "Schematic layout regression fixture."
+  ]
+}

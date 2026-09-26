@@ -1,0 +1,349 @@
+{
+  "schema": "vibread.circuit/0.1",
+  "title": "Pretend Dishwasher Panel",
+  "summary": "A Mode button picks one of 4 wash modes, each with its own light. Start makes that light blink for the mode's wash time, then a buzzer beeps.",
+  "board": {
+    "profile": "uno-r3-atmega328p-5v"
+  },
+  "breadboard": {
+    "profile": "bb-830"
+  },
+  "parts": [
+    {
+      "id": "BTN1",
+      "module": "button",
+      "label": "Mode button",
+      "params": {}
+    },
+    {
+      "id": "BTN2",
+      "module": "button",
+      "label": "Start button",
+      "params": {}
+    },
+    {
+      "id": "LED1",
+      "module": "led",
+      "label": "Quick mode light",
+      "params": {
+        "color": "green"
+      }
+    },
+    {
+      "id": "LED2",
+      "module": "led",
+      "label": "Normal mode light",
+      "params": {
+        "color": "yellow"
+      }
+    },
+    {
+      "id": "LED3",
+      "module": "led",
+      "label": "Heavy mode light",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "LED4",
+      "module": "led",
+      "label": "Eco mode light",
+      "params": {
+        "color": "white"
+      }
+    },
+    {
+      "id": "R1",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      },
+      "label": "Resistor for LED1"
+    },
+    {
+      "id": "R2",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      },
+      "label": "Resistor for LED2"
+    },
+    {
+      "id": "R3",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      },
+      "label": "Resistor for LED3"
+    },
+    {
+      "id": "R4",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      },
+      "label": "Resistor for LED4"
+    },
+    {
+      "id": "BZ1",
+      "module": "buzzer-active",
+      "label": "Done buzzer",
+      "params": {}
+    }
+  ],
+  "nets": [
+    {
+      "id": "GND",
+      "kind": "ground",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "GND"
+        },
+        {
+          "part": "BTN1",
+          "pin": "3"
+        },
+        {
+          "part": "BTN2",
+          "pin": "3"
+        },
+        {
+          "part": "LED1",
+          "pin": "K"
+        },
+        {
+          "part": "LED2",
+          "pin": "K"
+        },
+        {
+          "part": "LED3",
+          "pin": "K"
+        },
+        {
+          "part": "LED4",
+          "pin": "K"
+        },
+        {
+          "part": "BZ1",
+          "pin": "N"
+        }
+      ]
+    },
+    {
+      "id": "D2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D2"
+        },
+        {
+          "part": "BTN1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D3",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D3"
+        },
+        {
+          "part": "BTN2",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D4",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D4"
+        },
+        {
+          "part": "R1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L1",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R1",
+          "pin": "2"
+        },
+        {
+          "part": "LED1",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "D5",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D5"
+        },
+        {
+          "part": "R2",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R2",
+          "pin": "2"
+        },
+        {
+          "part": "LED2",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "D6",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D6"
+        },
+        {
+          "part": "R3",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L3",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R3",
+          "pin": "2"
+        },
+        {
+          "part": "LED3",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "D7",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D7"
+        },
+        {
+          "part": "R4",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L4",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R4",
+          "pin": "2"
+        },
+        {
+          "part": "LED4",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "D9",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D9"
+        },
+        {
+          "part": "BZ1",
+          "pin": "P"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "pin": "D2",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN1",
+      "purpose": "Mode"
+    },
+    {
+      "pin": "D3",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN2",
+      "purpose": "Start"
+    },
+    {
+      "pin": "D4",
+      "mode": "OUTPUT",
+      "part": "LED1",
+      "purpose": "Quick mode light"
+    },
+    {
+      "pin": "D5",
+      "mode": "OUTPUT",
+      "part": "LED2",
+      "purpose": "Normal mode light"
+    },
+    {
+      "pin": "D6",
+      "mode": "OUTPUT",
+      "part": "LED3",
+      "purpose": "Heavy mode light"
+    },
+    {
+      "pin": "D7",
+      "mode": "OUTPUT",
+      "part": "LED4",
+      "purpose": "Eco mode light"
+    },
+    {
+      "pin": "D9",
+      "mode": "OUTPUT",
+      "part": "BZ1",
+      "purpose": "Done beep"
+    }
+  ],
+  "sketch": {
+    "source": "void setup() {}\nvoid loop() {}\n"
+  },
+  "intent": [
+    {
+      "id": "C1",
+      "text": "A Mode button picks one of 4 wash modes, each with its own light. Start makes that light blink for the mode's wash time, then a buzzer beeps."
+    }
+  ],
+  "assumptions": [
+    "Schematic layout regression fixture."
+  ]
+}
