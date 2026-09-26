@@ -1,8 +1,12 @@
 # End-to-end benchmark with real Claude models
 
-**Status (Sat Sep 26, 2026, 12:40 CDT): 3 of 10 briefs measured.** The three golden briefs ran the whole chain on real
-models. The seven new beginner briefs are blocked until the omp Claude credential on this machine is restored (see
-[Failures](#failures-and-what-they-mean)). The harness is ready to finish them with one command.
+**Status (historical snapshot, Sat Sep 26, 2026, 12:40 CDT): 3 of 10 briefs measured.** These results document the earlier
+benchmark run. The production server has since moved to pi for the design agent and pi-ai for every Claude call; the web still
+uses the AI SDK UI-message stream format. The benchmark script remains legacy tooling and, if rerun, uses an external `omp`
+driver and local bridge only for the benchmark—not for ViBread sign-in or the desktop app.
+
+The seven new beginner briefs were blocked until the benchmark driver's credential was restored (see [Failures](#failures-and-what-they-mean)).
+The harness is ready to finish them with one command.
 
 Worktree commit `dc69110`. Harness: [`scripts/e2e-benchmark.mts`](../scripts/e2e-benchmark.mts). Raw results:
 `/tmp/promptlab-e2e/run1/<brief>/result.json`, design transcripts `design-*.jsonl`, and `summary.md`.
@@ -17,8 +21,8 @@ Worktree commit `dc69110`. Harness: [`scripts/e2e-benchmark.mts`](../scripts/e2e
 - **Build:** 7–15 jumpers, 17–33 numbered steps; everything fits on a bb-830 and LVS is clean.
 - **Virtual bench self-test on the released revision:** 3/3 pass.
 - **Injected wiring fault:** caught 3/3, true cause ranked first 3/3 (top-1 = 3/3).
-- **Cost:** about $2.02 total, 732k tokens, ≈ $0.67 per brief. These are omp's usage and list-price figures for Opus
-  5.5 plus Sonnet 5.
+- **Cost:** about $2.02 total, 732k tokens, ≈ $0.67 per brief. These are the historical benchmark driver's usage and
+  list-price figures for Opus 5.5 plus Sonnet 5, not a production sign-in or desktop-runtime dependency.
 
 ## Method
 
@@ -28,16 +32,16 @@ One command runs the whole chain and writes every number in this document:
 npx tsx scripts/e2e-benchmark.mts [--only key,…] [--resume key,…] [--parallel 1] [--out /tmp/promptlab-e2e/<run>]
 ```
 
-It needs the `omp` CLI with Anthropic model access, the Arduino toolchain, and ports 8950 (ViBread) and 8951 (bridge). It
-starts its own ViBread server with a fresh `DATA_DIR`. `--resume` re-runs only GO for build and the bench for briefs
-whose design already ran.
+It needs the external `omp` CLI with Anthropic model access, the Arduino toolchain, and ports 8950 (ViBread) and 8951 (bridge).
+This requirement belongs only to this historical harness, not to ViBread sign-in or the desktop app. It starts its own ViBread
+server with a fresh `DATA_DIR`. `--resume` re-runs only GO for build and the bench for briefs whose design already ran.
 
 | Step | What runs | Real? What the harness does |
 |---|---|---|
-| Mission | `POST /api/missions` with the brief and a realistic "parts I have" list, Review mode | Real ViBread REST |
-| Design agent | **Claude Opus 5.5** (`anthropic/claude-opus-5-5`) in `omp -p`, the way a user's Claude Code would connect. Its prompt starts with ViBread's exact `designSystemPrompt(mission)` text. It uses ViBread's tools over **MCP** with a bearer token from `POST /api/connections/tokens` | Real model, real MCP server. The harness uses omp instead of Claude Code and restricts omp's own tools to read/write (omp exposes MCP tools as `xd://` devices: read shows the schema, write makes the call). It also disables omp's 30 s MCP request timeout, because one propose_design runs the test author and RETRO inline and takes minutes. MCP has no `ask_user`, so an ask-back would be the agent's final reply, and the harness would answer once with "You decide — go with what you think is best" (none of the 3 briefs asked back) |
+| Mission | `POST /api/missions` with the brief and a realistic "parts I have" list | Real ViBread REST; the old benchmark passed a Review-mode value that current production ignores |
+| Design agent | **Claude Opus 5.5** (`anthropic/claude-opus-5-5`) in the external benchmark driver, using ViBread's exact `designSystemPrompt(mission)` text and ViBread's tools over **MCP** with a bearer token from `POST /api/connections/tokens` | Historical real model and real MCP server. This is not the production design path: current production runs the design agent on pi in the Node server |
 | Consoles | Every propose_design runs EECOM, GUIDO (arduino-cli compile plus simulated pin modes), the independent test author and then FIDO (ATmega328P simulator on the compiled HEX plus coverage rules), FAO (layout, LVS, steps) and RETRO | All ViBread's own code, including `test-author.ts` (TestSuiteSchema parse and one coverage-repair round), `retro.ts` and the fault dictionary |
-| Test author, RETRO | **Claude Sonnet 5** (`anthropic/claude-sonnet-5`) with the production prompts and code. ViBread's server calls Anthropic through the AI SDK. The harness sets `ANTHROPIC_BASE_URL` to a local Anthropic Messages endpoint (the "bridge"), which runs each request as one `omp -p` call on the requested model with the request's system prompt and user text | Real model. The bridge is harness. **Caveat:** omp has no structured-output flag, so the bridge appends the request's JSON Schema to the prompt and takes the JSON object from the reply. Production uses Anthropic's native structured outputs, which guarantee the schema; here ViBread's zod parse is the check, and it never failed |
+| Test author, RETRO | **Claude Sonnet 5** (`anthropic/claude-sonnet-5`) with the production prompts and code. Current production calls Anthropic through pi-ai structured calls. In this historical harness, `ANTHROPIC_BASE_URL` points to a local Messages bridge that runs each request as one external `omp -p` call | Real model output through the harness bridge. The bridge appends the JSON Schema because its driver lacks native structured output; production uses pi-ai's forced answer-schema tool and zod validation |
 | GO for build | `POST /api/missions/:id/release` as the Flight Director. There is no waiver: a credential exists, so RETRO must vote GO | Real release gates |
 | Virtual bench | The server compiles the self-test firmware and plans the self-test (`POST …/bench/firmware {kind:"bench"}`). That firmware runs in ViBread's simulator on the as-designed circuit with a scripted person. `POST …/bench/runs` has the server evaluate and diagnose, with the fault dictionary merged once `faults.json` is ready (it was ready for all 3) | Real firmware, simulator, evaluator and diagnosis. The person is harness: presses and covers when asked, reports which LED is actually lit, says whether the buzzer beeped |
 | Injected fault | `applyFault` on the released layout: button-leg-in-gnd-row if the design has a button, otherwise led-jumpers-swapped, otherwise led-missing. The as-built circuit runs the same bench firmware, the server diagnoses it, and "rank" is the true cause's position in the candidate list | Real diagnosis; the fault is simulated |
@@ -79,13 +83,13 @@ the design agent plus the test-author and RETRO calls for that brief.
 
 ## Failures and what they mean
 
-1. **Blocker: omp's credential store was corrupted mid-run.** At 12:31:08 CDT, while the harness started three omp
-   design runs within seconds of each other (alongside bridge calls), omp reported `~/.omp/agent/agent.db` corrupt. It
-   moved the file aside (`agent.db.corrupt-…`, really malformed) and started with an empty credential store. Since then
-   every new omp process fails with "No API key found for anthropic", so the seven new briefs failed in 2 s without
-   reaching a model. Concurrent omp starts on this machine are the most likely cause.
-   - Mitigation in the harness: `--parallel 1` is now the default, and omp processes start at least 5 s apart.
-   - Recovery needs a human `omp login anthropic`.
+1. **Historical harness blocker: the external `omp` credential store was corrupted mid-run.** At 12:31:08 CDT, while the
+   harness started three driver processes within seconds of each other (alongside bridge calls), the external driver reported
+   `~/.omp/agent/agent.db` corrupt. It moved the file aside and started with an empty credential store. Every new benchmark
+   driver process then failed with "No API key found for anthropic", so the seven new briefs failed in 2 s without reaching a
+   model. This did not affect ViBread's pi-ai sign-in or desktop runtime.
+   - Mitigation in the harness: `--parallel 1` is now the default, and driver processes start at least 5 s apart.
+   - Recovery for this legacy harness needs the external driver's `omp login anthropic`.
 2. **Moon virtual self-test first reported "incomplete". The harness caused it, not ViBread.** The LED check stalled
    after the third "Which light is blinking?" answer. The scripted person advanced the simulator (`session.run`) from
    inside the serial callback. That re-entrant call stalls the bench firmware's LED sequence depending on the design; it
@@ -115,7 +119,7 @@ Each brief has a realistic parts list in the harness, using only library parts:
 - **sos-blinker:** Morse SOS started and stopped with a button
 - **quick-press:** two-player game with three buttons, LEDs and a buzzer
 
-To finish once omp can log in again:
+To finish this historical benchmark once its external driver credential is available:
 
 ```bash
 npx tsx scripts/e2e-benchmark.mts --out /tmp/promptlab-e2e/run1 --data-dir /tmp/promptlab-e2e/data \

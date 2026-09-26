@@ -1,14 +1,13 @@
-# ViBread redesign plan — v3
+# ViBread redesign plan — v3 (implemented)
 
-Status: **for your review** (Sat Sep 26, ≈15:45 CT). Nothing is built yet. v2 was checked by a plan critic (all 18 points
-folded in). v3 adds what you asked for: how the pieces connect (§2), how the inventory shows up in the UI (§3.3, §5.4),
-the build and test part after GO (§4), phone and camera (§6), and a bigger catalog of part "objects" you can extend
-yourself (§5.1–5.3). Decisions for you: §11.
+Status: **implemented** (Sat Sep 26, 2026). This document records the v3 UI and inventory design; later integration replaced
+MUI X Chat with assistant-ui, removed design permission modes and generic approval prompts, and added the pi/pi-ai runtime,
+debug logs, elkjs schematic verification and explicit scan retry states.
 
 ## 1. Summary
 
 1. **Works like Claude desktop.** Missions are listed in a sidebar like Claude's sessions. Each mission is one chat:
-   Claude's replies, short rows for checks, approvals and progress, and a side panel for results (schematic, parts,
+   Claude's replies, grouped tool and timeline rows, answerable questions and a side panel for results (schematic, parts,
    build steps, code, tests, simulation). One **next-step button** in the header walks you through the whole mission:
    GO for build → build → test on the bench → done.
 2. **Inventory = your parts, mostly by camera.** Photograph your parts → Claude identifies them → ViBread turns that into
@@ -18,12 +17,12 @@ yourself (§5.1–5.3). Decisions for you: §11.
    from scratch, by copying one, or straight from an unknown part in a scan.
 4. **Build on the laptop or the phone.** After GO for build the steps appear in the side panel and on your phone. The
    phone (paired once by QR) also scans parts and photo-checks steps.
-5. **Claude-desktop look**: warm ivory or warm dark gray, terracotta accent, sans-serif interface, serif for Claude's
-   replies.
+5. **Mission-control palette**: space cadet, cool gray, anti-flash white and red; light and dark themes follow the system.
 
-**Stays the same**: all rules and features — five checks, GO for build (with the "without review" dialog), build steps,
-bench self-test, simulation, approvals, permission modes, recorded-run labels, iMessage, Claude Code connection, phone
-pairing and its security. **Effort**: ≈5 h with 7 agents, then 1.5 h QA/audit, then re-recording the demo video.
+**Stays the same**: five checks, human GO for build (web button or iMessage `GO`), build steps, bench self-test, simulation,
+recorded-run labels, iMessage, Claude Code connection, phone pairing and its security. Claude edits designs directly; physical
+bench actions still wait for a click. **Effort**: this plan is now a shipped design record; use the Build status in [PLAN.md](../PLAN.md)
+for current proof and remaining hardware/account checks.
 
 ## 2. How it all fits together
 
@@ -68,7 +67,7 @@ flowchart LR
 │ ViBread       « │                Good afternoon. What are we building?              │
 │ [+ New mission] │     ┌───────────────────────────────────────────────────────────┐ │
 │ ▤ Inventory  23 │     │ A lamp that fills like the moon when I press a button…    │ │
-│─────────────────│     │ [Parts: all inventory (23)]   [Review ▾]              (↑) │ │
+│─────────────────│     │ [Parts: all inventory (23)]                         (↑) │ │
 │ Today           │     └───────────────────────────────────────────────────────────┘ │
 │ ● Moon lamp     │       Night light · Traffic light · Reaction game · Doorbell      │
 │ ▲ Night light   │       Inventory empty? [Scan your parts]                          │
@@ -99,7 +98,7 @@ flowchart LR
 │        │ ▸ Steps 1–11 done (phone)                    │                               │
 │        │ ▸ Photo check step 11 · LED3 correct         │                               │
 │        │ ┌──────────────────────────────────────────┐ │                               │
-│        │ │ Reply…                  [Review ▾]   (↑) │ │                               │
+│        │ │ Reply…                                             (↑) │                               │
 │        │ └──────────────────────────────────────────┘ │                               │
 └────────┴──────────────────────────────────────────────┴───────────────────────────────┘
 ```
@@ -108,15 +107,13 @@ flowchart LR
   Schematic · Build steps · Code · Tests · Try it · Replay · Checks (findings of all five) · Telemetry · Diagnosis ·
   Photo checks. The panel opens by itself on the first design (Schematic), after GO (Build steps) and after a bench
   problem (Diagnosis).
-- **Where the rows come from**: check, GO, build, photo-check and bench rows are timeline events merged into the chat
-  in time order as MUI X Chat custom parts ([MUI docs](https://mui.com/x/react-chat/display/message-parts/custom-parts/)).
-  That is also what makes the example missions (which have no chat history) show their story.
-- **Other homes**: approvals from the agent → inline card; approvals from iMessage/Claude Code → pinned above the chat
-  box; permission mode (+ "board actions always wait for you") → mode picker in the chat box; agent working / Claude not
-  connected → header chip; recorded run → banner + chips (as today); bench, rename, delete, phone link → ⋯ menu;
-  Settings → dialog (`/settings` still works); `/login`, `/consent`, phone pages → outside the shell.
-- *Inspiration, not a copy*: Claude's Chat tab opens artifacts in a window to the right; the Code tab has panes and a
-  mode picker next to send [1][2][3].
+- **Where the rows come from**: check, GO, build, photo-check and bench rows are timeline events merged into the assistant-ui
+  thread in time order. That is also what makes the example missions (which have no chat history) show their story.
+- **Other homes**: answerable questions → cards in the thread; agent working / Claude not connected → header chip; recorded run
+  → banner + chips (as today); bench, rename, delete, phone link → ⋯ menu; Settings → dialog (`/settings` still works);
+  `/login`, `/consent`, phone pages → outside the shell.
+- *Inspiration, not a copy*: Claude's Chat tab opens artifacts in a window to the right; ViBread keeps the send and stop
+  controls in the conversation [1][3].
 
 ### 3.3 Inventory page
 
@@ -226,8 +223,8 @@ Motors, servos, relays and mains stay out of designs (PLAN scope; the design pro
 | Board / breadboard | mission settings (SHOULD) |
 
 - Contract change (Step 0): a mission part gains an optional `label` and `pinout`, which Claude copies into the design.
-- When Claude wants a part you don't have (its *add part* request), the approval card says "not in your inventory";
-  approving asks "Do you have it? → add to inventory".
+- When Claude wants a part you don't have (its *add part* request), the chat says it is not in your inventory; add it in
+  Inventory before asking Claude to design with it.
 - The **Parts** view shows, per design version, need vs have; inventory rows show **used in**.
 
 ### 5.5 Merge rules
@@ -291,18 +288,20 @@ Motors, servos, relays and mains stay out of designs (PLAN scope; the design pro
 
 | Token | Light | Dark |
 |---|---|---|
-| main / sidebar / cards | `#FAF9F5` / `#F0EEE6` / `#FFFFFF` | `#262624` / `#1F1E1D` / `#30302E` |
-| text / secondary text | `#141413` (17.5) / `#6B6A63` (4.7+) | `#FAF9F5` (12.6+) / `#B0AEA5` (6.0+) |
-| primary: buttons, links, focus ring | `#AD4F2D`, white text (4.6+ / 5.3) | links `#E3896A` (5.1+); buttons `#D97757` with `#141413` text (5.9) |
-| accent: send button, icons only | `#D97757` | `#D97757` |
-| success / info / warning / error | `#5E7046` / `#3B6A99` / `#8A5A0B` / `#B3432F` (all ≥ 4.7, white text ≥ 5.4) | `#9DB47F` / `#8DB6DD` / `#E0B04A` / `#E4806A` (all ≥ 4.8) |
-| input borders / dividers | `#8F8D85` (3.2+) / `#E8E6DC` (decorative) | `#7A7973` (3.0+) / `#3D3D3A` |
+| main / sidebar / cards | `#EDF2F4` / `#E2E8EC` / `#FFFFFF` | `#1F2133` / `#25273A` / `#2B2D42` |
+| text / secondary text | `#2B2D42` / `#5C677D` | `#EDF2F4` / `#A9B3C4` |
+| primary / links | `#2B2D42` / `#2B2D42` | `#EDF2F4` / `#EDF2F4` |
+| accent / error | `#D80032` | `#D80032` / `#FF6B7D` |
+| success / info / warning | `#1F7A4D` / `#2B2D42` / `#9A4A06` | `#5FD39A` / `#A9B3C4` / `#FBBF24` |
+| input borders / dividers | `#6B7890` / `#D5DCE3` | `#8D99AE` / `#3A3D56` |
 
-- MUI: `contrastThreshold: 4.5`, dark `primary.contrastText: #141413`, radius 8/12/18 (inputs/cards/chat box), borders
-  instead of shadows, no uppercase buttons, System/Light/Dark switch. ≈25 hard-coded dark colours get theme values;
-  breadboard drawings stay as dark canvas frames.
+- MUI uses `contrastThreshold: 4.5`, a System/Light/Dark switch, radius 8/12/18 (inputs/cards/chat box), borders instead of
+  shadows, and no uppercase buttons. Breadboard and schematic canvases stay dark frames.
 
-## 8. Build plan
+## 8. Implementation record
+
+This table is the original slice plan, retained to show how the shipped UI was divided. S1–S8 are implemented; current proof and
+remaining hardware/account checks are in [PLAN.md](../PLAN.md).
 
 - **Step 0 — contracts (integrator, 30 min)**: part-type schema + catalog skeleton, inventory/scan types, mission part
   `label`/`pinout`, next-step states, routes, component props. Shared files (`api/hooks.ts`, `api/client.ts`,
@@ -313,7 +312,7 @@ Motors, servos, relays and mains stay out of designs (PLAN scope; the design pro
 | Slice | Owns | Work | Est. |
 |---|---|---|---|
 | S1 Shell + theme | `theme.ts`, `main.tsx`, `shell/*`, `components/*`, Settings dialog | theme, fonts, sidebar, settings dialog, replace hard-coded colours | 2 h |
-| S2 Chat | new-mission page, `pages/MissionPage.tsx`, `chat/*`, chat box | empty state, chat box, messages, timeline rows (design, checks, GO, build, photo check, bench), approval cards | 2.5 h |
+| S2 Chat | new-mission page, `pages/MissionPage.tsx`, `chat/*`, chat box | empty state, chat box, messages, timeline rows (design, checks, GO, build, photo check, bench), grouped tool rows and question cards | 2.5 h |
 | S3 Panel + header | `workspace/*` | panel views incl. Parts, Build steps (laptop *I did this*, QR), Checks, Diagnosis; next-step button; GO dialog; done card | 2.5 h |
 | S4 Inventory UI | `inventory/*`, phone scan page | inventory page, Parts chip, type/add/edit, scan dialog + review | 2.5 h |
 | S5 Inventory server | server routes/tables, vision scan, normalizer, phone scope, mission-service copy, MCP tool | as in §5.4–5.7 | 2.5 h |
@@ -321,13 +320,12 @@ Motors, servos, relays and mains stay out of designs (PLAN scope; the design pro
 | S7 Catalog + part types | `packages/core/src/catalog.ts`, part-type editor + API | the ≈35 built-in types (fields, also-called names, photo hints, pins), editor, mapping rules, typed-parser names, tests | 2.5 h |
 | S8 Desktop (SHOULD) | `apps/desktop` | camera permission for our window, macOS camera text | 0.5 h |
 
-- **Timeline from your approval**: +0:30 contracts · slices until +5:30 · **gate at +3:30** — if phone → review doesn't
-  work end to end, ship upload + typing and make phone scanning a SHOULD · QA + audit until +7:00 · then re-record the
-  demo video. Example: approved at 16:30 → built ≈22:00, checked ≈23:30, video Sunday morning, deadline 12:00.
-- **MUST**: S1–S7. **SHOULD**: laptop webcam, per-mission part subset, board/breadboard from inventory, part photos in
-  steps, new LED colours with forward voltage, parts in use after a build, export/import part types, iMessage photo
-  scan, photo attachments in chat, sidebar search, resizable panel. **Cut**: merging duplicates across photos, barcodes,
-  online part databases, draggable panes.
+- **Original timeline (historical):** +0:30 contracts · slices until +5:30 · gate at +3:30 · QA/audit until +7:00 · then demo
+  recording. It is retained as context, not a remaining schedule.
+- **Original cut list:** S1–S7 were MUST. Laptop webcam, per-mission part subsets, board/breadboard from inventory, part photos
+  in steps, new LED colours with forward voltage, parts in use after a build, export/import part types, iMessage photo scan,
+  photo attachments in chat, sidebar search and a resizable panel were SHOULD or COULD; not all remain in scope. Merging
+  duplicates across photos, barcodes, online part databases and draggable panes remain cut.
 
 ## 9. Done when (measurable)
 
@@ -348,22 +346,25 @@ Motors, servos, relays and mains stay out of designs (PLAN scope; the design pro
 
 | Risk | Plan |
 |---|---|
-| Time; the demo video must be re-recorded | MUST list ≈5 h; gate at +3:30; SHOULDs dropped first |
-| Resistor bands from photos are unreliable | strict "ready" rule; mandatory review; printed labels preferred |
-| "Modelled as" parts simulate with the base part's curve (e.g. thermistor as light sensor) | labelled everywhere; the bench calibration uses the real readings |
-| Basic (generic) parts haven't been exercised end to end yet | QA runs one through design → steps; they stay marked unverified |
-| No working Claude credential yet (omp login lost at 12:31) | Step 0.5 and scanning wait until you log in or give an API key |
-| Regressions in bench or Build Mode | restyle only, no logic edits; existing tests + QA |
+| Demo recording and timing | Medium | Keep the current cached missions and use the desktop release; the original timing plan above is historical |
+| Resistor bands from photos are unreliable | Medium | strict "ready" rule; mandatory review; printed labels preferred |
+| "Modelled as" parts simulate with the base part's curve (e.g. thermistor as light sensor) | Medium | labelled everywhere; the bench calibration uses the real readings |
+| Basic (generic) parts are intentionally limited | Medium | they stay marked unverified and do not get the full bench self-test |
+| Live Claude credential unavailable | Medium | connect through Settings → Claude with pi-ai OAuth or a per-user Anthropic API key; the server fallback remains available |
+| Regressions in bench or Build Mode | Medium | existing tests, issue-driven QA and the Diagnostics logs |
 
-## 11. Decisions for you
+## 11. Decisions recorded
 
-1. **Go ahead?** This replaces today's screens; the demo video must be re-recorded afterwards.
-2. **Claude credential**: run `omp login anthropic` in the container or give an Anthropic API key (scanning needs it).
-3. **Theme default**: follow the computer's light/dark setting (like Claude desktop) or always light?
-4. **Scanning**: phone camera + upload as MUST, laptop webcam as SHOULD — OK?
-5. **Catalog**: is the list in §5.2 right for your kit? Tell me (or scan) what's in the team's kit and those parts get
-   first-class types.
-6. **New LED colours with forward voltage** and **board/breadboard from the inventory** as SHOULD — OK?
+1. **Chat:** assistant-ui with MUI styling is shipped; grouped tool rows, answerable question cards and stop/resume replace
+   the earlier MUI X Chat and generic approval-mode design.
+2. **Claude credentials:** Settings → Claude offers pi-ai Anthropic OAuth (paste code, `code#state` or redirect address) and
+   a per-user Anthropic API key checked before saving. Credentials are stored in the server database.
+3. **Theme:** light/dark follows the system setting, using the space-cadet, cool-gray, anti-flash-white and red palette.
+4. **Scanning:** phone camera and upload are shipped; failures persist with a reason and **Retry**; typed parts remain the
+   no-key fallback.
+5. **Catalog:** built-in types, typed parsing and the part-types editor are shipped; unsupported parts remain labeled basic or
+   list-only.
+6. **Safety:** GO for build is human-only; physical flash, self-test and rewiring requests still wait for a bench click.
 
 ## Sources
 
