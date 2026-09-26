@@ -171,7 +171,12 @@ describe("MCP and A2A mounts", () => {
     const readRejected = await fetch(`${baseUrl}/a2a`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer read" }, body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "message/send", params: {} }) });
     expect(readRejected.status).toBe(403);
     expect(await readRejected.json()).toMatchObject({ error: { message: "insufficient_scope" } });
-
+    for (const method of ["SendStreamingMessage", "message/stream", "tasks/pushNotificationConfig/set", "SetTaskPushNotificationConfig", "made-up-method"]) {
+      const rejected = await fetch(`${baseUrl}/a2a`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer read" }, body: JSON.stringify({ jsonrpc: "2.0", id: 8, method, params: {} }) });
+      expect(rejected.status).toBe(403);
+    }
+    const taskQuery = await fetch(`${baseUrl}/a2a`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer read" }, body: JSON.stringify({ jsonrpc: "2.0", id: 9, method: "tasks/get", params: { id: "missing" } }) });
+    expect(taskQuery.status).not.toBe(403);
     const card = AgentCard.fromJSON(cardJson);
     const factory = new ClientFactory(ClientFactoryOptions.createFrom(ClientFactoryOptions.default, {
       transports: [new JsonRpcTransportFactory({
