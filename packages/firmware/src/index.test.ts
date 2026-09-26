@@ -88,11 +88,17 @@ describe("firmware compiler", () => {
       expect(result.diagnostics).toHaveLength(1);
       expect(result.diagnostics[0]?.message).toMatch(/standard Arduino and library headers/);
     }
+    const raw = await compileSketch({ source: 'const char* text = R"TAG(#include "/tmp/marker" /* not a comment */)TAG";\nvoid setup(){}\nvoid loop(){}\n', board });
+    expect(raw.ok).toBe(true);
+    const crSafe = await compileSketch({ source: "#include <Arduino.h>\rvoid setup(){}\rvoid loop(){}\r", board });
+    expect(crSafe.ok).toBe(true);
+    const crAttack = await compileSketch({ source: "#include \"/tmp/marker.h\"\rvoid setup(){}\rvoid loop(){}\r", board });
+    expect(crAttack.ok).toBe(false);
     for (const source of ['void setup(){ asm(".incbin \"/etc/passwd\""); }\nvoid loop(){}', 'void setup(){ ".inc" "bin"; }\nvoid loop(){}']) {
       const result = await compileSketch({ source, board });
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("Inline assembly");
+      expect(result.diagnostics[0]?.message).toContain("Assembler directives");
     }
     const securityPrefix = `vibread-firmware-security-${process.pid}-`;
     const previousPrefix = process.env.VIBREAD_JOB_PREFIX;

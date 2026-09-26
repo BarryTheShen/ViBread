@@ -1,8 +1,8 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Eta } from "eta";
 import {
@@ -125,8 +125,8 @@ function applyDefines(source: string, defines: Record<string, number | string> |
   return { source: `${text}${calibrated}`, prefixLines: textual.length + Object.keys(numeric).length };
 }
 
-const UNSAFE_INCLUDE_MESSAGE = "The sketch may only include standard Arduino and library headers (e.g. <Arduino.h>, <Servo.h>).";
-const UNSAFE_ASM_MESSAGE = "Inline assembly isn't allowed in ViBread sketches.";
+const UNSAFE_INCLUDE_MESSAGE = "The sketch may only include standard Arduino and library headers.";
+const UNSAFE_ASM_MESSAGE = "Assembler directives that read files aren't allowed in ViBread sketches.";
 
 interface SourceLine {
   text: string;
@@ -149,6 +149,13 @@ function spliceSourceLines(source: string): { text: string; lineOrigins: number[
       index += 2;
       continue;
     }
+    if (character === "\r") {
+      if (source[index + 1] === "\n") index += 1;
+      text += "\n";
+      originalLine += 1;
+      lineOrigins.push(originalLine);
+      continue;
+    }
     text += character;
     if (character === "\n") {
       originalLine += 1;
@@ -161,10 +168,29 @@ function spliceSourceLines(source: string): { text: string; lineOrigins: number[
 function stripSourceComments(source: string): string {
   let output = "";
   let state: "normal" | "string" | "char" = "normal";
+  let rawDelimiter: string | undefined;
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index];
     const next = source[index + 1];
+    if (rawDelimiter !== undefined) {
+      const end = `)${rawDelimiter}"`;
+      if (source.startsWith(end, index)) {
+        output += end;
+        index += end.length - 1;
+        rawDelimiter = undefined;
+      } else {
+        output += character;
+      }
+      continue;
+    }
     if (state === "normal") {
+      const rawStart = source.slice(index).match(/^(?:u8|u|U|L)?R"([^\s()\\]{0,16})\(/);
+      if (rawStart) {
+        output += rawStart[0];
+        index += rawStart[0].length - 1;
+        rawDelimiter = rawStart[1];
+        continue;
+      }
       if (character === "/" && next === "/") {
         output += "  ";
         index += 1;
@@ -419,6 +445,145 @@ function runArduino(args: string[], cwd: string, signal: AbortSignal | undefined
   });
 }
 
+interface ToolchainDirectories {
+  data: string;
+  user: string;
+}
+
+interface PreflightResult {
+  ok: boolean;
+}
+
+async function toolchainDirectories(configPath: string): Promise<ToolchainDirectories | undefined> {
+  try {
+    const config = await readFile(configPath, "utf8");
+    const values: Partial<Record<"data" | "user", string>> = {};
+    for (const line of config.split(/\r?\n/)) {
+      const match = line.match(/^\s*(data|user):\s*(.+?)\s*$/);
+      if (!match) continue;
+      values[match[1] as "data" | "user"] = match[2].replace(/^['"]|['"]$/g, "");
+    }
+    if (!values.data || !values.user) return undefined;
+    return {
+      data: await realpath(resolve(dirname(configPath), values.data)),
+      user: await realpath(resolve(dirname(configPath), values.user)),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function pathInside(filePath: string, root: string): boolean {
+  const rel = relative(root, filePath);
+  return rel === "" || (!isAbsolute(rel) && rel !== ".." && !rel.startsWith(`..${sep}`));
+}
+
+function dependencyPaths(output: string): string[] {
+  const normalized = output.replace(/\\(?:\r\n|\r|\n)/g, " ");
+  const colon = normalized.indexOf(":");
+  if (colon < 0) return [];
+  return (normalized.slice(colon + 1).match(/(?:\\.|[^\s])+/g) ?? [])
+    .map((token) => token.replace(/\\([\\ ])/g, "$1"))
+    .filter((token) => token !== "\\");
+}
+
+function compileDbArguments(value: unknown): { args: string[]; file: string; directory: string } | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const item = value as Record<string, unknown>;
+  const args = Array.isArray(item.arguments) && item.arguments.every((arg): arg is string => typeof arg === "string") ? item.arguments : undefined;
+  const file = typeof item.file === "string" ? item.file : undefined;
+  const directory = typeof item.directory === "string" ? item.directory : undefined;
+  return args && file && directory ? { args, file, directory } : undefined;
+}
+
+async function verifyIncludes(toolchain: ToolchainPaths, profile: BoardProfile, jobRoot: string, sketchDir: string, signal?: AbortSignal): Promise<PreflightResult> {
+  const directories = await toolchainDirectories(toolchain.config);
+  if (!directories) return { ok: false };
+  const preflightBuild = join(jobRoot, "preflight-build");
+  const preflightOutput = join(jobRoot, "preflight-output");
+  await Promise.all([mkdir(preflightBuild, { recursive: true }), mkdir(preflightOutput, { recursive: true })]);
+  const setup = await runArduino([
+    toolchain.cli,
+    "--config-file",
+    toolchain.config,
+    "compile",
+    "--fqbn",
+    profile.fqbn,
+    "--warnings",
+    "all",
+    "--only-compilation-database",
+    "--output-dir",
+    preflightOutput,
+    "--build-path",
+    preflightBuild,
+    sketchDir,
+  ], jobRoot, signal);
+  if (setup.aborted || setup.timedOut || setup.error || setup.code !== 0) return { ok: false };
+  let database: unknown;
+  try {
+    database = JSON.parse(await readFile(join(preflightBuild, "compile_commands.json"), "utf8")) as unknown;
+  } catch {
+    return { ok: false };
+  }
+  const entries = Array.isArray(database) ? database.map(compileDbArguments).filter((entry): entry is { args: string[]; file: string; directory: string } => entry !== undefined) : [];
+  const sketchEntry = entries.find((entry) => basename(entry.file) === `${SKETCH_NAME}.ino.cpp` || entry.file.includes(`${SKETCH_NAME}.ino.cpp`));
+  if (!sketchEntry) return { ok: false };
+  const command = [...sketchEntry.args];
+  const filtered: string[] = [];
+  for (let index = 1; index < command.length; index += 1) {
+    const arg = command[index];
+    if (arg === "-c" || arg === "-MMD" || arg === "-MD") continue;
+    if (arg === "-o" || arg === "-MF" || arg === "-MT") {
+      index += 1;
+      continue;
+    }
+    if (arg === "-E" || arg === "-M") continue;
+    filtered.push(arg);
+  }
+  const compiler = command[0];
+  if (!compiler) return { ok: false };
+  const dependencyRun = await runArduino([compiler, ...filtered, "-E", "-M"], sketchEntry.directory, signal);
+  if (dependencyRun.aborted || dependencyRun.timedOut || dependencyRun.error || dependencyRun.code !== 0) return { ok: false };
+  const roots = [await realpath(jobRoot), directories.data, directories.user];
+  for (const rawPath of dependencyPaths(dependencyRun.stdout)) {
+    const candidate = resolve(sketchEntry.directory, rawPath);
+    let canonical: string;
+    try {
+      canonical = await realpath(candidate);
+    } catch {
+      return { ok: false };
+    }
+    if (!roots.some((root) => pathInside(canonical, root))) return { ok: false };
+  }
+  return { ok: true };
+}
+
+async function unsafeAssembly(buildPath: string): Promise<boolean> {
+  const sketchAssembly = join(buildPath, "sketch", `${SKETCH_NAME}.ino.cpp.s`);
+  try {
+    const assembly = await readFile(sketchAssembly, "utf8");
+    for (const match of assembly.matchAll(/#APP\b([\s\S]*?)#NO_APP\b/gi)) {
+      if (/(?:\.incbin|\.include)\b/i.test(match[1])) return true;
+    }
+  } catch {
+    // Missing temporary assembly is not an unsafe directive.
+  }
+  return false;
+}
+
+function onlySketchDiagnostics(diagnostics: CompileDiagnostic[]): CompileDiagnostic[] {
+  return diagnostics.filter((diagnostic) => diagnostic.file === USER_SKETCH_FILE);
+}
+
+function safeCompilerLog(compilerOut: string, diagnostics: CompileDiagnostic[]): string {
+  const summary = compilerOut.split(/\r?\n/).filter((line) => /^Sketch uses |^Global variables use /.test(line)).join("\n");
+  const details = diagnostics.map((diagnostic) => {
+    const location = diagnostic.line === undefined ? USER_SKETCH_FILE : `${USER_SKETCH_FILE}:${diagnostic.line}${diagnostic.column === undefined ? "" : `:${diagnostic.column}`}`;
+    return `${location}: ${diagnostic.severity}: ${diagnostic.message}`;
+  }).join("\n");
+  return [summary, details].filter(Boolean).join("\n");
+}
+
 async function compileSource(source: string, profile: BoardProfile, signal?: AbortSignal, prefixLines = 0): Promise<CompileResult> {
   const started = Date.now();
   const jobRoot = await mkdtemp(join(tmpdir(), process.env.VIBREAD_JOB_PREFIX ?? "vibread-firmware-"));
@@ -429,6 +594,10 @@ async function compileSource(source: string, profile: BoardProfile, signal?: Abo
     await Promise.all([mkdir(sketchDir, { recursive: true }), mkdir(outputDir, { recursive: true }), mkdir(buildPath, { recursive: true })]);
     await writeFile(join(sketchDir, `${SKETCH_NAME}.ino`), source, "utf8");
     const toolchain = defaultToolchain();
+    const preflight = await verifyIncludes(toolchain, profile, jobRoot, sketchDir, signal);
+    if (!preflight.ok) {
+      return failedResult(profile, [{ severity: "error", file: USER_SKETCH_FILE, line: 1, message: UNSAFE_INCLUDE_MESSAGE }], "", Date.now() - started);
+    }
     const args = [
       toolchain.cli,
       "--config-file",
@@ -438,6 +607,8 @@ async function compileSource(source: string, profile: BoardProfile, signal?: Abo
       profile.fqbn,
       "--warnings",
       "all",
+      "--build-property",
+      "compiler.cpp.extra_flags=-save-temps=obj",
       "--json",
       "--output-dir",
       outputDir,
@@ -447,42 +618,43 @@ async function compileSource(source: string, profile: BoardProfile, signal?: Abo
     ];
     const processResult = await runArduino(args, jobRoot, signal);
     const durationMs = Date.now() - started;
-    const combined = `${processResult.stdout}\n${processResult.stderr}`;
     if (processResult.aborted || processResult.timedOut) {
       const reason = processResult.aborted ? "Compilation aborted" : "Compilation timed out";
-      return failedResult(profile, [{ severity: "error", message: reason }], combined, durationMs);
+      return failedResult(profile, [{ severity: "error", file: USER_SKETCH_FILE, line: 1, message: reason }], "", Date.now() - started);
     }
     if (processResult.error) {
-      return failedResult(profile, [{ severity: "error", message: processResult.error.message }], combined, durationMs);
+      return failedResult(profile, [{ severity: "error", file: USER_SKETCH_FILE, line: 1, message: "Compiler process failed" }], "", Date.now() - started);
     }
     const parsed = parseJsonOutput(processResult.stdout);
     const compilerOut = parsed && typeof parsed.compiler_out === "string" ? parsed.compiler_out : "";
     const compilerErr = parsed && typeof parsed.compiler_err === "string" ? parsed.compiler_err : "";
-    const diagnostics = parsed ? structuredDiagnostics(parsed, prefixLines) : [];
-    diagnostics.push(...gccDiagnostics(`${compilerOut}\n${compilerErr}\n${processResult.stderr}`, prefixLines));
+    const rawDiagnostics = parsed ? structuredDiagnostics(parsed, prefixLines) : [];
+    rawDiagnostics.push(...gccDiagnostics(`${compilerOut}\n${compilerErr}\n${processResult.stderr}`, prefixLines));
     const parsedError = parsed && typeof parsed.error === "string" ? parsed.error : undefined;
     const successFlag = parsed?.success === true;
     if (!parsed) {
-      diagnostics.push({ severity: "error", message: processResult.stderr.trim() || "arduino-cli returned invalid JSON" });
-    } else if (!successFlag && parsedError && !diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
-      diagnostics.push({ severity: "error", message: parsedError });
+      rawDiagnostics.push({ severity: "error", file: USER_SKETCH_FILE, line: 1, message: "Compiler returned invalid output" });
+    } else if (!successFlag && parsedError && !rawDiagnostics.some((diagnostic) => diagnostic.severity === "error")) {
+      rawDiagnostics.push({ severity: "error", file: USER_SKETCH_FILE, line: 1, message: "The sketch failed to compile." });
     }
-    if ((!successFlag || processResult.code !== 0) && !diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
-      diagnostics.push({ severity: "error", message: processResult.code === null ? "arduino-cli did not exit normally" : `arduino-cli exited with status ${processResult.code}` });
+    if ((!successFlag || processResult.code !== 0) && !rawDiagnostics.some((diagnostic) => diagnostic.severity === "error")) {
+      rawDiagnostics.push({ severity: "error", file: USER_SKETCH_FILE, line: 1, message: "The sketch failed to compile." });
     }
+    const diagnostics = onlySketchDiagnostics(rawDiagnostics);
     const normalizedMessage = (message: string): string => message.split(/\r?\n/)[0].replace(/\\+/g, "\\").replace(/\s+/g, " ").trim();
     const uniqueDiagnostics = diagnostics.filter((item, index, all) => index === all.findIndex((other) => other.severity === item.severity && other.file === item.file && other.line === item.line && normalizedMessage(other.message) === normalizedMessage(item.message)));
+    const assemblyUnsafe = await unsafeAssembly(buildPath);
+    if (assemblyUnsafe) uniqueDiagnostics.push({ severity: "error", file: USER_SKETCH_FILE, line: 1, message: UNSAFE_ASM_MESSAGE });
     const sizes = parsed ? sectionsSize(parsed) : undefined;
     const hexPath = join(outputDir, `${SKETCH_NAME}.ino.hex`);
     const builtElfPath = join(outputDir, `${SKETCH_NAME}.ino.elf`);
     const hasHex = existsSync(hexPath);
     const hasElf = existsSync(builtElfPath);
-    const ok = successFlag && processResult.code === 0 && hasHex && hasElf;
-    if (successFlag && !hasHex) uniqueDiagnostics.push({ severity: "error", message: "arduino-cli reported success but did not produce the application HEX" });
-    if (successFlag && !hasElf) uniqueDiagnostics.push({ severity: "error", message: "arduino-cli reported success but did not produce the ELF" });
+    const ok = successFlag && processResult.code === 0 && hasHex && hasElf && !assemblyUnsafe;
+    if (successFlag && !hasHex) uniqueDiagnostics.push({ severity: "error", file: USER_SKETCH_FILE, line: 1, message: "arduino-cli reported success but did not produce the application HEX" });
+    if (successFlag && !hasElf) uniqueDiagnostics.push({ severity: "error", file: USER_SKETCH_FILE, line: 1, message: "arduino-cli reported success but did not produce the ELF" });
     let hex: string | undefined;
     if (ok) hex = await readFile(hexPath, "utf8");
-    const log = [compilerOut, compilerErr, processResult.stderr].filter(Boolean).join("\n");
     return {
       ok,
       fqbn: profile.fqbn,
@@ -490,7 +662,7 @@ async function compileSource(source: string, profile: BoardProfile, signal?: Abo
       sizes,
       diagnostics: uniqueDiagnostics,
       durationMs,
-      log: truncate(log || combined),
+      log: truncate(safeCompilerLog(compilerOut, uniqueDiagnostics)),
     };
   } finally {
     await rm(jobRoot, { recursive: true, force: true });
