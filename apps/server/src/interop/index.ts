@@ -32,6 +32,8 @@ interface AuthInfoLike {
 interface McpSession {
   server: McpServer;
   transport: StreamableHTTPServerTransport;
+  userId: string;
+  scopes: string[];
 }
 
 interface UserLike {
@@ -370,104 +372,76 @@ async function operatorPassword(auth: Auth<BetterAuthOptions>, ctx: AppContext):
   return password;
 }
 
-/** The raw query string of the page the authorization server redirected to — Better Auth's signed `oauth_query`. */
-function rawQuery(request: Request): string {
-  const index = request.originalUrl.indexOf("?");
-  return index < 0 ? "" : request.originalUrl.slice(index + 1);
-}
-
-/** Copies a Better Auth web Response (cookies + redirect or JSON `{ url }`) onto the Express response as a redirect. */
-async function forwardAuthRedirect(result: globalThis.Response, response: Response, fallback: string): Promise<void> {
-  const cookies = result.headers.getSetCookie();
-  if (cookies.length > 0) response.setHeader("Set-Cookie", cookies);
-  const location = result.headers.get("location");
-  if (result.status >= 300 && result.status < 400 && location) {
-    response.redirect(location);
-    return;
-  }
-  const body: unknown = await result.json().catch(() => null);
-  const url = body && typeof body === "object" && "url" in body && typeof body.url === "string" ? body.url : undefined;
-  response.redirect(url ?? fallback);
-}
-
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>"']/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character] ?? character);
-}
-
-function oauthPage(title: string, content: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
-  :root{color-scheme:dark}body{margin:0;background:#07111f;color:#d7e8ff;font:16px/1.5 system-ui,sans-serif;display:grid;place-items:center;min-height:100vh}
-  main{width:min(560px,calc(100% - 32px));background:#0d1d31;border:1px solid #2d5275;border-radius:14px;padding:28px;box-shadow:0 18px 70px #0008}
-  h1{letter-spacing:.08em;text-transform:uppercase;color:#7dd3fc;font-size:20px}p{color:#a9bfd8}.scope{padding:10px 12px;margin:8px 0;background:#102a43;border-left:3px solid #fbbf24;border-radius:6px}
-  button,a.button{display:inline-block;border:0;border-radius:8px;padding:10px 16px;margin:12px 8px 0 0;background:#22d3ee;color:#06111c;font-weight:700;text-decoration:none;cursor:pointer}
-  button.deny{background:#334155;color:#d7e8ff}
-  </style></head><body><main>${content}</main></body></html>`;
-}
-
-function mountOAuthPages(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
-  // Better Auth's authorize endpoint redirects here with a signed query (…&sig=…); signing in with that query as
-  // `oauth_query` resumes the authorization request (then /consent, then the client's redirect with a code).
-  app.get("/login", async (request, response, next) => {
-    const oauthQuery = rawQuery(request);
-    if (auth && !ctx.config.google && !ctx.config.github) {
-      try {
-        const password = await operatorPassword(auth, ctx);
-        // Through the HTTP handler (not auth.api): the authorization flow that resumes after sign-in needs a real Request.
-        const headers = fromNodeHeaders(request.headers);
-        headers.set("content-type", "application/json");
-        headers.set("origin", ctx.config.publicUrl);
-        headers.delete("content-length");
-        const result = await auth.handler(
-          new globalThis.Request(`${ctx.config.publicUrl}/api/auth/sign-in/email`, {
-            method: "POST",
-            headers,
-            body: JSON.stringify({ email: OPERATOR_EMAIL, password, ...(oauthQuery ? { oauth_query: oauthQuery } : {}) }),
-          }),
-        );
-        await forwardAuthRedirect(result, response, "/");
-      } catch (error) {
-        next(error);
+/** Mount JSON contracts consumed by the SPA OAuth pages. */
+function mountOAuthApi(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
+  app.get("/api/oauth/client", async (request, response, next) => {
+    try {
+      const clientId = typeof request.query.client_id === "string" ? request.query.client_id : "";
+      if (!clientId) {
+        response.status(404).json({ error: "unknown_client" });
+        return;
       }
+      const [client] = await ctx.db.select({
+        clientId: oauthClient.clientId,
+        name: oauthClient.name,
+        uri: oauthClient.uri,
+        redirectUris: oauthClient.redirectUris,
+        scopes: oauthClient.scopes,
+      }).from(oauthClient).where(eq(oauthClient.clientId, clientId)).limit(1);
+      if (!client) {
+        response.status(404).json({ error: "unknown_client" });
+        return;
+      }
+      response.json({
+        clientId: client.clientId,
+        name: client.name ?? client.clientId,
+        ...(client.uri ? { uri: client.uri } : {}),
+        redirectUris: client.redirectUris ?? [],
+        scopes: client.scopes ?? [],
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/oauth/operator-login", async (request, response, next) => {
+    if (!auth || !ctx.config.singleOperator) {
+      response.status(401).json({ error: "invalid_credentials" });
       return;
     }
-    const socialButtons = [
-      ...(ctx.config.google ? [`<button data-provider="google">Sign in with Google</button>`] : []),
-      ...(ctx.config.github ? [`<button data-provider="github">Sign in with GitHub</button>`] : []),
-    ].join("");
-    const signIn = `${socialButtons}<script>
-document.querySelectorAll("[data-provider]").forEach((button) => button.addEventListener("click", async () => {
-  const provider = button.getAttribute("data-provider");
-  const r = await fetch("/api/auth/sign-in/social", { method: "POST", credentials: "include", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ provider, callbackURL: "/", oauth_query: location.search.slice(1) }) });
-  const d = await r.json(); if (d.url) location.href = d.url;
-}));</script>`;
-    response.type("html").send(oauthPage("ViBread Mission Control Login", `<h1>Mission Control Login</h1><p>Sign in to let this app use your ViBread missions.</p>${signIn}`));
-  });
-  app.get("/consent", async (request, response) => {
-    const parsed = new URLSearchParams(rawQuery(request));
-    const clientId = parsed.get("client_id") ?? "";
-    const [client] = clientId ? await ctx.db.select({ name: oauthClient.name }).from(oauthClient).where(eq(oauthClient.clientId, clientId)).limit(1) : [];
-    const clientName = client?.name ?? "An app";
-    const scopes = (parsed.get("scope") ?? "").split(/\s+/).filter(Boolean);
-    const labels: Record<string, string> = {
-      "circuits:read": "Read your missions and checked circuit status",
-      "circuits:write": "Propose design and software changes (your permission mode still applies)",
-      "bench:request": "Ask for bench actions (a person still clicks Start at the bench; it can never approve or run them)",
-      offline_access: "Stay connected without asking again",
-    };
-    const scopeHtml = scopes.map((scope) => `<div class="scope">${escapeHtml(labels[scope] ?? scope)}</div>`).join("") || `<div class="scope">Basic access to your account</div>`;
-    const script = `<script>
-async function decide(accept) {
-  const r = await fetch("/api/auth/oauth2/consent", { method: "POST", credentials: "include", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ accept, oauth_query: location.search.slice(1) }) });
-  const d = await r.json().catch(() => ({}));
-  if (d.url || d.redirect_uri) location.href = d.url || d.redirect_uri;
-  else document.getElementById("error").textContent = d.error_description || d.message || "Authorization failed.";
-}
-document.getElementById("allow").onclick = () => decide(true);
-document.getElementById("deny").onclick = () => decide(false);
-</script>`;
-    response.type("html").send(oauthPage("ViBread OAuth Consent", `<h1>Authorize ${escapeHtml(clientName)}</h1><p>${escapeHtml(clientName)} wants to connect to ViBread and:</p>${scopeHtml}<p>Physical actions always stay with a person at the bench.</p><button id="allow">Allow</button><button id="deny" class="deny">Deny</button><p id="error" role="alert"></p>${script}`));
+    const body = request.body as { email?: unknown; password?: unknown; oauth_query?: unknown };
+    if (typeof body.email !== "string" || typeof body.password !== "string" || typeof body.oauth_query !== "string") {
+      response.status(401).json({ error: "invalid_credentials" });
+      return;
+    }
+    const signedExp = Number(new URLSearchParams(body.oauth_query).get("exp"));
+    if (Number.isFinite(signedExp) && signedExp * 1000 < Date.now()) {
+      response.status(400).json({ error: "link_expired" });
+      return;
+    }
+    try {
+      const headers = fromNodeHeaders(request.headers);
+      headers.set("content-type", "application/json");
+      const password = await operatorPassword(auth, ctx);
+      headers.delete("content-length");
+      const result = await auth.handler(new globalThis.Request(`${ctx.config.publicUrl}/api/auth/sign-in/email`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ email: body.email, password, oauth_query: body.oauth_query }),
+      }));
+      if (result.status >= 400) {
+        response.status(401).json({ error: "invalid_credentials" });
+        return;
+      }
+      const cookies = result.headers.getSetCookie();
+      if (cookies.length > 0) response.setHeader("Set-Cookie", cookies);
+      const location = result.headers.get("location");
+      const payload: unknown = await result.json().catch(() => null);
+      const redirect = location ?? (payload && typeof payload === "object" && "url" in payload && typeof payload.url === "string" ? payload.url : undefined);
+      response.json({ redirect: redirect ?? "/" });
+    } catch {
+      response.status(401).json({ error: "invalid_credentials" });
+    }
   });
 }
 
@@ -477,11 +451,17 @@ export function mountMcp(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOp
   const sessions = new Map<string, McpSession>();
   const bearer = requireBearerAuth({ verifier });
   const hybridAuth = auth ? oauthMiddleware(auth, ctx, bearer) : bearer;
-  mountOAuthPages(app, ctx, auth);
+  mountOAuthApi(app, ctx, auth);
   app.use(MCP_PATH, express.json(), hybridAuth, async (request, response) => {
+    const userId = authUserId(request);
+    const scopes = requestedScopes(request);
     const sessionIdHeader = request.header("Mcp-Session-Id");
     const existing = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
     if (sessionIdHeader && !existing) {
+      response.status(404).json({ error: "Unknown MCP session" });
+      return;
+    }
+    if (existing && (existing.userId !== userId || existing.scopes.some((scope) => !scopes.includes(scope)) || scopes.some((scope) => !existing.scopes.includes(scope)))) {
       response.status(404).json({ error: "Unknown MCP session" });
       return;
     }
@@ -489,6 +469,8 @@ export function mountMcp(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOp
     const session = existing ?? {
       server: createMcpServer(ctx, request),
       transport: new StreamableHTTPServerTransport({ sessionIdGenerator: () => randomUUID() }),
+      userId,
+      scopes: [...scopes],
     };
     if (!existing) {
       session.transport.onclose = () => {
@@ -699,6 +681,17 @@ function a2aUserBuilder(): UserBuilder {
     return user;
   };
 }
+function a2aScopeMiddleware(request: Request, response: Response, next: () => void): void {
+  const body = request.body && typeof request.body === "object" ? request.body as { method?: unknown; id?: unknown } : {};
+  const method = typeof body.method === "string" ? body.method : "";
+  const required = method === "message/send" || method === "message/stream" || method === "SendMessage" || method === "SendMessageStream" || method === "tasks/cancel" || method === "CancelTask" ? "circuits:write" : "circuits:read";
+  if (!requestedScopes(request).includes(required)) {
+    response.setHeader("WWW-Authenticate", `Bearer error="insufficient_scope", scope="${required}"`);
+    response.status(403).json({ jsonrpc: "2.0", id: body.id ?? null, error: { code: -32003, message: "insufficient_scope" } });
+    return;
+  }
+  next();
+}
 
 /** Mount the authenticated A2A JSON-RPC handler and public v1 agent card. */
 export function mountA2a(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
@@ -711,6 +704,7 @@ export function mountA2a(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOp
     A2A_PATH,
     express.json(),
     hybridAuth,
+    a2aScopeMiddleware,
     jsonRpcHandler({ requestHandler, userBuilder: a2aUserBuilder() }),
   );
 }
