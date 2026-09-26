@@ -9,7 +9,7 @@ import type { BrowserWindow } from "electron";
 import type { DesktopPaths } from "./runtime.js";
 import type { SerialState } from "./serial.js";
 import type { ServerInfo } from "./server.js";
-import { OMP_VERSION, type SetupStep } from "./setup.js";
+import type { SetupStep } from "./setup.js";
 
 export interface SmokeTimings {
   launchedAt: number;
@@ -69,15 +69,6 @@ export async function runSmoke(input: { window: BrowserWindow; info: ServerInfo;
     check("select-serial-port handler installed", serial.handlerInstalled, String(serial.handlerInstalled));
     const secure = await web.executeJavaScript("window.isSecureContext");
     check("renderer is a secure context", secure === true, `${info.localUrl} isSecureContext=${secure}`);
-    let ompVersion = "";
-    let ompError = "";
-    try {
-      const env = { ...process.env, VIBREAD_OMP_BIN: paths.ompBin };
-      ompVersion = execFileSync(env.VIBREAD_OMP_BIN!, ["--version"], { encoding: "utf8", env, timeout: 30_000, windowsHide: true }).trim();
-    } catch (error) {
-      ompError = error instanceof Error ? error.message : String(error);
-    }
-    check("VIBREAD_OMP_BIN runs --version", ompVersion.includes(`omp/${OMP_VERSION}`), ompError || ompVersion || paths.ompBin);
     await shot("home");
 
     const missions = (await (await fetch(`${info.localUrl}/api/missions`)).json()) as { id: string; title: string }[];

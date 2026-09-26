@@ -16,6 +16,10 @@ on:
 permissions:
   contents: write
 
+env:
+  # Each run gets its own app version (installer names, About box, release tag): 0.1.<run number>.
+  APP_VERSION: 0.1.${{ github.run_number }}
+
 concurrency:
   group: desktop-${{ github.ref }}
   cancel-in-progress: false
@@ -55,6 +59,11 @@ jobs:
       - name: Build web app
         run: npm run build
 
+      - name: Set app version
+        working-directory: apps/desktop
+        shell: bash
+        run: npm pkg set version="$APP_VERSION" && echo "Packaging ViBread $APP_VERSION"
+
       - name: Package
         working-directory: apps/desktop
         shell: bash
@@ -71,10 +80,6 @@ jobs:
           VIBREAD_USER_DATA: ${{ runner.temp }}/vibread-smoke
           VIBREAD_SMOKE_DIR: ${{ github.workspace }}/smoke
         run: node apps/desktop/scripts/smoke-packaged.mjs
-      - name: Assert bundled omp (Linux + Windows)
-        if: runner.os == 'Linux' || runner.os == 'Windows'
-        shell: bash
-        run: node -e "const r=require('./smoke/smoke.json'); const c=r.checks.find((x)=>x.name==='VIBREAD_OMP_BIN runs --version'); if (!c?.ok) { console.error(c ?? 'missing omp smoke check'); process.exit(1); } console.log(c.detail);"
 
       - name: Collect logs
         if: always()
@@ -96,16 +101,18 @@ jobs:
           if-no-files-found: warn
 
   release:
-    name: Prerelease desktop-v0.1.0
+    name: Publish desktop release
     needs: package
     # Runs on main (push or workflow_dispatch) once Linux and Windows passed; optional macOS legs may have failed.
     if: github.ref == 'refs/heads/main' && needs.package.result == 'success'
     runs-on: ubuntu-latest
     steps:
+      # Checked out only for git credentials: the release tag is pushed with git (see below).
+      - uses: actions/checkout@v5
       - uses: actions/download-artifact@v5
         with:
           path: artifacts
-      - name: Republish prerelease at this commit
+      - name: Publish desktop-v${{ env.APP_VERSION }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -126,10 +133,8 @@ jobs:
           done
           (cd upload && sha256sum * > SHA256SUMS.txt)
           ls -la upload
-          # Delete the release and its tag so the tag moves to this commit.
-          gh release delete desktop-v0.1.0 --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
           {
-            printf 'Built from %s on %s\n\n' "${GITHUB_SHA::7}" "$(date -u '+%Y-%m-%d %H:%M UTC')"
+            printf 'ViBread desktop %s, built from %s on %s\n\n' "$APP_VERSION" "${GITHUB_SHA::7}" "$(date -u '+%Y-%m-%d %H:%M UTC')"
             printf 'Unsigned preview builds of the ViBread desktop app. See the README "Desktop app" section for first-run steps.\n'
             if [ -n "$missing" ]; then
               printf '\nNot in this build (packaging or smoke test failed, see %s/%s/actions/runs/%s):%s\n' \
@@ -137,5 +142,15 @@ jobs:
             fi
           } > notes.md
           cat notes.md
-          gh release create desktop-v0.1.0 upload/* --prerelease --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
-            --title "ViBread desktop v0.1.0 (preview)" --notes-file notes.md
+          tag="desktop-v$APP_VERSION"
+          # The tag is pushed with git: the Releases API refuses to create a tag (--target) with the Actions token once
+          # main has moved on with workflow-file changes ("Resource not accessible by integration").
+          git tag "$tag" "$GITHUB_SHA"
+          git push origin "refs/tags/$tag"
+          # Every successful build is a new release with its own version; the newest is marked Latest.
+          gh release create "$tag" upload/* --verify-tag --latest --repo "$GITHUB_REPOSITORY" \
+            --title "ViBread desktop $APP_VERSION" --notes-file notes.md
+          # Keep the five newest desktop builds (best effort: a cleanup hiccup must not fail a published release).
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,createdAt \
+            --jq '[.[] | select(.tagName | startswith("desktop-v"))] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+            while read -r old; do gh release delete "$old" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || echo "couldn't remove $old"; done

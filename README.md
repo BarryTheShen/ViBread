@@ -38,17 +38,18 @@ only request them.
 Download, double-click, done: no Node.js, npm or terminal, and no browser choice (the app has Chromium built in, so the
 USB bench works the same on every OS). How it works inside: [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
 
-| OS | Download ([release desktop-v0.1.0](https://github.com/BarryTheShen/ViBread/releases/tag/desktop-v0.1.0)) | First launch if unsigned-app warnings appear |
+Every successful build of `main` is published as a new, numbered release (**ViBread desktop 0.1.N**); download the
+newest from **[Releases → Latest](https://github.com/BarryTheShen/ViBread/releases/latest)**.
+
+| OS | File in the latest release | First launch if unsigned-app warnings appear |
 |---|---|---|
-| Linux x64 | [`.deb`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-linux-amd64.deb) (recommended on Ubuntu/Debian, required for the full sandbox on Ubuntu 24.04+) or [`ViBread-0.1.0-linux-x86_64.AppImage`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-linux-x86_64.AppImage) (any distro) | Deb: `sudo apt install ./ViBread-*.deb`, then *ViBread* in the app menu. AppImage: `chmod +x ViBread-*.AppImage` then run it (needs FUSE's `fusermount3`, present on desktop distros; without FUSE run it with `APPIMAGE_EXTRACT_AND_RUN=1`) |
-| Windows 10/11 x64 | [`ViBread-0.1.0-win-x64.exe`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-win-x64.exe) (installer) | SmartScreen: **More info → Run anyway** |
-| macOS (Apple silicon / Intel) | [`ViBread-0.1.0-mac-arm64.dmg`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-mac-arm64.dmg) / [`-mac-x64.dmg`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-mac-x64.dmg) | Drag to Applications, open once, then **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine /Applications/ViBread.app`) |
+| Linux x64 | `ViBread-<version>-linux-amd64.deb` (recommended on Ubuntu/Debian, required for the full sandbox on Ubuntu 24.04+) or `ViBread-<version>-linux-x86_64.AppImage` (any distro) | Deb: `sudo apt install ./ViBread-*.deb`, then *ViBread* in the app menu. AppImage: `chmod +x ViBread-*.AppImage` then run it (needs FUSE's `fusermount3`, present on desktop distros; without FUSE run it with `APPIMAGE_EXTRACT_AND_RUN=1`) |
+| Windows 10/11 x64 | `ViBread-<version>-win-x64.exe` (installer) | SmartScreen: **More info → Run anyway** |
+| macOS (Apple silicon / Intel) | `ViBread-<version>-mac-arm64.dmg` / `ViBread-<version>-mac-x64.dmg` | Drag to Applications, open once, then **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine /Applications/ViBread.app`) |
 
 - **First launch** shows a setup window: it downloads the Arduino toolchain (arduino-cli 1.5.1 + AVR core 1.8.8 +
-  ArduinoJson 7.4.2, SHA-256 checked, ~150 MB), then the official oh-my-pi `omp` 18.3.2 binary (SHA-256 checked
-  against its published `SHA256SUMS.txt`) into `<userData>/omp`, and builds the example missions. The Claude account
-  helper is optional: if its download fails, setup continues and **Set Anthropic API key…** remains available. Internet
-  is needed once; later launches start in ~10 s. The download is ~450–500 MB; installed size ~900 MB plus the toolchain.
+  ArduinoJson 7.4.2, SHA-256 checked, ~150 MB) and builds the example missions — about 2–3 minutes, internet needed
+  once. Later launches start in ~10 s. The download is ~160–200 MB; installed size ~600 MB plus the toolchain.
 - **Chromium sandbox on Linux:** Ubuntu 23.10+ blocks unprivileged user namespaces (AppArmor), which Electron's
   sandbox normally uses. The `.deb` installs the setuid `chrome-sandbox` helper, so the sandbox keeps working there. The
   AppImage can't ship a setuid helper: its launcher tests `unshare -Ur true` and, when namespaces are blocked, starts
@@ -168,7 +169,8 @@ Settings → **Connect your Claude account** is the primary way to let your own 
 ViBread's key. ViBread runs the Claude sign-in itself (pi-ai's Anthropic OAuth, no helper program): open the claude.ai
 link, approve, then paste the code Claude shows — or the address of the page that fails to load
 (`localhost:53692/callback?code=…`) — into ViBread; that works when your browser is on a different machine than the
-server. If your browser runs on the server machine, the sign-in finishes by itself. You can connect an Anthropic API key
+server. If your browser runs on the server machine, the sign-in finishes by itself (unless another program holds port
+53692 — then paste as well; the server log says so). You can connect an Anthropic API key
 instead (`POST /api/connections/claude/key`). The credential is stored in ViBread's database for your user only (pi-ai
 refreshes the sign-in when it expires); Disconnect removes it. When your credential can't be used, ViBread falls back to
 its server key. Note: Anthropic's terms restrict using Claude.ai login in third-party apps — see PLAN.md §9.

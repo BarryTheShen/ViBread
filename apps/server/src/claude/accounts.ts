@@ -1,15 +1,16 @@
 /**
- * PLAN item 16 — "Connect your Claude account", on pi-ai's own Anthropic auth (no auth code of ours, no helper process):
- *   - sign-in: pi-ai's Anthropic OAuth flow (`Models.login("anthropic", "oauth")`). The claude.ai address goes to the
- *     browser; the person pastes the code or the final redirect address back (so it works when the browser is on another
- *     machine), or the flow's own local callback finishes it when the browser runs on this machine;
+ * PLAN item 16 — "Connect your Claude account", on pi-ai's own Anthropic auth (no auth code of ours):
+ *   - sign-in: pi-ai's Anthropic OAuth login, run in a worker thread per sign-in (anthropic-login.ts). The claude.ai
+ *     address goes to the browser; the person pastes the code or the final redirect address back (so it works when the
+ *     browser is on another machine, or when another program holds pi-ai's callback port), or pi-ai's local callback
+ *     finishes it when the browser runs on this machine;
  *   - or an Anthropic API key;
  *   - the credential lives in the database (`claude_accounts`, one row per user) behind pi-ai's CredentialStore contract,
  *     and pi-ai refreshes OAuth tokens through it. No files and no HOME/USERPROFILE: the same on Windows, macOS and Linux.
  */
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
-import { createModels, type AuthContext, type AuthInteraction, type Credential, type CredentialStore, type MutableModels } from "@earendil-works/pi-ai";
+import { createModels, type AuthContext, type Credential, type CredentialStore, type MutableModels } from "@earendil-works/pi-ai";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import type { ClaudeAccountView } from "@vibread/core";
 import { errorMessage } from "@vibread/tools";
@@ -17,6 +18,7 @@ import { eq } from "drizzle-orm";
 import type { Logger } from "pino";
 import type { ServerConfig } from "../config.js";
 import { claudeAccounts, type DB } from "../db/schema.js";
+import { startAnthropicLogin, type AnthropicLogin, type AnthropicLoginOptions } from "./anthropic-login.js";
 
 /** pi-ai's provider id for Claude; the only credential a ViBread user stores. */
 export const CLAUDE_PROVIDER = "anthropic";
@@ -61,10 +63,8 @@ interface PendingLogin {
   userId: string;
   url: string;
   startedAt: number;
-  abort: AbortController;
-  /** Resolves pi-ai's "paste the code" prompt. */
-  paste: PromiseWithResolvers<string>;
-  /** pi-ai's login: resolves once the credential is saved. */
+  signIn: AnthropicLogin;
+  /** Resolves once the credential is saved. */
   done: Promise<void>;
 }
 
@@ -78,7 +78,13 @@ function loginReason(error: unknown): string {
   return errorMessage(error).split(/\.\s|;/)[0]!.trim();
 }
 
-export function createClaudeAccountService(deps: { config: Pick<ServerConfig, "anthropicApiKey">; db: DB; log: Logger }): ClaudeAccountService {
+export function createClaudeAccountService(deps: {
+  config: Pick<ServerConfig, "anthropicApiKey">;
+  db: DB;
+  log: Logger;
+  /** Test seams for the sign-in worker (anthropic-login.ts); unset in production. */
+  signIn?: AnthropicLoginOptions;
+}): ClaudeAccountService {
   const { db, config } = deps;
   const log = deps.log.child({ component: "claude-accounts" });
   const pending = new Map<string, PendingLogin>();
@@ -153,7 +159,7 @@ export function createClaudeAccountService(deps: { config: Pick<ServerConfig, "a
     for (const login of pending.values()) {
       if (now - login.startedAt < LOGIN_TTL_MS) continue;
       pending.delete(login.id);
-      login.abort.abort();
+      login.signIn.cancel();
     }
   }
 
@@ -185,49 +191,36 @@ export function createClaudeAccountService(deps: { config: Pick<ServerConfig, "a
       if (existing) return { loginId: existing.id, url: existing.url };
       // pi-ai's sign-in listens for the local callback on one fixed port, so one sign-in runs at a time.
       if (pending.size > 0) throw new ClaudeAccountError(409, "login_busy", "Someone else is connecting a Claude account right now. It should free up within 10 minutes.");
-      const abort = new AbortController();
-      const paste = Promise.withResolvers<string>();
-      const address = Promise.withResolvers<string>();
-      const interaction: AuthInteraction = {
-        signal: abort.signal,
-        notify(event) {
-          if (event.type === "auth_url") address.resolve(event.url);
-        },
-        prompt(prompt) {
-          if (prompt.type !== "manual_code") return Promise.reject(new Error(`Unexpected sign-in question: ${prompt.message}`));
-          const stop = () => paste.reject(new Error("Sign-in cancelled."));
-          prompt.signal?.addEventListener("abort", stop, { once: true });
-          abort.signal.addEventListener("abort", stop, { once: true });
-          return paste.promise;
-        },
-      };
-      // A rejected paste after the local callback won is expected; pi-ai handles it.
-      paste.promise.catch(() => undefined);
-      const done = claudeModels(credentials(userId))
-        .login(CLAUDE_PROVIDER, "oauth", interaction)
-        .then(async () => {
-          await recordProfile(userId);
-          log.info({ userId }, "Claude account connected");
-        });
-      done.catch((error: unknown) => address.reject(error));
+      const signIn = startAnthropicLogin(deps.signIn);
+      void signIn.callback.then((listener) => {
+        if (!listener.preferred && deps.signIn?.callbackPort === undefined) {
+          log.warn({ userId, port: listener.wanted }, `localhost:${listener.wanted} is in use by another program, so this Claude sign-in can't finish by itself: paste the code or the address Claude shows`);
+        }
+      });
+      const done = signIn.credential.then(async (credential) => {
+        await credentials(userId).modify(CLAUDE_PROVIDER, async () => credential);
+        await recordProfile(userId);
+        log.info({ userId }, "Claude account connected");
+      });
+      done.catch(() => undefined); // start() may fail before anyone waits on it; failures are handled below
       const url = await Promise.race([
-        address.promise,
+        signIn.url,
         sleep(STEP_TIMEOUT_MS, undefined, { ref: false }).then(() => {
           throw new Error("no sign-in address");
         }),
       ]).catch((error: unknown) => {
-        abort.abort();
+        signIn.cancel();
         log.warn({ err: errorMessage(error), userId }, "Claude sign-in couldn't start");
         throw new ClaudeAccountError(503, "login_unavailable", `Claude sign-in couldn't start: ${loginReason(error)}. Try again in a moment.`);
       });
-      const login: PendingLogin = { id: randomUUID(), userId, url, startedAt: Date.now(), abort, paste, done };
+      const login: PendingLogin = { id: randomUUID(), userId, url, startedAt: Date.now(), signIn, done };
       pending.set(login.id, login);
       // Finished (local callback, paste, or failure) → no longer pending.
       void done.then(
         () => pending.delete(login.id),
         (error: unknown) => {
+          if (pending.get(login.id) === login) log.warn({ err: errorMessage(error), userId }, "Claude sign-in failed");
           pending.delete(login.id);
-          if (!abort.signal.aborted) log.warn({ err: errorMessage(error), userId }, "Claude sign-in failed");
         },
       );
       return { loginId: login.id, url };
@@ -242,7 +235,7 @@ export function createClaudeAccountService(deps: { config: Pick<ServerConfig, "a
       }
       const input = code.trim();
       if (!input) throw new ClaudeAccountError(400, "code_required", "Paste the code or the address Claude sent you to.");
-      login.paste.resolve(input);
+      login.signIn.paste(input);
       const outcome = await Promise.race([
         login.done.then(
           () => ({ ok: true as const }),
@@ -252,7 +245,7 @@ export function createClaudeAccountService(deps: { config: Pick<ServerConfig, "a
       ]);
       pending.delete(loginId);
       if (!outcome.ok) {
-        login.abort.abort();
+        login.signIn.cancel();
         if (/state mismatch/i.test(errorMessage(outcome.error))) {
           throw new ClaudeAccountError(400, "login_state_mismatch", "That code is from a different sign-in attempt. Use the newest Claude link and paste its code.");
         }
@@ -265,7 +258,7 @@ export function createClaudeAccountService(deps: { config: Pick<ServerConfig, "a
       const login = pending.get(loginId);
       if (!login || login.userId !== userId) return;
       pending.delete(loginId);
-      login.abort.abort();
+      login.signIn.cancel();
     },
 
     async saveApiKey(userId, key) {
@@ -287,7 +280,7 @@ export function createClaudeAccountService(deps: { config: Pick<ServerConfig, "a
     },
 
     async stop() {
-      for (const login of pending.values()) login.abort.abort();
+      for (const login of pending.values()) login.signIn.cancel();
       pending.clear();
     },
   };
