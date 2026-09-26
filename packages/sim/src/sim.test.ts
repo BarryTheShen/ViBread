@@ -286,6 +286,7 @@ void loop(){bool first=millis()>=1000; digitalWrite(8,first); digitalWrite(9,LOW
     expect(failure?.message).toContain("t=1050–1100 ms");
     expect(failure?.message).toContain("LED1 turned on at t=1000 ms");
     expect(failure?.startMs).toBe(1050);
+    expect(failure?.index).toBe(4);
     expect(failure?.endMs).toBe(1100);
   }, 120_000);
 
