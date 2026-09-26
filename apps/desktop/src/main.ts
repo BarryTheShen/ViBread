@@ -174,7 +174,11 @@ function registerIpc(): void {
   ipcMain.handle("phone:info", async () => {
     const info = server.info;
     if (!info) throw new Error("server is not running");
-    return { url: `${info.publicUrl}/`, qr: await QRCode.toDataURL(`${info.publicUrl}/`, { margin: 1, width: 440 }), lan: info.publicUrl !== `http://localhost:${info.port}` };
+    // Asked over loopback, the server includes the LAN pairing token: unpaired devices on the Wi-Fi get a 403.
+    const connections = (await (await fetch(`${info.localUrl}/api/connections`)).json()) as { phoneUrl?: string; phonePairQuery?: string };
+    const origin = (connections.phoneUrl ?? info.publicUrl).replace(/\/$/, "");
+    const url = `${origin}/${connections.phonePairQuery ? `?${connections.phonePairQuery}` : ""}`;
+    return { url, qr: await QRCode.toDataURL(url, { margin: 1, width: 440 }), lan: !/^http:\/\/(localhost|127\.)/.test(origin) };
   });
 }
 
@@ -218,7 +222,7 @@ function buildMenu(): void {
   const mac = process.platform === "darwin";
   const vibread: MenuItemConstructorOptions[] = [
     { label: "Set Anthropic API key…", click: () => showSmall("apikey.html", 520, 330, "Anthropic API key") },
-    { label: "Show phone link / QR", click: () => showSmall("phone.html", 620, 360, "Open ViBread on your phone") },
+    { label: "Show phone link / QR", click: () => showSmall("phone.html", 660, 440, "Open ViBread on your phone") },
     { type: "separator" },
     { label: "Open data folder", click: () => void shell.openPath(paths.userData) },
     { label: "Open logs", click: () => void shell.openPath(paths.logs) },
