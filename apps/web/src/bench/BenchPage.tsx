@@ -37,6 +37,7 @@ import { faultLabel, VirtualBenchTransport, type VirtualFault, type VirtualPartT
 import { BenchAskBridge, type RemoteAskStatus } from "./askBridge.js";
 import { approvalGate } from "./approval.js";
 import { MONO_FONT } from "../theme.js";
+import { SerialMonitor } from "../components/SerialMonitor.js";
 
 const STEPS = ["Connect your board", "Make it safe", "Check power", "Test each part", "Find the problem", "Run your project", "Celebrate"];
 const BOARD_LOST_POWER = "Board lost power — unplug, then check the rails and the cable";
@@ -159,13 +160,11 @@ const actionButtonSx = { minHeight: 46, borderRadius: 2 } as const;
 
 export default function BenchPage(): ReactElement | null {
   const { missionId = "" } = useParams<{ missionId: string }>();
-  const [logPinned, setLogPinned] = useState(true);
   const [loaded, setLoaded] = useState<LoadedBench | undefined>();
   const [loadError, setLoadError] = useState<string>();
   const [authRequired, setAuthRequired] = useState(false);
   const [mode, setMode] = useState<"physical" | "virtual">("virtual");
   const [boardProfileChoice, setBoardProfileChoice] = useState<BoardProfileId | "auto">("auto");
-  const logRef = useRef<HTMLPreElement | null>(null);
   const [fault, setFault] = useState<VirtualFault>("none");
   const [activeStep, setActiveStep] = useState(0);
   const [connection, setConnection] = useState<BoardPortConnection | undefined>();
@@ -248,10 +247,6 @@ export default function BenchPage(): ReactElement | null {
     query.addEventListener?.("change", update);
     return () => query.removeEventListener?.("change", update);
   }, []);
-  useEffect(() => {
-    if (!logPinned || !logRef.current) return;
-    logRef.current.scrollTop = logRef.current.scrollHeight;
-  }, [logPinned, runnerState?.rawLines.length]);
   useEffect(() => {
     if (!loaded || !currentAskIdForBridge || currentAskValue !== undefined) return undefined;
     const ask = runnerState?.asks[0];
@@ -336,7 +331,6 @@ export default function BenchPage(): ReactElement | null {
     runnerRef.current = nextRunner;
     setRunner(nextRunner);
     setRunnerState(nextRunner.state);
-    setLogPinned(true);
     return nextRunner;
   }, []);
 
@@ -828,8 +822,7 @@ export default function BenchPage(): ReactElement | null {
               {remoteAnswer && <Alert severity="info" sx={{ mt: 2 }}>Answered from iMessage by {remoteAnswer.by}: {remoteAnswer.value}</Alert>}
               {runnerState?.done && <Alert severity="info" sx={{ mt: 2 }}>All device tests finished. Preparing the Houston diagnosis…</Alert>}
               <Divider sx={{ my: 2 }} />
-              <Typography variant="subtitle2">Live line log</Typography>
-              <Box component="pre" ref={logRef} onScroll={(event) => { const element = event.currentTarget; setLogPinned(element.scrollHeight - element.scrollTop - element.clientHeight < 32); }} aria-live="polite" sx={{ maxHeight: 220, overflow: "auto", p: 1.5, mt: 1, borderRadius: 1, bgcolor: "background.default", color: "text.secondary", fontFamily: MONO_FONT, fontSize: 12, whiteSpace: "pre-wrap" }}>{allLines.length > 0 ? allLines.join("\n") : "Waiting for NDJSON…"}</Box>
+              <SerialMonitor value={allLines.join("\n")} title="Live line log" ariaLabel="Telemetry line log" emptyText="Waiting for NDJSON…" height="auto" maxHeight={220} />
             </CardContent>
           </Card>
         )}
