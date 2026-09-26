@@ -100,10 +100,11 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
 
   const candidateWebDirs = [resolve(process.cwd(), "apps/web/dist"), resolve(process.cwd(), "../../apps/web/dist")];
   const webDist = candidateWebDirs.find((directory) => existsSync(resolve(directory, "index.html")));
-  const indexPath = webDist ? resolve(webDist, "index.html") : undefined;
-  if (process.env.VIBREAD_NO_STATIC !== "1" && indexPath && webDist) {
+  if (process.env.VIBREAD_NO_STATIC !== "1" && webDist) {
     app.use(express.static(webDist, { index: false }));
-    app.get("*splat", (_req, res) => res.sendFile(indexPath));
+    // Root-relative on purpose: `send` rejects absolute paths that pass through a dot-directory (AppImages run from
+    // /tmp/.mount_*, many installs live under ~/.local), which would turn every SPA route into a 404.
+    app.get("*splat", (_req, res) => res.sendFile("index.html", { root: webDist }));
   }
 
   app.use(createApiErrorHandler(log));

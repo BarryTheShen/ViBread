@@ -15,7 +15,10 @@ import ListItemText from "@mui/material/ListItemText";
 import Typography from "@mui/material/Typography";
 import { CONSOLE_IDS, CONSOLE_LABELS, type ConsoleId, type ConsoleReport, type Finding } from "@vibread/core";
 import { useState, type ReactElement, type ReactNode } from "react";
+import Stack from "@mui/material/Stack";
+import { RecordedChip } from "../components/RecordedChip.js";
 import { VERDICT_STYLE, VerdictChip } from "../components/VerdictChip.js";
+import { isRecord } from "../lib/guards.js";
 import { MONO_FONT } from "../theme.js";
 
 const SEVERITY_ICON: Record<Finding["severity"], ReactElement> = {
@@ -23,6 +26,12 @@ const SEVERITY_ICON: Record<Finding["severity"], ReactElement> = {
   warning: <WarningIcon color="warning" titleAccess="Warning" />,
   info: <InfoIcon color="info" titleAccess="Note" />,
 };
+
+/** RETRO votes replayed from a recorded run carry `evidence.recorded.label`; they must never look like a live vote. */
+function recordedVoteOf(report: ConsoleReport | undefined): string | undefined {
+  const recorded = report?.evidence?.recorded;
+  return isRecord(recorded) && typeof recorded.label === "string" ? recorded.label : undefined;
+}
 
 /** Go/No-Go console strip: plain label first, console name as flavor, verdict as text + icon. */
 export function ConsoleLights({ reports, action }: { reports: ConsoleReport[]; action?: ReactNode }) {
@@ -41,11 +50,12 @@ export function ConsoleLights({ reports, action }: { reports: ConsoleReport[]; a
           const style = VERDICT_STYLE[report?.verdict ?? "NONE"];
           const warnings = report?.findings.filter((f) => f.severity === "warning").length ?? 0;
           const spoken = report?.verdict === "GO" && warnings > 0 ? `${style.label} with ${warnings} warning${warnings === 1 ? "" : "s"}` : style.label;
+          const recordedVote = recordedVoteOf(report);
           return (
             <ButtonBase
               key={id}
               onClick={() => setOpenId(id)}
-              aria-label={`${CONSOLE_LABELS[id]} (${id}): ${spoken}. Show details`}
+              aria-label={`${CONSOLE_LABELS[id]} (${id}): ${spoken}${recordedVote ? ` (${recordedVote}, not live)` : ""}. Show details`}
               sx={{
                 minWidth: 0,
                 // Below ~1280 px the label sits above the verdict so all five lights and GO for build fit at 1024 px.
@@ -70,7 +80,10 @@ export function ConsoleLights({ reports, action }: { reports: ConsoleReport[]; a
                   {id}
                 </Typography>
               </Box>
-              <VerdictChip verdict={report?.verdict} warnings={warnings} />
+              <Stack direction="row" sx={{ gap: 0.5, flexWrap: "wrap" }}>
+                <VerdictChip verdict={report?.verdict} warnings={warnings} />
+                {recordedVote && <RecordedChip label="Recorded vote" title={recordedVote} />}
+              </Stack>
             </ButtonBase>
           );
         })}

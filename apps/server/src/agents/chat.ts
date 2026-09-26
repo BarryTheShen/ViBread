@@ -5,6 +5,7 @@ import type { Express, Request, Response } from "express";
 import type { Logger } from "pino";
 import type { MessageStore } from "../store/messages.js";
 import type { ApprovalLinks } from "./approval-links.js";
+import { mountRecorded } from "./recorded.js";
 import type { RunManager } from "./runs.js";
 
 function sendError(res: Response, status: number, code: string, message: string): void {
@@ -43,6 +44,7 @@ function userMessage(body: unknown, actor: Actor): UIMessage | null {
  */
 export function mountChat(app: Express, deps: { store: MissionStore; messages: MessageStore; runs: RunManager; links: ApprovalLinks; log: Logger }): void {
   const { store, runs, links, log } = deps;
+  mountRecorded(app); // GET /api/recorded/:file — the recorded photo-check example picture
 
   /**
    * Every chat route requires a signed-in user who owns the mission (audit F3): a chat turn spends the owner's Claude

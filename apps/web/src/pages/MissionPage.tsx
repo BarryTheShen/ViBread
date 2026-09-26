@@ -1,6 +1,7 @@
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
 import CloudDoneIcon from "@mui/icons-material/CloudDone";
 import CloudOffIcon from "@mui/icons-material/CloudOff";
+import HistoryIcon from "@mui/icons-material/History";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
 import PhoneIphoneIcon from "@mui/icons-material/PhoneIphone";
 import MenuIcon from "@mui/icons-material/Menu";
@@ -241,6 +242,18 @@ export default function MissionPage() {
               virtualBoard={lastRunVirtual}
               onTellAgent={() => document.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message the agent"]')?.focus()}
             />
+            {detail.recording && (
+              <Alert severity="info" icon={<HistoryIcon />} sx={{ mx: 2, mt: 1, py: 0 }}>
+                <Tooltip title={detail.recording.provenance} describeChild>
+                  <Box component="span" tabIndex={0} sx={{ fontWeight: 600 }}>
+                    {detail.recording.label}
+                  </Box>
+                </Tooltip>{" "}
+                <Box component="span" sx={{ color: "text.secondary" }}>
+                  Design: {detail.recording.models.design} · Tests and review: {detail.recording.models.testAuthor}
+                </Box>
+              </Alert>
+            )}
             {claudeMissing && (
               <Alert
                 severity="info"

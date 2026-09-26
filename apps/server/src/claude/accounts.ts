@@ -157,7 +157,7 @@ export function createClaudeAccountService(deps: { config: ServerConfig; db: DB;
   let available: boolean | undefined;
   let broker: Promise<void> | undefined;
   let brokerChild: ChildProcessWithoutNullStreams | undefined;
-  let brokerPort: number | undefined;
+  let brokerListenPort: number | undefined;
   const gateways = new Map<string, Promise<{ child: ChildProcessWithoutNullStreams; endpoint: ClaudeEndpoint }>>();
   const pending = new Map<string, PendingLogin>();
   const children = new Set<ChildProcessWithoutNullStreams>();
@@ -186,8 +186,8 @@ export function createClaudeAccountService(deps: { config: ServerConfig; db: DB;
   const brokerUnavailable = () =>
     new ClaudeAccountError(503, "broker_unavailable", "Claude sign-in isn't available right now. Try again in a moment.");
   const brokerUrl = () => {
-    if (brokerPort === undefined) throw brokerUnavailable();
-    return `http://127.0.0.1:${brokerPort}`;
+    if (brokerListenPort === undefined) throw brokerUnavailable();
+    return `http://127.0.0.1:${brokerListenPort}`;
   };
 
   function isAvailable(): boolean {
@@ -215,7 +215,7 @@ export function createClaudeAccountService(deps: { config: ServerConfig; db: DB;
     if (!broker) {
       const current = (async () => {
         const port = await freePort();
-        brokerPort = port;
+        brokerListenPort = port;
         const child = run(["auth-broker", "serve", `--bind=127.0.0.1:${port}`]);
         brokerChild = child;
         if (child.pid === undefined) throw new Error("auth-broker did not expose a pid");
@@ -225,7 +225,7 @@ export function createClaudeAccountService(deps: { config: ServerConfig; db: DB;
           log.warn({ code }, "oh-my-pi auth-broker exited");
           if (brokerChild === child) {
             brokerChild = undefined;
-            brokerPort = undefined;
+            brokerListenPort = undefined;
             broker = undefined;
           }
           try {
@@ -241,7 +241,7 @@ export function createClaudeAccountService(deps: { config: ServerConfig; db: DB;
         if (broker === current) {
           broker = undefined;
           brokerChild = undefined;
-          brokerPort = undefined;
+          brokerListenPort = undefined;
         }
       });
     }

@@ -125,6 +125,22 @@ export interface MissionDetail {
   pendingApprovals: ApprovalView[];
   /** Agent run in progress (chat stream active). */
   agentBusy: boolean;
+  /** Present when this mission is a replay of a recorded real-model run (PLAN §4 named fallback), never a live one. */
+  recording?: MissionRecording;
+}
+
+/**
+ * A pre-warmed mission built from real model output captured earlier. Chat messages from it carry
+ * `metadata.vibread.recorded: { label, model, recordedAt }`; a recorded RETRO vote carries
+ * `ConsoleReport.evidence.recorded` with the same fields.
+ */
+export interface MissionRecording {
+  /** Header text, e.g. "Recording of a real Claude run (Sep 26) — not live". */
+  label: string;
+  recordedOn: string;
+  /** Role → model name, e.g. { design: "Claude Opus 5.5", testAuthor: "Claude Sonnet 5", retro: "Claude Sonnet 5" }. */
+  models: Record<string, string>;
+  provenance: string;
 }
 
 export interface RevisionDetail {
