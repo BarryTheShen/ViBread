@@ -32,6 +32,11 @@ export class SimSession {
     return this.machine.partState(part);
   }
 
+  /** Live tone() pitch of a passive buzzer (Hz, 0 = silent) over the last `windowMs` of simulated time. */
+  toneFrequency(part: string, windowMs: number): number {
+    return this.machine.recentToneFrequency(part, windowMs);
+  }
+
   pinLevel(pin: string): 0 | 1 | null {
     return this.machine.pinLevel(pin);
   }

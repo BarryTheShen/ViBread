@@ -10,7 +10,7 @@ const mission = args.find((arg, index) => !arg.startsWith("--") && index !== dat
 const path = mission ? join(dataDir, "logs", "missions", `${mission.replace(/[^A-Za-z0-9_-]/g, "_")}.jsonl`) : join(dataDir, "logs", "server.jsonl");
 let offset = 0;
 
-function printChunk(): void {
+function printChunk() {
   if (!existsSync(path)) return;
   const text = readFileSync(path, "utf8");
   const chunk = text.slice(offset);
