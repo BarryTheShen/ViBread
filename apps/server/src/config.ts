@@ -18,6 +18,12 @@ export interface ServerConfig {
   anthropicApiKey?: string;
   /** Anthropic API origin every Claude call uses (ANTHROPIC_BASE_URL, e.g. a proxy or a local bridge); no trailing /v1. */
   anthropicBaseUrl: string;
+  /**
+   * VIBREAD_CLAUDE_PROTOCOL: "managed" (default) uses pi-ai's catalog request protocol per model (for claude-opus-5-5:
+   * adaptive thinking, mid-conversation system messages, native tool changes and their beta headers); "plain" never does.
+   * A 400 refusing a managed feature switches that model to plain by itself.
+   */
+  claudeProtocol: "managed" | "plain";
   model: string;
   fastModel: string;
   approvalSecret: string;
@@ -54,6 +60,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     anthropicApiKey: env.ANTHROPIC_API_KEY?.trim() || undefined,
     // The Anthropic SDK convention (origin, no /v1); a trailing /v1 (the AI SDK convention) is tolerated.
     anthropicBaseUrl: trimUrl(env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com").replace(/\/v1$/, ""),
+    claudeProtocol: env.VIBREAD_CLAUDE_PROTOCOL?.trim() === "plain" ? "plain" : "managed",
     model: env.VIBREAD_MODEL?.trim() || "claude-opus-5-5",
     fastModel: env.VIBREAD_FAST_MODEL?.trim() || "claude-sonnet-5",
     approvalSecret: env.VIBREAD_APPROVAL_SECRET?.trim() || readOrCreateSecret(dataDir, "approval-secret"),
