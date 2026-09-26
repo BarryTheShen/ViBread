@@ -45,6 +45,10 @@ module.exports = {
     synopsis: "AI-assisted Arduino prototyping with a built-in USB bench",
     maintainer: "ViBread <vibread@users.noreply.github.com>",
     executableName: "vibread",
+    syncDesktopName: true,
   },
+  // Static type2 runtime: needs only fusermount3 (no libfuse2 on Ubuntu 22.04+); AppRun adds --no-sandbox itself when
+  // unprivileged user namespaces are blocked (Ubuntu 24.04+ AppArmor).
+  toolsets: { appimage: "1.0.3" },
   publish: null,
 };
