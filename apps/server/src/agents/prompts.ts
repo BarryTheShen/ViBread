@@ -9,7 +9,29 @@ import {
   type Mission,
   type Revision,
 } from "@vibread/core";
-import type { CircuitInterface } from "@vibread/tools";
+import { GOLDEN } from "@vibread/fixtures";
+import { circuitInterface, type CircuitInterface } from "@vibread/tools";
+
+function golden(key: (typeof GOLDEN)[number]["key"]) {
+  const design = GOLDEN.find((g) => g.key === key);
+  if (!design) throw new Error(`golden fixture ${key} is missing`);
+  return design;
+}
+
+/**
+ * Few-shot examples from the golden fixtures (@vibread/fixtures). Design agent: one complete IR (knob night-light, small)
+ * plus the launch-control IR shape without its sketch. Test author: the launch-control *interface* (built by
+ * circuitInterface, so no sketch can leak) and its suite, which covers power-on, bounce, and rapid presses.
+ */
+const DESIGN_EXAMPLES = `Example A — complete IR for the brief "${golden("knob-night-light").brief}":
+${JSON.stringify(golden("knob-night-light").circuit)}
+
+Example B — IR shape (sketch omitted) for the brief "${golden("launch-control").brief}":
+${JSON.stringify({ ...golden("launch-control").circuit, sketch: { source: "<complete .ino here>" } })}`;
+
+const TEST_EXAMPLE = `Example — brief: "${golden("launch-control").brief}"
+Design interface: ${JSON.stringify(circuitInterface(golden("launch-control").circuit))}
+A suite that passes coverage: ${JSON.stringify(golden("launch-control").suite)}`;
 
 function moduleLibrary(): string {
   return MODULE_KEYS.map((key) => {
@@ -58,7 +80,9 @@ Released build target: ${mission.releasedRevision ?? "none"}.
 
 # Parts the user has
 ${inventoryLines(mission.inventory)}
-Design only with these parts. If the brief needs a part they don't have, say so and use add_part (the user must approve).
+Use ONLY these parts, and never more of a part than the count listed (params must match, e.g. LED colors, resistor
+values). If the brief truly needs something they don't have, say so plainly and call add_part (the user must approve) before
+designing with it.
 
 # Module library (the only part kinds that exist)
 ${moduleLibrary()}
@@ -88,8 +112,10 @@ ${boardFacts()}
   (led {color}, resistor {ohms, tolerancePct}, potentiometer {ohms}); give each part a plain "label" ("Rightmost moon light").
 - nets: every connection is a net {id, kind: power|ground|signal, pins:[{part, pin}]}. Board pins are
   {"part":"board","pin":"D3"} / "A0" / "5V" / "GND". Each pin appears in exactly one net. Power nets hold 5V, ground nets GND.
-- roles: one per board I/O pin the sketch uses: {pin, mode: OUTPUT|INPUT|INPUT_PULLUP|ANALOG_IN|PWM_OUT, part, purpose}.
-  Roles MUST match the sketch exactly (pinMode calls, analogWrite pins, analogRead pins); the simulator checks this.
+- roles: exactly one per board I/O pin the sketch uses, and none for pins it doesn't use:
+  {pin, mode: OUTPUT|INPUT|INPUT_PULLUP|ANALOG_IN|PWM_OUT, part, purpose}. Roles MUST match the sketch: pinMode(pin, OUTPUT)
+  → OUTPUT, INPUT_PULLUP → INPUT_PULLUP, analogWrite → PWM_OUT, analogRead → ANALOG_IN. The simulator decodes what the
+  compiled sketch really configures and GUIDO fails any mismatch.
 - intent: numbered clauses {id:"C1", text} — one testable behavior each, in the user's words. The independent test author
   turns each clause into simulation tests without seeing your sketch, so be precise about what the user observes.
 - sketch.source: the complete .ino.
@@ -113,6 +139,9 @@ ${boardFacts()}
 - Use hysteresis for light/knob thresholds so outputs don't flicker at the boundary.
 - Serial.begin(115200) and print one short line per state change; that helps the tests and the person.
 - Outputs start in a defined state in setup().
+
+# Examples (golden designs that pass every console — follow their shape, not their behavior)
+${DESIGN_EXAMPLES}
 
 Keep chat replies short: what you did, the console verdicts in plain words, and the next step for the person.`;
 }
@@ -143,17 +172,30 @@ Semantics (the ATmega328P simulator implements exactly this):
 Rules:
 - Scenario ids T1, T2, …; each has a plain-language "title" a beginner reads ("In the dark, pressing the button 3 times lights 3 LEDs from the right"),
   the intent clause ids it covers, and categories from: ${SCENARIO_CATEGORIES.join(", ")}.
-- Coverage: every output part asserted, every input part exercised, every intent clause covered by ≥ 1 scenario, and the edge cases that apply:
-  power-on state; bounce and rapid presses for buttons; threshold and hysteresis for light sensors/knobs.
+- Coverage (checked by code; missing any one makes the simulation console NO-GO):
+  - every output part (LED, buzzer) asserted with expect-part / expect-pin / expect-pwm / expect-tone in some scenario;
+  - every input part (button, photoresistor, potentiometer) exercised with press/bounce/set-digital/set-light/set-analog;
+  - every intent clause id listed in at least one scenario's "clauses";
+  - categories: always "power-on" (state right after reset, before any input); with a button also "bounce" (a bounce step
+    must count as ONE press) and "rapid" (several quick presses); with a photoresistor also "threshold" (clearly dark vs
+    clearly bright) and "hysteresis" (a small change near the switch point must not flip the output back); with a
+    potentiometer also "edge" (both ends of the knob travel).
 - Give the sketch time: wait ≥ 60 ms after a change before expecting its effect; use expect-part windows for LEDs.
 - Light thresholds are calibrated on the bench, so use clearly dark (≤ 0.1) and clearly bright (≥ 0.7) levels, not borderline values.
-- Keep each scenario under ~5 s of virtual time. author must be "test-author".`;
+- Keep each scenario under ~5 s of virtual time. author must be "test-author".
 
-export const RETRO_SYSTEM = `You are RETRO, ViBread's independent reviewer. You see the brief, the full design (IR + sketch), and every console's
-results. You cannot change anything; you vote GO or NO-GO with short reasons a beginner understands.
-Vote NO-GO only for concrete problems: the design does not do what the brief asks, the tests miss a behavior the person cares
-about, the sketch can misbehave in a way the tests don't catch (e.g. no debounce, blocking delays, flicker at a threshold), or a
-safety concern. Otherwise vote GO. Each concern names the parts involved and a fix.`;
+${TEST_EXAMPLE}`;
+
+export const RETRO_SYSTEM = `You are RETRO, ViBread's independent reviewer. You see the brief, the full design (IR + sketch), the independent
+tests and their results, and every console's report. You cannot change anything; you vote GO or NO-GO with short reasons a
+beginner understands. Compare, in order:
+1. Brief ↔ intent clauses: does every behavior the person asked for appear as a clause, with nothing invented?
+2. Intent ↔ IR: do the parts and nets make that behavior physically possible with the parts the person has?
+3. IR ↔ sketch: do the pin roles match what the sketch configures; are buttons debounced and acted on once per press; do
+   light/knob thresholds use hysteresis and VB_CAL_<PART>_<KEY> macros; are D0/D1 left free; no blocking delay() > 50 ms?
+4. Intent ↔ tests ↔ results: does each clause have a test that would fail if the behavior were wrong, and did they pass?
+Vote NO-GO only for concrete problems found in these comparisons or a safety concern. Otherwise vote GO. Each concern names
+the parts involved and a fix.`;
 
 export const PHOTO_SYSTEM = `You check a phone photo of a breadboard against the expected build step. For each listed part answer
 correct / wrong / missing / unknown with a short note. Say "unknown" whenever the photo doesn't show it clearly — never guess.

@@ -1,3 +1,7 @@
+import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import Paper from "@mui/material/Paper";
+import Stack from "@mui/material/Stack";
+import Typography from "@mui/material/Typography";
 import { ChatBox } from "@mui/x-chat";
 import { useChat, useChatStore, type ChatPartRendererMap } from "@mui/x-chat/headless";
 import { processStream } from "@mui/x-chat-headless/stream";
@@ -66,7 +70,7 @@ function ActiveRunFollower({ adapter, missionId, agentBusy }: { adapter: Mission
 
 /**
  * A brand-new mission's run starts with the brief as the first user message (missions.create does not start a run).
- * Only for missions still in BRIEF with no revision: pre-warmed/seeded missions already have a design.
+ * Only for missions in BRIEF/CLARIFY with no revision: pre-warmed/seeded missions already have a design.
  */
 function BriefKickoff({ adapter, brief, agentBusy }: { adapter: MissionChatAdapter; brief: string; agentBusy: boolean }) {
   const chat = useChat();
@@ -86,6 +90,24 @@ function BriefKickoff({ adapter, brief, agentBusy }: { adapter: MissionChatAdapt
     void chat.sendMessage({ parts: [{ type: "text", text: brief }] });
   }, [historyReady, agentBusy, brief, chat]);
   return null;
+}
+
+/** Shown in the empty chat of a mission whose design was prepared ahead of time (seeded / pre-warmed). */
+function PrewarmedNotice() {
+  return (
+    <Paper variant="outlined" role="note" sx={{ p: 2, maxWidth: 440, borderColor: "primary.main", bgcolor: "rgba(125, 211, 252, 0.06)" }}>
+      <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 0.5 }}>
+        <InfoOutlinedIcon color="primary" fontSize="small" />
+        <Typography variant="overline" sx={{ color: "primary.main", lineHeight: 1.4 }}>
+          ViBread
+        </Typography>
+      </Stack>
+      <Typography sx={{ fontWeight: 600 }}>This design was prepared ahead of time — ask the agent anything about it.</Typography>
+      <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
+        Its checks, tests, and build steps are ready in the panel on the right.
+      </Typography>
+    </Paper>
+  );
 }
 
 /** Reports which approval ids already have a card in the chat, so the page shows only the others separately. */
@@ -114,7 +136,7 @@ export function MissionChat({
   brief: string;
   /** Follow-up suggestions only make sense once a design exists. */
   hasDesign: boolean;
-  /** Phase BRIEF and no revision yet: the only case where the brief is auto-sent. */
+  /** Phase BRIEF/CLARIFY and no revision yet: the only case where the brief is auto-sent (history must also be empty). */
   isNewMission: boolean;
   onApprovalIdsChange(ids: string[]): void;
 }) {
@@ -126,17 +148,15 @@ export function MissionChat({
       partRenderers={partRenderers}
       features={{ conversationList: false, conversationHeader: false, attachments: false, suggestions: hasDesign, scrollToBottom: true }}
       suggestions={hasDesign ? SUGGESTIONS : []}
-      slots={{ messageAvatar: null }}
+      slots={{ messageAvatar: null, ...(hasDesign ? { emptyState: PrewarmedNotice } : {}) }}
       sx={{ height: "100%", minHeight: 0, bgcolor: "transparent" }}
       localeText={{
         composerInputPlaceholder: "Tell the agent what to change, or ask why…",
         composerInputAriaLabel: "Message the agent",
         messageAuthorAssistantLabel: "ViBread agent",
         messageAuthorUserLabel: "You",
-        threadNoMessagesLabel: hasDesign ? "This design was prepared ahead of time" : "No conversation yet",
-        threadNoMessagesHelperText: hasDesign
-          ? "Ask the agent anything about it: why a part was chosen, what the tests check, or what to change."
-          : "The agent explains each step here. Ask it anything about your circuit.",
+        threadNoMessagesLabel: "No conversation yet",
+        threadNoMessagesHelperText: "The agent explains each step here. Ask it anything about your circuit.",
       }}
     >
       <ActiveRunFollower adapter={adapter} missionId={missionId} agentBusy={agentBusy} />

@@ -32,7 +32,8 @@ export function createRetroReviewer(deps: { models: AgentModels; store: MissionS
       const scenarios = revision.results.sim?.scenarios.map((s) => ({ id: s.id, title: s.title, ok: s.ok })) ?? [];
       const prompt = `Brief:\n${mission.brief}\n\nDesign (revision ${revision.n}):\n${JSON.stringify(revision.circuit, null, 2)}\n\n` +
         `Independent tests:\n${JSON.stringify(revision.suite?.scenarios.map((s) => ({ id: s.id, title: s.title, clauses: s.clauses, categories: s.categories })) ?? [], null, 2)}\n\n` +
-        `Test results:\n${JSON.stringify(scenarios)}\nCoverage gaps: ${revision.results.sim?.coverage.missing.join("; ") || "none"}\n\n` +
+        `Test results:\n${JSON.stringify(scenarios)}\nCoverage gaps: ${revision.results.sim?.coverage.missing.join("; ") || "none"}\n` +
+        `Pin modes the compiled sketch actually set in simulation:\n${JSON.stringify(revision.results.sim?.pinModes ?? [])}\n\n` +
         `Console results:\n${JSON.stringify(consoles, null, 2)}\n\nVote now.`;
       const result = await generateText({
         model,

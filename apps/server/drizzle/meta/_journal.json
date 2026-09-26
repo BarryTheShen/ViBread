@@ -15,6 +15,13 @@
       "when": 1790408632641,
       "tag": "0001_useful_colossus",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1790409775531,
+      "tag": "0002_amused_praxagora",
+      "breakpoints": true
     }
   ]
 }

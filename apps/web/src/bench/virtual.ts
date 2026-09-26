@@ -1,7 +1,8 @@
+import type { FaultId } from "@vibread/bench";
 import type { Circuit } from "@vibread/core";
 import type { BenchTransport } from "./runner.js";
 
-export type VirtualFault = "none" | "button-gnd" | "led-jumpers" | "divider-resistor";
+export type VirtualFault = "none" | FaultId;
 
 export interface VirtualPartTelemetry {
   timeMs: number;
@@ -67,13 +68,6 @@ export class VirtualBenchTransport implements BenchTransport {
   }
 }
 
-interface VirtualWorkerInit {
-  type: "init";
-  circuit: Circuit;
-  hex: string;
-  fault: VirtualFault;
-}
-
 interface VirtualWorkerMessageSerial {
   type: "serial";
   text: string;
@@ -93,11 +87,18 @@ interface VirtualWorkerMessageError {
 type VirtualWorkerMessage = VirtualWorkerMessageSerial | VirtualWorkerMessageTelemetry | VirtualWorkerMessageError;
 
 export function faultLabel(fault: VirtualFault): string {
-  const labels: Record<VirtualFault, string> = {
-    none: "No fault (golden wiring)",
-    "button-gnd": "Button leg in the GND row",
-    "led-jumpers": "Two LED jumpers swapped",
-    "divider-resistor": "Photoresistor divider resistor missing",
+  if (fault === "none") return "No fault (golden wiring)";
+  const labels: Record<FaultId, string> = {
+    "button-leg-in-gnd-row": "Button leg in a GND row",
+    "button-rotated-90": "Button rotated 90 degrees",
+    "led-jumpers-swapped": "Two LED signal jumpers swapped",
+    "led-reversed": "LED reversed",
+    "led-missing": "LED missing",
+    "divider-resistor-missing": "Photoresistor divider resistor missing",
+    "output-jumper-in-rail-row": "Output jumper in a rail row",
+    "wrong-resistor-value": "Wrong resistor value",
+    "moved-lead": "Part lead moved one row",
+    "missing-jumper": "Jumper missing",
   };
   return labels[fault];
 }

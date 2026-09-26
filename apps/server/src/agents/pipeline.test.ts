@@ -31,8 +31,10 @@ describe("pipeline", () => {
     expect(results.selftest?.subjects.length).toBeGreaterThan(0);
     expect(results.steps?.steps.length).toBeGreaterThan(0);
     for (const step of results.steps!.steps) {
-      const png = await store.getArtifact(results.artifacts[`step-${step.n}.png`]!);
-      expect(png?.contentType).toBe("image/png");
+      for (const key of [`step-${step.n}.png`, `step-${step.n}-focus.png`]) {
+        const png = await store.getArtifact(results.artifacts[key]!);
+        expect(png?.contentType, key).toBe("image/png");
+      }
     }
     const hex = await store.getArtifact(results.artifacts["app.hex"]!);
     expect(new TextDecoder().decode(hex!.data)).toMatch(/^:[0-9A-F]{10}/);

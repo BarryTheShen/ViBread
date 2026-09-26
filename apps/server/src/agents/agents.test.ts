@@ -16,7 +16,8 @@ import { jsonModel, mockModels, scriptedModel, testDeps, type ScriptStep } from 
 const golden = GOLDEN.find((g) => g.key === "moon-phase-lamp")!;
 const HUMAN: Actor = { kind: "human", id: "operator", name: "Operator", channel: "web" };
 const GO_VOTE = { verdict: "GO", summary: "The lamp does what the brief asks.", reasons: ["Debounced button", "Hysteresis on the light threshold"], concerns: [] };
-const SKETCH_MARKERS = ["DEBOUNCE_MS", "void loop", "PHASES[8]", golden.circuit.sketch.source.slice(0, 80)];
+/** No golden sketch (the mission's or the few-shot example's) may reach the test author. */
+const SKETCH_MARKERS = ["void loop", "void setup", "pinMode(", "#define", ...GOLDEN.map((g) => g.circuit.sketch.source.slice(0, 80))];
 
 type Chunk = { type: string; [key: string]: unknown };
 

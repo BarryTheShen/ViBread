@@ -16,6 +16,7 @@ import {
   type SubjectResult,
 } from "@vibread/core";
 import { runDiagnosisRules, type DiagnosisSignature, type RuleCause, type RuleEvent } from "./rules.js";
+import { rankFaults, type FaultDictionary } from "./faults.js";
 
 const ADC_FULL_SCALE = 1023;
 const LIGHT_CHANGE_MIN = ADC_FULL_SCALE * 0.15;
@@ -703,6 +704,7 @@ export async function evaluateRun(input: {
   kind: BenchRunResult["kind"];
   revision: number;
   runId: string;
+  faultDictionary?: FaultDictionary;
 }): Promise<BenchRunResult> {
   const hasHello = input.lines.some((line) => line.t === "hello");
   const noisyFailure = input.lines.some((line) => {
@@ -770,21 +772,35 @@ export async function evaluateRun(input: {
       : context.signatures.designMismatch
         ? "Houston, we have a problem: the board's design banner does not match this revision."
         : "Houston, we have a problem: a bench signature did not match the design.";
-  const diagnosis = {
+  const ruleCandidates = candidatesFor(events, context);
+  const ruleDiagnosis: BenchRunResult["diagnosis"] = {
     attribution: primary?.attribution ?? (context.signatures.designMismatch ? "design" : verdict === "pass" ? "none" : verdict === "incomplete" ? "unknown" : "component"),
-    candidates: candidatesFor(events, context),
+    candidates: ruleCandidates,
     summary: summaryFor(primary, context, fallback),
-  } as BenchRunResult["diagnosis"];
-
-  return {
+  };
+  const baseResult: BenchRunResult = {
     runId: input.runId,
     revision: input.revision,
     kind: input.kind,
     results,
-    diagnosis,
+    diagnosis: ruleDiagnosis,
     calibration: context.calibrations,
     verdict,
   };
+  let candidates = ruleCandidates;
+  if (input.layout !== undefined && input.faultDictionary !== undefined) {
+    const dictionaryCandidates = rankFaults({
+      circuit: input.circuit,
+      layout: input.layout,
+      plan: input.plan,
+      observed: baseResult,
+      lines: input.lines,
+      dictionary: input.faultDictionary,
+    });
+    const known = new Set(candidates.map((candidate) => candidate.cause));
+    candidates = [...candidates, ...dictionaryCandidates.filter((candidate) => !known.has(candidate.cause))];
+  }
+  return { ...baseResult, diagnosis: { ...ruleDiagnosis, candidates } };
 }
 
 export function calibrationMacros(calibration: Calibration[]): Record<string, number> {
