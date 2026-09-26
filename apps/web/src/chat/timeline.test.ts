@@ -1,6 +1,6 @@
-import type { TimelineEvent } from "@vibread/core";
+import type { RevisionSummary, TimelineEvent } from "@vibread/core";
 import { describe, expect, it } from "vitest";
-import { describeItem, groupTimeline, placeTimeline } from "./timeline.js";
+import { describeItem, groupTimeline, placeTimeline, withRevisionEvents } from "./timeline.js";
 
 let seq = 0;
 function ev(kind: string, at: number, extra: Partial<TimelineEvent> = {}): TimelineEvent {
@@ -117,6 +117,30 @@ describe("placeTimeline", () => {
     const placed = placeTimeline([brief, reply, followUp], events);
     expect(placed.before["u-2"]).toHaveLength(1);
     expect(placed.end).toEqual([]);
+  });
+
+  it("keeps a live run's new design below the answer that caused it while the timeline catches up, then in place", () => {
+    // Answering Claude's question starts a run whose design lands in GET revisions before the next timeline poll logs
+    // either the answer or the design's own event.
+    const agent = { kind: "agent" as const, id: "design-agent", channel: "web" as const };
+    const r1: RevisionSummary = { n: 1, hash: "h1", createdAt: new Date(Date.UTC(2026, 8, 26, 12, 0, 31)).toISOString(), author: agent, note: "First design", verdicts: {} };
+    const answer = { id: "u-answer", role: "user" };
+    const messages = [brief, reply, answer, reply2];
+    const stale = [ev("message", 10, { actor: human, channel: "web" }), ev("message", 14, { actor: agent, channel: "web" })];
+    const during = placeTimeline(messages, withRevisionEvents(stale, [r1], "m"));
+    expect(during.before["u-answer"]).toBeUndefined();
+
+    const caughtUp = [...stale, ev("message", 30, { actor: human, channel: "web" }), ev("revision.created", 32, { revision: 1, actor: agent })];
+    const after = placeTimeline(messages, withRevisionEvents(caughtUp, [r1], "m"));
+    expect(after.before["u-answer"]).toBeUndefined();
+    expect(after.end.map((i) => i.events[0].revision)).toEqual([1]);
+  });
+
+  it("still adds a row for a pre-warmed design that the timeline never logged", () => {
+    const golden = { kind: "system" as const, id: "golden-fixture", channel: "system" as const };
+    const r1: RevisionSummary = { n: 1, hash: "h1", createdAt: new Date(Date.UTC(2026, 8, 26, 12, 0, 5)).toISOString(), author: golden, note: "Pre-warmed golden design", verdicts: {} };
+    const events = withRevisionEvents([ev("mission.created", 1), report(6, 1, "EECOM", "GO")], [r1], "m");
+    expect(placeTimeline([], events).end.map((i) => i.events[0].kind)).toEqual(["revision.created", "console.report"]);
   });
 
   it("tells the whole story after a recorded run's replayed brief, and with no chat at all", () => {

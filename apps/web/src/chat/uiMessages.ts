@@ -7,6 +7,11 @@ export function recordedLabelOf(metadata: unknown): string | undefined {
   return typeof label === "string" ? label : undefined;
 }
 
+/** Mark on a reply cut off with Stop (`metadata.vibread.stopped`, saved by the server with the partial reply). */
+export function isStoppedReply(metadata: unknown): boolean {
+  return isRecord(metadata) && isRecord(metadata.vibread) && metadata.vibread.stopped === true;
+}
+
 /** One-line result the agent tools always include (`{ summary }`). */
 export function toolSummaryOf(output: unknown): string | undefined {
   return isRecord(output) && typeof output.summary === "string" ? output.summary : undefined;
