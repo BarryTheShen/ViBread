@@ -9,6 +9,7 @@ import {
   type BuildState,
   type Mission,
   type MissionDetail,
+  type MissionRecording,
   type MissionService,
   type MissionSummary,
   type Revision,
@@ -145,6 +146,8 @@ export function createMissionService(
       const released = mission.releasedRevision !== undefined ? await store.getRevision(missionId, mission.releasedRevision) : null;
       const pending = await broker.listPending(missionId);
       const consoles = CONSOLE_IDS.flatMap((id) => revision?.results.reports.filter((r) => r.console === id) ?? []);
+      // A replay of a recorded real-model run is marked by its "mission.recorded" timeline event (recorded.ts).
+      const recording = (await store.listEvents(missionId)).find((e) => e.kind === "mission.recorded")?.data as MissionRecording | undefined;
       return {
         mission,
         ...(revision ? { revision: revisionSummary(revision) } : {}),
@@ -152,6 +155,7 @@ export function createMissionService(
         consoles,
         pendingApprovals: pending.map(view),
         agentBusy: runs.active(missionId) !== undefined,
+        ...(recording ? { recording } : {}),
       } satisfies MissionDetail;
     },
 

@@ -2,11 +2,13 @@ import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
 import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import { ChatBox } from "@mui/x-chat";
-import { useChat, useChatStore, type ChatPartRendererMap } from "@mui/x-chat/headless";
+import { ChatBox, ChatMessageInlineMeta, type ChatMessageInlineMetaProps } from "@mui/x-chat";
+import { useChat, useChatStore, useMessageContext, type ChatPartRendererMap } from "@mui/x-chat/headless";
 import { processStream } from "@mui/x-chat-headless/stream";
 import type { Channel } from "@vibread/core";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { RecordedChip } from "../components/RecordedChip.js";
+import { recordedLabelOf } from "./uiMessages.js";
 import { createMissionChatAdapter, type MissionChatAdapter } from "./missionAdapter.js";
 import { ToolPartCard } from "./ToolPartCard.js";
 
@@ -117,6 +119,21 @@ function DesignOriginNotice({ channel }: { channel?: Channel }) {
   );
 }
 
+/**
+ * Default inline message meta (the standard/non-compact layout renders this one inside the bubble) plus a
+ * "Recorded run · …" chip on messages replayed from a recorded real-model run.
+ */
+function InlineMetaWithRecording(props: ChatMessageInlineMetaProps) {
+  const { message } = useMessageContext();
+  const recorded = recordedLabelOf(message?.metadata);
+  return (
+    <Stack direction="row" sx={{ gap: 1, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap" }}>
+      {recorded && <RecordedChip label={recorded} onLight={message?.role === "user"} />}
+      <ChatMessageInlineMeta {...props} />
+    </Stack>
+  );
+}
+
 /** Reports which approval ids already have a card in the chat, so the page shows only the others separately. */
 function ApprovalIdsReporter({ onChange }: { onChange(ids: string[]): void }) {
   const { messages } = useChat();
@@ -158,7 +175,7 @@ export function MissionChat({
       partRenderers={partRenderers}
       features={{ conversationList: false, conversationHeader: false, attachments: false, suggestions: hasDesign, scrollToBottom: true }}
       suggestions={hasDesign ? SUGGESTIONS : []}
-      slots={{ messageAvatar: null, ...(hasDesign ? { emptyState: DesignOriginNotice } : {}) }}
+      slots={{ messageAvatar: null, messageInlineMeta: InlineMetaWithRecording, ...(hasDesign ? { emptyState: DesignOriginNotice } : {}) }}
       slotProps={{
         emptyState: { channel: designChannel },
         // Wrap follow-up suggestions onto more lines instead of a clipped sideways-scrolling row.

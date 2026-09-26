@@ -317,7 +317,8 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.post("/missions/:id/bench/runs", async (req, res) => {
     const missionId = String(req.params.id);
-    const body = req.body as BenchRunRequest;
+    const body = req.body as BenchRunRequest & { runId?: unknown };
+    const runPrefix = typeof body.runId === "string" && body.runId.startsWith("virtual-") ? "virtual" : "run";
     const revision = await ctx.store.getRevision(missionId, body.revision);
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
     // PLAN item 14: rank single-fault mutants when the background fault dictionary (faults.json) is ready.
@@ -330,7 +331,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
       answers: body.answers,
       kind: body.kind,
       revision: revision.n,
-      runId: `run-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      runId: `${runPrefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       ...(faultDictionary ? { faultDictionary } : {}),
     });
     await ctx.store.saveResults(missionId, revision.n, { bench: [...(revision.results.bench ?? []), result] });
@@ -368,6 +369,8 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const revision = await ctx.store.getRevision(missionId);
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
     const photo = await ctx.runtime.checkPhoto({ missionId, step, jpeg: new Uint8Array(jpeg) });
+    // No credential: the photo wasn't analyzed and the answer is a labeled recorded example — never store it as a check.
+    if (photo.recordedExample) return res.json(photo);
     const hash = await ctx.store.putArtifact(jpeg, "image/jpeg");
     const photos = [...(revision.results.photos ?? []), photo];
     await ctx.store.saveResults(missionId, revision.n, { photos, artifacts: { [`photo-step-${step}.jpg`]: hash } });

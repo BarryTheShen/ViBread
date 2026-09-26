@@ -12,6 +12,7 @@ import {
   Chip,
   CircularProgress,
   Divider,
+  Link,
   MobileStepper,
   Paper,
   Stack,
@@ -40,6 +41,7 @@ import { BuildApiError, fetchBuildState, postBuildStep, postPhotoCheck } from ".
 type BuildStep = BuildState["steps"][number] & { focusImageUrl?: string };
 type ImageView = "focused" | "whole";
 type PhotoVariables = { step: number; file: File };
+type RecordedPhoto = NonNullable<PhotoCheckResult["recordedExample"]>;
 
 const BUILD_QUERY_KEY = "mission-build";
 const POLL_INTERVAL_MS = 1_500;
@@ -345,23 +347,19 @@ function StepCard({ step, total, reducedMotion }: { step: BuildStep; total: numb
   );
 }
 
-function PhotoResult({ result }: { result: PhotoCheckResult }) {
+function PhotoAnswers({ answers, prefix = "" }: { answers: PhotoCheckResult["answers"]; prefix?: string }) {
   return (
-    <Stack component="section" aria-label="Photo check result" spacing={1.25} sx={{ mt: 1.5 }}>
-      <Alert severity="info" icon={<CameraAltOutlined />}>
-        <AlertTitle>Advisory photo check</AlertTitle>
-        {result.summary} This never blocks your build and does not override the board check.
-      </Alert>
-      {result.answers.map((answer) => {
+    <Stack spacing={1}>
+      {answers.map((answer) => {
         const details = statusDetails(answer.status);
         const StatusIcon = details.icon;
         return (
-          <Paper key={answer.part} variant="outlined" sx={{ p: 1.25, borderRadius: 2 }}>
+          <Paper key={`${prefix}${answer.part}`} variant="outlined" sx={{ p: 1.25, borderRadius: 2 }}>
             <Stack direction="row" spacing={1.25} sx={{ alignItems: "flex-start" }}>
               <StatusIcon aria-hidden="true" color={details.color === "default" ? undefined : details.color} sx={{ mt: 0.15 }} />
               <Box sx={{ minWidth: 0 }}>
                 <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
-                  {answer.part}: {details.label}
+                  {prefix}{answer.part}: {details.label}
                 </Typography>
                 <Typography variant="body2" color="text.secondary" sx={{ mt: 0.2, overflowWrap: "anywhere" }}>
                   {answer.note}
@@ -371,6 +369,61 @@ function PhotoResult({ result }: { result: PhotoCheckResult }) {
           </Paper>
         );
       })}
+    </Stack>
+  );
+}
+
+function RecordedPhotoResult({ example }: { example: RecordedPhoto }) {
+  const design = example.design.replace(/\s+\(golden design\)$/i, "");
+  return (
+    <Stack component="section" aria-label="Recorded photo check example" spacing={1.25} sx={{ mt: 1.5 }}>
+      <Alert severity="warning" icon={<CameraAltOutlined />}>
+        <AlertTitle>Photo check needs Claude — here's what it looks like</AlertTitle>
+        <Typography variant="body2">
+          Your photo wasn't checked. Below is a recorded Claude example, not a verdict on your photo.
+        </Typography>
+        <Link href="/settings" underline="hover" sx={{ display: "inline-block", mt: 0.75, py: 0.25 }}>
+          Connect Claude in Settings
+        </Link>
+      </Alert>
+      <Chip label={example.label} variant="outlined" sx={{ alignSelf: "flex-start", minHeight: 36 }} />
+      <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
+        Example: step {example.step} of the {design}
+      </Typography>
+      <Typography variant="body2" color="text.secondary">
+        {example.stepTitle}
+      </Typography>
+      <CardMedia
+        component="img"
+        image={example.imageUrl}
+        alt={`Recorded example image for step ${example.step}: ${example.stepTitle}`}
+        sx={{ width: "100%", maxHeight: 270, objectFit: "contain", borderRadius: 2, bgcolor: "rgba(255,255,255,0.04)" }}
+      />
+      {example.photoWasRender && (
+        <Typography variant="caption" color="text.secondary">
+          No real photo was used: Claude checked ViBread's drawing of this step in place of a phone photo.
+        </Typography>
+      )}
+      <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+        Example answers
+      </Typography>
+      <PhotoAnswers answers={example.answers} prefix="Example · " />
+    </Stack>
+  );
+}
+
+function PhotoResult({ result }: { result: PhotoCheckResult }) {
+  if (result.recordedExample) {
+    return <RecordedPhotoResult example={result.recordedExample} />;
+  }
+
+  return (
+    <Stack component="section" aria-label="Photo check result" spacing={1.25} sx={{ mt: 1.5 }}>
+      <Alert severity="info" icon={<CameraAltOutlined />}>
+        <AlertTitle>Advisory photo check</AlertTitle>
+        {result.summary} This never blocks your build and does not override the board check.
+      </Alert>
+      <PhotoAnswers answers={result.answers} />
       <Typography variant="caption" color="text.secondary">
         Model: {result.model}
       </Typography>

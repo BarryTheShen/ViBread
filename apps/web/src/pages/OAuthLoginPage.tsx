@@ -4,16 +4,22 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
 import CardContent from "@mui/material/CardContent";
-import Divider from "@mui/material/Divider";
+import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
-import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
 import { authClient } from "../api/auth.js";
 import { HttpError } from "../api/client.js";
 import { useMe } from "../api/hooks.js";
 import { oauthClient, operatorLogin } from "./oauth.js";
+
+/** Single-operator servers have one built-in account; the server bootstraps its credential (Channels' contract). */
+const OPERATOR_EMAIL = "operator@vibread.local";
+
+const LOGIN_ERRORS: Record<string, string> = {
+  link_expired: "This sign-in link expired. Start the connection again from the app.",
+  invalid_credentials: "ViBread couldn't sign you in. Start the connection again from the app.",
+};
 
 /** OAuth sign-in step for apps like Claude Code connecting to ViBread (the server sends the browser here). */
 export default function OAuthLoginPage() {
@@ -21,17 +27,12 @@ export default function OAuthLoginPage() {
   const clientId = params.get("client_id") ?? "";
   const client = useQuery({ queryKey: ["oauth-client", clientId], queryFn: ({ signal }) => oauthClient(clientId, signal), enabled: Boolean(clientId), retry: false });
   const me = useMe();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
   const login = useMutation({
-    mutationFn: () => operatorLogin(email.trim(), password),
+    mutationFn: () => operatorLogin(OPERATOR_EMAIL, ""),
     onSuccess: ({ redirect }) => window.location.assign(redirect),
   });
   const appName = client.data?.name ?? "An app";
-  const failure =
-    login.error instanceof HttpError && login.error.code === "invalid_credentials"
-      ? "That email and password don't match. Check them and try again."
-      : login.error?.message;
+  const failure = login.error instanceof HttpError && LOGIN_ERRORS[login.error.code] ? LOGIN_ERRORS[login.error.code] : login.error?.message;
 
   return (
     <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 2 }}>
@@ -59,40 +60,27 @@ export default function OAuthLoginPage() {
               {appName} wants to work with your ViBread missions. Sign in first; next you'll see exactly what it can do.
             </Typography>
           )}
-          <Stack
-            component="form"
-            sx={{ gap: 2 }}
-            onSubmit={(e) => {
-              e.preventDefault();
-              login.mutate();
-            }}
-          >
-            <TextField label="Email" type="email" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} required autoFocus />
-            <TextField
-              label="Password"
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-            />
-            {failure && <Alert severity="error">{failure}</Alert>}
-            <Button type="submit" variant="contained" size="large" disabled={!email.trim() || !password || login.isPending || !clientId}>
-              {login.isPending ? "Signing in…" : "Sign in"}
+          {me.isPending ? (
+            <Skeleton variant="rounded" height={48} />
+          ) : me.data?.auth === "google" ? (
+            <Button
+              variant="contained"
+              size="large"
+              onClick={() => void authClient.signIn.social({ provider: "google", callbackURL: window.location.href })}
+            >
+              Continue with Google
             </Button>
-          </Stack>
-          {me.data?.auth === "google" && (
+          ) : (
             <>
-              <Divider>or</Divider>
-              <Button
-                variant="outlined"
-                size="large"
-                onClick={() => void authClient.signIn.social({ provider: "google", callbackURL: window.location.href })}
-              >
-                Continue with Google
+              <Typography variant="body2" sx={{ color: "text.secondary" }}>
+                This ViBread runs for one person on this computer, so there's no password: continue as the operator.
+              </Typography>
+              <Button variant="contained" size="large" disabled={!clientId || client.isError || login.isPending} onClick={() => login.mutate()}>
+                {login.isPending ? "Signing in…" : `Continue as ${me.data?.user?.name ?? "Operator"}`}
               </Button>
             </>
           )}
+          {failure && <Alert severity="error">{failure}</Alert>}
         </CardContent>
       </Card>
     </Box>

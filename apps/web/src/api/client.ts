@@ -44,6 +44,11 @@ export async function errorFromResponse(res: Response): Promise<HttpError> {
     try {
       const body: unknown = JSON.parse(text);
       if (isApiError(body)) return new HttpError(res.status, body.error.code, body.error.message);
+      // OAuth-style bodies (`{ error: "invalid_credentials", error_description? }`) from the OAuth/MCP routes.
+      if (typeof body === "object" && body !== null && "error" in body && typeof body.error === "string") {
+        const description = "error_description" in body && typeof body.error_description === "string" ? body.error_description : body.error;
+        return new HttpError(res.status, body.error, description);
+      }
     } catch {
       // not JSON: fall through to the raw text
     }

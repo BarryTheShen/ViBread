@@ -1,13 +1,15 @@
 // Pre-warmed demo missions (PLAN §3): creates one mission per golden design with its revision evaluated by the real
 // pipeline (checks, compile, simulation, layout, steps, schematic, bench firmware), owned by the single operator.
-// Usage: DATA_DIR=./data npx tsx scripts/seed-golden.ts [moon-phase-lamp|knob-night-light|launch-control ...]
+// Also seeds the recorded real-model moon-lamp run (fixtures/recorded, labeled as a recording).
+// Usage: DATA_DIR=./data npx tsx scripts/seed-golden.ts [moon-phase-lamp|knob-night-light|launch-control|recorded ...]
 import { GOLDEN } from "@vibread/fixtures";
+import { seedRecordedMission } from "../apps/server/src/agents/recorded.js";
 import { loadConfig } from "../apps/server/src/config.js";
 import { createAppContext } from "../apps/server/src/context.js";
 
 const wanted = new Set(process.argv.slice(2));
 const designs = GOLDEN.filter((g) => wanted.size === 0 || wanted.has(g.key));
-if (designs.length === 0) throw new Error(`unknown design key(s): ${[...wanted].join(", ")}`);
+if (designs.length === 0 && !wanted.has("recorded")) throw new Error(`unknown design key(s): ${[...wanted].join(", ")}`);
 
 const { ctx, close } = createAppContext({ config: loadConfig() });
 try {
@@ -37,6 +39,19 @@ try {
     await ctx.machine.send(mission.id, { type: "DESIGN_READY", revision: revision.n });
     const verdicts = reports.map((r) => `${r.console} ${r.verdict}`).join(" · ");
     console.log(`${golden.key}: mission ${mission.id} r${revision.n} in ${Math.round(performance.now() - started)} ms — ${verdicts}`);
+  }
+  // The recorded real-model run (PLAN §4 named fallback): replayed and labeled as a recording, never as a live run.
+  if (wanted.size === 0 || wanted.has("recorded")) {
+    const started = performance.now();
+    const seeded = await seedRecordedMission({
+      store: ctx.store,
+      messages: ctx.messages,
+      pipeline: ctx.runtime.pipeline,
+      sendMachine: (missionId, event) => ctx.machine.send(missionId, event),
+      ownerId: operator.id,
+    });
+    const verdicts = seeded.reports.map((r) => `${r.console} ${r.verdict}`).join(" · ");
+    console.log(`recorded moon-phase-lamp run: mission ${seeded.missionId} r${seeded.designRevision}+r${seeded.testedRevision} in ${Math.round(performance.now() - started)} ms — ${verdicts}`);
   }
   // Fault dictionaries (faults.json) build in the background; wait so they're saved before the database closes.
   const waiting = performance.now();

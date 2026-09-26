@@ -168,4 +168,29 @@ export interface PhotoCheckResult {
   /** Always advisory: never blocks progress, never overrides telemetry. */
   advisory: true;
   model: string;
+  /**
+   * Set when Claude isn't connected: the user's photo was NOT analyzed (`answers` is empty) and this is a recorded example
+   * of what a photo check looks like, shown only as such.
+   */
+  recordedExample?: RecordedPhotoExample;
+}
+
+/** A real Claude photo-check answer captured earlier, shown when no credential exists (PLAN §4 named fallback). */
+export interface RecordedPhotoExample {
+  /** Chip text, e.g. "Recorded example · Claude Sonnet 5 · Sep 26". */
+  label: string;
+  /** Plain explanation of what this is and what it is not. */
+  note: string;
+  model: string;
+  recordedAt: string;
+  /** Design and build step the example is about (not necessarily the user's). */
+  design: string;
+  step: number;
+  stepTitle: string;
+  /** URL of the picture Claude was shown for that step. */
+  imageUrl: string;
+  /** True when no real photo existed and Claude was shown ViBread's drawing instead. */
+  photoWasRender: boolean;
+  answers: PhotoPartAnswer[];
+  summary: string;
 }

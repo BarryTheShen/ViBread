@@ -436,7 +436,7 @@ export default function BenchPage(): ReactElement {
         result = await readJson<BenchRunResponse>(`/api/missions/${encodeURIComponent(missionId)}/bench/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
+          body: JSON.stringify({ ...request, runId: runner.runId }),
         });
       } catch (serverReason: unknown) {
         if (mode !== "virtual") throw serverReason;
