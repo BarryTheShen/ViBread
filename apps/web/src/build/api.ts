@@ -47,6 +47,20 @@ function missionUrl(missionId: string, suffix: string): string {
   return `/api/missions/${encodeURIComponent(missionId)}${suffix}`;
 }
 
+export interface PhoneMission {
+  id: string;
+  title: string;
+  currentStep: number;
+}
+
+export function fetchPhoneMissions(signal?: AbortSignal): Promise<PhoneMission[]> {
+  return requestJson<PhoneMission[]>("/api/phone/missions", {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+}
+
 export function fetchBuildState(missionId: string, signal?: AbortSignal): Promise<BuildState> {
   return requestJson<BuildState>(missionUrl(missionId, "/build"), {
     method: "GET",

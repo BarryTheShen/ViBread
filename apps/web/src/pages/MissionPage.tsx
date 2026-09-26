@@ -66,6 +66,12 @@ export default function MissionPage() {
   const contextValue = useMemo(() => ({ missionId, detail }), [missionId, detail]);
   const released = useRevision(missionId, detail?.mission.releasedRevision);
   const lastRunVirtual = released.data?.results.bench?.at(-1)?.runId.startsWith("virtual-") ?? false;
+  const benchRuns = released.data?.results.bench ?? [];
+  const benchState: "real-pass" | "virtual-pass" | "none" = benchRuns.some((b) => b.verdict === "pass" && !b.runId.startsWith("virtual-"))
+    ? "real-pass"
+    : benchRuns.some((b) => b.verdict === "pass")
+      ? "virtual-pass"
+      : "none";
   const connections = useConnections();
   // Nothing powers the agent: no connected Claude account and no server key.
   const claudeMissing = connections.data?.claude?.using === "none";
@@ -123,7 +129,7 @@ export default function MissionPage() {
   const changeMode = (mode: PermissionMode) =>
     setMode.mutate(mode, { onSuccess: () => setNotice(`Mode set to ${mode === "ask" ? "Ask every time" : mode[0].toUpperCase() + mode.slice(1)}.`) });
 
-  const drawer = <PhaseDrawer missionId={missionId} phase={m.phase} timeline={timeline.data ?? []} />;
+  const drawer = <PhaseDrawer missionId={missionId} phase={m.phase} timeline={timeline.data ?? []} bench={benchState} />;
 
   return (
     <MissionContext.Provider value={contextValue}>

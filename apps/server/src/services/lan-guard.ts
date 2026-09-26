@@ -86,7 +86,7 @@ export class LanGuard {
 
   middleware(): RequestHandler {
     return (req: Request, res: Response, next: NextFunction): void => {
-      if (!this.active || this.isLoopback(req) || isBearerRoute(req.path)) {
+      if (!this.active || this.isLoopback(req) || isBearerRoute(req.path) || isPublicStatic(req.path)) {
         next();
         return;
       }
@@ -96,8 +96,9 @@ export class LanGuard {
         this.saveDevice(deviceId, req.headers["user-agent"]);
         const cleanUrl = new URL(req.originalUrl, "http://localhost");
         cleanUrl.searchParams.delete("pair");
+        const cleanPath = cleanUrl.pathname === "/" ? "/b" : cleanUrl.pathname;
         res.setHeader("Set-Cookie", `${COOKIE_NAME}=${deviceId}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${MAX_AGE_SECONDS}`);
-        res.redirect(302, `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}` || "/");
+        res.redirect(302, `${cleanPath}${cleanUrl.search}${cleanUrl.hash}` || "/b");
         return;
       }
       const cookies = parseCookies(req.headers.cookie);
@@ -110,7 +111,7 @@ export class LanGuard {
         return;
       }
       if (req.headers.accept?.includes("text/html")) {
-        res.status(403).type("html").send(`<!doctype html><meta charset="utf-8"><title>ViBread pairing required</title><p>${PAIRING_MESSAGE}</p>`);
+        res.status(403).type("html").send(`<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><meta charset="utf-8"><title>ViBread pairing required</title><p>${PAIRING_MESSAGE}</p><p><a href="/b">Open Build Mode</a></p>`);
       } else {
         res.status(403).json({ error: { code: "lan_pairing_required", message: PAIRING_MESSAGE } });
       }
@@ -194,7 +195,7 @@ const PHONE_SCOPE_MESSAGE = "This phone can only follow the build steps. Use the
 function phoneRequestAllowed(req: Request): boolean {
   const path = req.path;
   if (!path.startsWith("/api/")) {
-    return req.method === "GET" && (path === "/index.html" || path.startsWith("/b/") || /\.[A-Za-z0-9]+$/.test(path));
+    return req.method === "GET" && (path === "/" || path === "/index.html" || path === "/b" || path.startsWith("/b/") || /\.[A-Za-z0-9]+$/.test(path));
   }
   if (req.method === "GET" && path === "/api/me") return true;
   if (req.method === "GET" && path === "/api/oauth/providers") return true;
@@ -214,6 +215,10 @@ function denyPhoneScope(req: Request, res: Response): void {
   } else {
     res.status(403).json({ error: { code: "phone_scope_only", message: PHONE_SCOPE_MESSAGE } });
   }
+}
+
+function isPublicStatic(path: string): boolean {
+  return path === "/manifest.webmanifest" || path === "/favicon.ico" || path.startsWith("/icons/") || path.startsWith("/icon-");
 }
 
 function isBearerRoute(path: string): boolean {

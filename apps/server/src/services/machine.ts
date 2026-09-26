@@ -118,7 +118,7 @@ export class PersistentMissionMachine implements MissionMachine {
     const after = this.phaseFor(actor.getSnapshot().value);
     actor.stop();
     await this.persist(missionId, snapshot, after);
-    if (before !== after || event.type === "BUILD_STEP") {
+    if (before !== after) {
       await this.deps.store.appendEvent({
         missionId,
         channel: "system",

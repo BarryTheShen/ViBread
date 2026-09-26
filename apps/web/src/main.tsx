@@ -79,6 +79,7 @@ const router = createBrowserRouter([
       { path: "/", element: <HomePage /> },
       { path: "/m/:missionId", element: <MissionPage /> },
       { path: "/m/:missionId/bench", element: <BenchPage /> },
+      { path: "/b", element: <BuildModePage /> },
       { path: "/b/:missionId", element: <BuildModePage /> },
       { path: "/settings", element: <SettingsPage /> },
       { path: "/login", element: <OAuthLoginPage /> },
