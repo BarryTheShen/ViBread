@@ -43,8 +43,9 @@ export function createAiToolset(options: AiToolsetOptions): AiToolset {
         const mission = await store.getMission(ctx.missionId);
         const toolCtx: ToolContext = { ...ctx, mode: mission?.mode ?? "review", ...(abortSignal ? { signal: abortSignal } : {}) };
         if (def.actionClass === "physical") {
-          const decision = await evaluatePolicy({ broker, store, def, ctx, args: input });
+          // The handler only validates and describes (no side effects); run it first so a refused request files nothing.
           const output = (await def.handler(toolCtx, input)) as Record<string, unknown>;
+          const decision = await evaluatePolicy({ broker, store, def, ctx, args: input });
           return { ...output, status: "waiting-for-bench-click", ...(decision.request ? { approvalId: decision.request.id } : {}) };
         }
         const approved = approvals.get(toolCallId);

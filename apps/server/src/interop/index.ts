@@ -374,6 +374,7 @@ async function operatorPassword(auth: Auth<BetterAuthOptions>, ctx: AppContext):
 
 /** Mount JSON contracts consumed by the SPA OAuth pages. */
 function mountOAuthApi(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
+  app.use("/api/oauth", express.json());
   app.get("/api/oauth/client", async (request, response, next) => {
     try {
       const clientId = typeof request.query.client_id === "string" ? request.query.client_id : "";

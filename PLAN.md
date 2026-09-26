@@ -5,29 +5,30 @@
 > Evidence: [`research/`](research/) (technology research, sources inline) and [`research/audit/`](research/audit/)
 > (hands-on verification of every package and claim used below: installs, type checks, offline smokes).
 
-## Build status — Sat Sep 26, ≈11:00 CT
+## Build status — Sat Sep 26, ≈13:00 CT
 
-Everything on the ranked list (§4, items 1–16) is built, committed, and tested in the container: 24 test files / 124 tests
-(`npm test`), typecheck clean. An independent audit (round 1: 17 findings) and a code review were run against the plan; their
-fixes are in `59462ea` except the items marked *in progress*. What is **not** verified yet needs something only the team has:
-real hardware, a Claude credential, and accounts (Google/GitHub/Photon) — see "Needs you" below.
+Everything on the ranked list (§4, items 1–16) is built, committed, and tested in the container: 27 test files / 139 tests
+(`npm test`), typecheck clean. Two independent audit rounds (17 + 11 findings) and a code review were run against the plan;
+their fixes are committed, audit round 3 is next. What is **not** verified yet needs something only the team has: real
+hardware, a Claude credential, and accounts (Google/GitHub/Photon) — see "Needs you" below. Plain-language overview:
+[HOW-IT-WORKS.md](HOW-IT-WORKS.md).
 
 | # | Item | State | Proof (live unless noted) |
 |---|---|---|---|
 | 1 | Core v0 | Built | Virtual board: bench firmware (Eta template) in the simulator, safe idle → rails → read-before-drive self-test → diagnosis. LED pulses measured ≤ 4.02 ms, 1.1 % duty. An output jumper in a rail row is reported stuck from passive reads and never driven (simulated fault). **Real board untested** |
-| 2 | Workspace + agents + test author + RETRO | Built | MUI workspace/approval cards/modes verified in the browser. Agents verified with the AI SDK mock model (approvals signed, exactly-once, tamper rejected). A **real Claude** (Opus 5.5 via oh-my-pi) designed a night light through `/mcp` on the first try: EECOM/GUIDO/FAO GO. All four prompts evaluated on real Claude through oh-my-pi; RETRO now catches a subtly wrong design (3/3 NO-GO) without false alarms on the goldens. ViBread's own runtime (AI SDK → Anthropic) not yet run with a real key. Recorded runs for the no-credential demo *in progress* |
-| 3, 10 | CAPCOM (iMessage) | Built | Terminal provider: link code → brief → status → poll fallback; links persist across restarts; `mission N`; poll votes map to the right approval; self-test prompts answerable from iMessage; iMessage pre-approvals show at the bench and still need the click. **Cloud iMessage untested** (no Photon project) |
-| 4 | Photo check | Built | Upload → HEIC/JPEG → per-part advisory answers (mock model). Real vision untested |
+| 2 | Workspace + agents + test author + RETRO | Built | MUI workspace/approval cards/modes verified in the browser. Agents verified with the AI SDK mock model (approvals signed, exactly-once, tamper rejected). A **real Claude** (Opus 5.5 via oh-my-pi) designed a night light through `/mcp` on the first try: EECOM/GUIDO/FAO GO. All four prompts evaluated on real Claude through oh-my-pi; RETRO now catches a subtly wrong design (3/3 NO-GO) without false alarms on the goldens. ViBread's own runtime (AI SDK → Anthropic) not yet run with a real key. For demos without a key the seed adds a **recorded real run** (Opus 5.5 design, Sonnet 5 tests + RETRO vote), labeled as a recording everywhere |
+| 3, 10 | CAPCOM (iMessage) | Built | Terminal provider: link code → brief → status → poll fallback; links and mission attachments survive restarts; `mission N`; poll votes map to the right approval; self-test prompts answerable from iMessage; agent and iMessage bench requests show at the bench and still need the click (end-to-end test). **Cloud iMessage untested** (no Photon project) |
+| 4 | Photo check | Built | Upload → HEIC/JPEG → per-part advisory answers. Real Claude vision run once on a rendered step image (shown as a labeled example when no key exists); a real phone photo untested |
 | 5 | Checks (EECOM/GUIDO) | Built | Rule tests for every broken variant; 220 Ω/red worst case 16.5 mA; core warnings filtered |
 | 6, 12 | Schematic, replay, live "Try it" | Built | tscircuit (isolated runtime) SVG/PNG; replay; real-time sim in a worker: button presses step the moon phases exactly as the tests say |
 | 7 | Layout + LVS + steps | Built | Moon lamp: 15 jumpers, 33 steps, plug state on every step, phone focus crops; bb-400 fits |
-| 8, 14 | Verification + fault dictionary | Built | Golden → "Houston, we are GO" with no fix suggested; 10-fault table: every fault except a wrong resistor value (electrically invisible to the self-test) fails, true cause first in 7 and second in 3; highlighted holes |
+| 8, 14 | Verification + fault dictionary | Built | Golden → "Houston, we are GO" with no fix suggested. Simulated fault table on all three goldens (25 cases): the self-test catches 23 (a wrong resistor value on Moon and Knob is electrically invisible to it); the true cause ranks first in 15, second in 7, third in 1; highlighted holes. Mission complete requires a real-board pass |
 | 9, 15 | Sign-in, OAuth 2.1, A2A | Built | Single-operator mode live. OAuth 2.1 (DCR + PKCE + consent + token → MCP tools) end to end in a regression test; real Claude Code 2.1.283 connects with the bearer command. Google/GitHub are config-gated (redirects tested, no real client yet) |
 | 11 | Claude Code MCP + A2A | Built | `claude mcp list` → Connected; A2A ask-back → completed artifact |
 | 13 | SPICE cross-check | Built | Part of EECOM's evidence: fixed per-color diode models at three corners; red LED 13.99 mA SPICE vs 13.41 mA analytic; goldens show no deviation, a wrong Vf assumption is flagged |
-| 16 | Connect your Claude account | Built | oh-my-pi `login anthropic` + auth-broker + per-user auth-gateway; real claude.ai sign-in page reached from Settings, bogus code rejected, fallback to server key tested with a protocol fake. Fast failure on stale codes + random broker port *in progress*. **Real sign-in needs you** |
-| — | Desktop app (Electron: macOS arm64/x64, Windows x64, Linux x64) | *In progress* | Server + UI + bundled Node in one installer; Arduino compiler downloaded on first launch; USB via Electron's Web Serial; built and smoke-tested per OS on GitHub Actions |
-| — | Phone as a home-screen web app | *In progress* | Manifest + icons; Build Mode opens like an app |
+| 16 | Connect your Claude account | Built | oh-my-pi `login anthropic` + auth-broker (random loopback port) + per-user auth-gateway; real claude.ai sign-in page reached from Settings; with the real omp a stale code fails in 0.17 s and a wrong code in ~1 s; fallback to server key tested with a protocol fake. **Real sign-in needs you** |
+| — | Desktop app (Electron) | Built (Linux) | **Linux x64 AppImage** released as `desktop-v0.1.0-linux` (.deb built and install-tested with apt); packaged app smoke-tested on CI for Linux and macOS arm64/x64 (Arduino compiler download + seed + screenshots; first run 153–247 s). Windows x64 CI in progress. Real Arduino over USB untested |
+| — | Phone as a home-screen web app | Built | Manifest + icons; iPhone "Add to Home Screen" tip in Build Mode |
 
 Also added while integrating: human **GO for build** (Flight Director) when the agent isn't the one releasing; mission
 completion (LAUNCH → "Does it work?" → DONE); the independent tests get written on GO for build once a credential exists.
@@ -35,9 +36,9 @@ completion (LAUNCH → "Does it work?" → DONE); the independent tests get writ
 **Needs you (in order):**
 1. **A Claude credential:** Settings → *Connect your Claude account* (paste the code), or put `ANTHROPIC_API_KEY` in `.env`. Then
    run one design from Home and watch: design agent → approval card → test author → RETRO → GO for build.
-2. **The board:** Chrome/Edge on the bench laptop → Bench → *Use USB board*: safe firmware flash (webserial-flasher), rails,
-   self-test, calibration, app flash. Fallback: `arduino-cli upload`. Tell the build which board/USB chip you have (§10 Q1).
-3. **Hostname + accounts:** stable HTTPS host (§10 Q3), Google/GitHub OAuth clients, Photon project + `HACKWITHPHOTON`.
+2. **The board:** the Linux desktop app (or Chrome/Edge on `localhost`) → Bench → *Use USB board*: safe firmware flash
+   (webserial-flasher), rails, self-test, calibration, app flash. Fallback: the `arduino-cli upload` command the bench shows.
+   Tell the build which board/USB chip you have (§10 Q1).
 
 ## 0. TL;DR
 

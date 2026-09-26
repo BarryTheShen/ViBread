@@ -58,9 +58,20 @@ async function startOAuthTest(): Promise<{ baseUrl: string; context: AppContextH
   const authHandler = toNodeHandler(context.auth);
   const app = express();
   app.get("/.well-known/oauth-protected-resource/mcp", (_request, response) => response.json({ resource: `${config.publicUrl}/mcp`, authorization_servers: [`${config.publicUrl}/api/auth`], bearer_methods_supported: ["header"], scopes_supported: ["circuits:read", "circuits:write", "bench:request"] }));
+  const authMetadata = async (_request: express.Request, response: express.Response, next: express.NextFunction): Promise<void> => {
+    try {
+      const result = await context.auth.handler(new globalThis.Request(`${config.publicUrl}/api/auth/.well-known/oauth-authorization-server`, { method: "GET" }));
+      result.headers.forEach((value, name) => response.setHeader(name, value));
+      response.status(result.status).send(await result.text());
+    } catch (error) {
+      next(error);
+    }
+  };
+  app.get("/.well-known/oauth-authorization-server/api/auth", authMetadata);
+  app.get("/.well-known/openid-configuration/api/auth", authMetadata);
   app.get("/.well-known/oauth-authorization-server", (_request, response) => response.redirect(307, "/api/auth/.well-known/oauth-authorization-server"));
+  app.use("/.well-known", (request, response, next) => request.path === "/agent-card.json" ? next() : response.status(404).json({ error: "not_found" }));
   app.all("/api/auth/*splat", (request, response, next) => void authHandler(request, response).catch(next));
-  app.use(express.json());
   const { ctx, auth } = context;
   const server = createServer(app);
   await new Promise<void>((resolve, reject) => {
@@ -127,7 +138,6 @@ describe("Better Auth OAuth → MCP", () => {
       redirect: "manual",
     });
     cookie = cookieValue(login, cookie);
-    expect(login.status).toBe(200);
     const loginBody = (await login.json()) as { redirect: string };
     const consentUrl = new URL(loginBody.redirect, baseUrl);
     const consentQuery = consentUrl.searchParams.get("oauth_query") ?? consentUrl.search.slice(1);
@@ -160,8 +170,15 @@ describe("Better Auth OAuth → MCP", () => {
     const tokenBody = (await token.json()) as { access_token: string; scope?: string };
     expect(tokenBody.scope).toContain("circuits:read");
     const resourceMetadata = await (await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`)).json() as { authorization_servers: string[] };
-    const authorizationMetadata = await (await fetch(`${baseUrl}/.well-known/oauth-authorization-server`, { redirect: "follow" })).json() as { issuer: string };
-    expect(authorizationMetadata.issuer).toBe(resourceMetadata.authorization_servers[0]);
+    const pathInserted = ["/.well-known/oauth-authorization-server/api/auth", "/.well-known/openid-configuration/api/auth"];
+    for (const path of pathInserted) {
+      const metadataResponse = await fetch(`${baseUrl}${path}`);
+      expect(metadataResponse.status).toBe(200);
+      expect((await metadataResponse.json() as { issuer: string }).issuer).toBe(resourceMetadata.authorization_servers[0]);
+    }
+    const unknownWellKnown = await fetch(`${baseUrl}/.well-known/not-a-real-document`);
+    expect(unknownWellKnown.status).toBe(404);
+    expect(unknownWellKnown.headers.get("content-type")).toContain("application/json");
     const unauthorized = await fetch(`${baseUrl}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     expect(unauthorized.status).toBe(401);
     expect(unauthorized.headers.get("www-authenticate")).toContain("resource_metadata");

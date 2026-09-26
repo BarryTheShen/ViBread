@@ -7,7 +7,8 @@ import { revisionHash, type Circuit, type DecodedLine, type DeviceLine, type Sel
 import { applyFault, calibrationMacros, LineDecoder, evaluateRun, planSelfTest } from "./index.js";
 
 const moon = GOLDEN.find((entry) => entry.key === "moon-phase-lamp");
-if (moon === undefined) throw new Error("moon-phase-lamp fixture is required");
+const knob = GOLDEN.find((entry) => entry.key === "knob-night-light");
+if (moon === undefined || knob === undefined) throw new Error("golden moon and knob fixtures are required");
 
 interface VirtualRun {
   lines: DeviceLine[];
@@ -97,5 +98,16 @@ describe("virtual bench protocol", () => {
       expect(result.diagnosis.candidates.slice(0, 2).map((candidate) => candidate.cause), `${fault.name}: ${JSON.stringify({ diagnosis: result.diagnosis, results: result.results })}`).toContain(fault.fault);
       expect(result.diagnosis.candidates[0]?.highlight.holes.length, fault.name).toBeGreaterThan(0);
     }
+  }, 120_000);
+  it("runs the Knob Night-Light golden through the same virtual bench script", async () => {
+    const plan = planSelfTest(knob.circuit, revisionHash(knob.circuit));
+    const compiled = await compileBenchFirmware(plan);
+    expect(compiled.ok, compiled.log).toBe(true);
+    if (!compiled.ok || compiled.hex === undefined) throw new Error("knob bench firmware did not compile");
+    const layout = layoutBoard(knob.circuit);
+    const run = runVirtual(knob.circuit, plan, compiled.hex);
+    expect(run.invalid, JSON.stringify(run.invalid)).toHaveLength(0);
+    const result = await evaluateRun({ circuit: knob.circuit, layout, plan, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: "virtual-knob" });
+    expect(result.verdict, JSON.stringify(result.results)).toBe("pass");
   }, 120_000);
 });

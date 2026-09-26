@@ -1,5 +1,6 @@
 import CelebrationIcon from "@mui/icons-material/Celebration";
 import RocketLaunchIcon from "@mui/icons-material/RocketLaunch";
+import UsbIcon from "@mui/icons-material/Usb";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -10,6 +11,8 @@ import { keyframes } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import type { MissionPhase } from "@vibread/core";
 import { useMemo } from "react";
+import { Link as RouterLink } from "react-router";
+import { HttpError } from "../api/client.js";
 import { useConfirmMission } from "../api/hooks.js";
 
 const rise = keyframes`
@@ -76,19 +79,44 @@ export function MissionComplete({
     );
   }
   if (phase !== "LAUNCH") return null;
+  // The server refuses completion on a virtual pass (409 real_board_required); treat that answer like a virtual run.
+  const realBoardRequired = virtualBoard || (confirm.error instanceof HttpError && confirm.error.code === "real_board_required");
+  if (realBoardRequired) {
+    return (
+      <Paper variant="outlined" role="region" aria-label="Build it for real" sx={{ mx: 2, mt: 1, p: 2, borderColor: "info.main", borderWidth: 2 }}>
+        <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 0.5 }}>
+          <UsbIcon color="info" />
+          <Typography variant="overline" sx={{ color: "info.main", lineHeight: 1.4 }}>
+            Virtual board · passed
+          </Typography>
+        </Stack>
+        <Typography variant="body1" sx={{ fontWeight: 600, mb: 1.5 }}>
+          The virtual board passed. Build it for real and run the bench with your Arduino to complete the mission.
+        </Typography>
+        <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
+          <Button component={RouterLink} to={`/m/${missionId}/bench`} variant="contained" startIcon={<UsbIcon />}>
+            Open the bench
+          </Button>
+          <Button component={RouterLink} to={`/b/${missionId}`} variant="outlined">
+            Build steps
+          </Button>
+        </Stack>
+      </Paper>
+    );
+  }
   return (
     <Paper variant="outlined" role="region" aria-label="Does it work?" sx={{ mx: 2, mt: 1, p: 2, borderColor: "success.main", borderWidth: 2 }}>
       <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 0.5 }}>
         <RocketLaunchIcon color="success" />
         <Typography variant="overline" sx={{ color: "success.main", lineHeight: 1.4 }}>
-          {virtualBoard ? "Launched · the virtual self-test passed" : "Launched · the self-test passed"}
+          Launched · the self-test passed
         </Typography>
       </Stack>
       <Typography variant="h3" component="p">
         Does it work the way you wanted?
       </Typography>
       <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
-        {virtualBoard ? "Your sketch is running on the virtual board now: try it on the bench page, then on your real Arduino." : "Try it for real: your sketch is running on the board now."}
+        Try it for real: your sketch is running on the board now.
       </Typography>
       <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
         <Button variant="contained" color="success" disabled={confirm.isPending} onClick={() => confirm.mutate()}>

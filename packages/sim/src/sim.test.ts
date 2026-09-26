@@ -118,10 +118,20 @@ describe("avr8js golden simulation", () => {
     const on = await runScenario({ circuit: design.circuit, hex: readFileSync(design.hexFile, "utf8"), scenario: design.suite.scenarios[1] });
     const offMessage = off.result.steps.find((step) => "expect-part" in step.step)?.message ?? "";
     const onMessage = on.result.steps.find((step) => "expect-part" in step.step)?.message ?? "";
-    expect(offMessage).toContain("LED1 was off for 100%");
-    expect(offMessage).toContain("needed ≤ 10%");
-    expect(onMessage).toContain("LED1 was on for 100%");
-    expect(onMessage).toContain("needed ≥ 90%");
+    expect(offMessage).toContain("LED1 was off as expected (lit 0% of the window)");
+    expect(onMessage).toContain("LED1 was on as expected (lit 100% of the window)");
+    const failure: Scenario = {
+      id: "T99",
+      title: "Expected-on failure",
+      clauses: ["C1"],
+      categories: ["normal"],
+      setup: { analog: { POT1: 0 } },
+      steps: [{ wait: 100 }, { "expect-part": { part: "LED1", state: "on", windowMs: 100 } }],
+    };
+    const failed = await runScenario({ circuit: design.circuit, hex: readFileSync(design.hexFile, "utf8"), scenario: failure });
+    const failureMessage = failed.result.steps.find((step) => "expect-part" in step.step)?.message ?? "";
+    expect(failed.result.ok).toBe(false);
+    expect(failureMessage).toContain("LED1 should be on (lit ≥ 90% of the window) but was lit 0%");
   }, 30_000);
   it("reports LED partState as lit-window duty", () => {
     const knob = GOLDEN.find((entry) => entry.key === "knob-night-light");
