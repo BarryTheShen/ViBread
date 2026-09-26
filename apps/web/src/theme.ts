@@ -86,7 +86,8 @@ export const THEME_TOKENS = {
 } as const;
 
 export const MONO_FONT = '"JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
-export const INTER_FONT = 'Inter, "Helvetica Neue", Arial, sans-serif';
+// "@fontsource-variable/inter" registers the family as "Inter Variable"; plain "Inter" never matches it.
+export const INTER_FONT = '"Inter Variable", Inter, "Helvetica Neue", Arial, sans-serif';
 export const LORA_FONT = 'Lora, Georgia, "Times New Roman", serif';
 
 const focusRing = {

@@ -1,5 +1,7 @@
 import "@fontsource-variable/inter";
 import "@fontsource/lora/400.css";
+import "@fontsource/lora/500.css";
+import "@fontsource/lora/600.css";
 import "@fontsource/jetbrains-mono/400.css";
 import "@fontsource/jetbrains-mono/600.css";
 import Box from "@mui/material/Box";
