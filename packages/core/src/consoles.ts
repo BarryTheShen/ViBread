@@ -33,6 +33,11 @@ export interface Finding {
   /** What to change. */
   fix?: string;
   refs?: FindingRefs;
+  /**
+   * True when the problem is ViBread's (a tool limit or bug), not the design: the design agent must not redesign to
+   * work around it, and the user is told plainly.
+   */
+  toolSide?: boolean;
 }
 
 export type Verdict = "GO" | "NO-GO" | "PENDING" | "SKIPPED";

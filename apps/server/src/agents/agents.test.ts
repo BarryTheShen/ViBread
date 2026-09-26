@@ -260,8 +260,14 @@ describe("design agent", () => {
     });
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ error: { code: "claude_not_connected", message: expect.stringContaining("Claude is not connected") } });
-    await expect(runtime.missions.say(mission.id, "hi", HUMAN)).rejects.toMatchObject({ code: "claude_not_connected" });
-    expect(await deps.messages.list(mission.id)).toEqual([]);
+    // The message and the reason stay in the chat after a reload (IQA2-09), and the timeline says why.
+    const history = await deps.messages.list(mission.id);
+    expect(history.map((m) => [m.role, m.parts.map((p) => (p.type === "text" ? p.text : p.type)).join("")])).toEqual([
+      ["user", "hi"],
+      ["assistant", expect.stringContaining("Claude is not connected")],
+    ]);
+    expect((await runtime.missions.events(mission.id)).filter((e) => e.kind === "agent.error").map((e) => e.text)).toEqual([expect.stringContaining("Claude is not connected")]);
+    expect((await runtime.missions.detail(mission.id)).agentBusy).toBe(false);
   });
 
   it("every chat route requires the signed-in owner (multi-user)", async () => {
@@ -297,6 +303,46 @@ describe("design agent", () => {
       body: JSON.stringify({ message: { id: "a1", role: "assistant", parts: [{ type: "text", text: "approved" }] } }),
     });
     expect(response.status).toBe(400);
+  });
+});
+
+/** A runtime whose test writer answers `suiteAnswer(attempt)` and whose RETRO votes GO. */
+async function setupWithTestWriter(suiteAnswer: (attempt: number) => unknown) {
+  const deps = testDeps();
+  let attempt = 0;
+  const fast = scriptedJson((context) => (JSON.stringify(context.messages).includes("You are RETRO") ? GO_VOTE : suiteAnswer(attempt++)));
+  const runtime = createAgentRuntime({ ...deps, models: mockModels(scriptedDesign([proposeGolden, { text: "Done." }]), fast), pipeline: goPipeline(deps.store) });
+  const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
+  const chunks = await say(await serve(runtime), mission.id, golden.brief);
+  const output = chunks.find((c) => c.type === "tool-output-available")?.output as { summary: string; verdicts: Record<string, string>; findings: { ruleId: string; toolSide?: boolean; detail?: string }[] };
+  return { deps, fast, mission, output };
+}
+
+describe("independent test writer answers (pi-ai structured call)", () => {
+  it("scenarios sent as a JSON string, without the fixed header fields, are read as the suite", async () => {
+    const { deps, fast, mission } = await setupWithTestWriter(() => ({ scenarios: JSON.stringify(golden.suite.scenarios) }));
+    expect((await deps.store.getRevision(mission.id, 1))?.suite?.scenarios).toHaveLength(golden.suite.scenarios.length);
+    // The answer tool is required and thinking is off (Anthropic rejects a forced tool while thinking).
+    expect(fast.requestOptions[0]).toMatchObject({ toolChoice: { type: "tool", name: "test_suite" }, thinkingEnabled: false });
+  });
+
+  it("an answer that fails the schema gets one repair round that shows Claude what was wrong", async () => {
+    const { deps, fast, mission } = await setupWithTestWriter((attempt) => (attempt === 0 ? { scenarios: [{ id: "first", steps: [] }] } : golden.suite));
+    expect((await deps.store.getRevision(mission.id, 1))?.suite?.author).toBe("test-author");
+    const repair = fast.requests[1]!.messages.at(-1);
+    expect(repair).toMatchObject({ role: "toolResult", toolName: "test_suite", isError: true });
+    expect(JSON.stringify(repair)).toContain("didn't match the schema");
+  });
+
+  it("when the answer can't be used, FIDO says why as a tool-side finding and the agent is told not to redesign", async () => {
+    const { deps, mission, output } = await setupWithTestWriter(() => ({ tests: "nope" }));
+    expect(output.verdicts.FIDO).toBe("NO-GO");
+    expect(output.findings).toContainEqual(expect.objectContaining({ ruleId: "TESTS-NOT-WRITTEN", toolSide: true, detail: expect.stringContaining("didn't match the expected format") }));
+    expect(output.summary).toContain("ViBread tool problem (toolSide), not a design problem");
+    const fido = (await deps.store.getRevision(mission.id, 1))!.results.reports.find((r) => r.console === "FIDO");
+    expect(fido).toMatchObject({ verdict: "NO-GO", findings: [expect.objectContaining({ ruleId: "TESTS-NOT-WRITTEN" })] });
+    const failure = deps.debug.entries.find((e) => e.message.startsWith("test author failed"));
+    expect(failure?.data).toMatchObject({ rawAnswer: expect.stringContaining("nope") });
   });
 });
 
@@ -385,19 +431,40 @@ describe("design agent on pi → chat contract", () => {
     expect(pipeline!.calls).toBe(MAX_DESIGN_ITERATIONS);
   });
 
-  it("a model failure ends the run with a readable error in the chat and the debug log", async () => {
+  it.each([
+    ['401 {"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}', "Claude rejected the key or sign-in"],
+    ['429 {"type":"error","error":{"type":"rate_limit_error","message":"Number of request tokens has exceeded your per-minute rate limit"}}', "Claude is busy right now"],
+    ['529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}', "Claude is overloaded right now"],
+    ['400 {"type":"error","error":{"type":"invalid_request_error","message":"tools.3.input_schema: JSON schema is invalid"}}', "Claude couldn't process this request (tools.3.input_schema: JSON schema is invalid)"],
+  ])("a model failure (%s) ends the run with a plain message in the chat and the raw error in the debug log", async (raw, shown) => {
     const deps = testDeps();
-    const runtime = createAgentRuntime({ ...deps, models: mockModels(streamingDesign("401 invalid bearer token"), scriptedJson([])) });
+    const runtime = createAgentRuntime({ ...deps, models: mockModels(streamingDesign(raw), scriptedJson([])) });
     const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
     const chunks = await say(await serve(runtime), mission.id, "hi");
 
-    expect(chunks.find((c) => c.type === "error")).toEqual({ type: "error", errorText: "The agent hit an error: 401 invalid bearer token" });
+    const error = chunks.find((c) => c.type === "error");
+    expect(error?.errorText).toContain(shown);
+    expect(error?.errorText).not.toContain('{"type"');
     expect(chunks.at(-1)).toEqual({ type: "finish", finishReason: "error" });
     expect((await runtime.missions.detail(mission.id)).agentBusy).toBe(false);
     expect((await deps.messages.list(mission.id)).map((m) => m.role)).toEqual(["user", "assistant"]);
     const logged = deps.debug.entries.filter((e) => e.missionId === mission.id);
-    expect(logged.find((e) => e.area === "model")).toMatchObject({ level: "error", data: expect.objectContaining({ stop: "error", error: "401 invalid bearer token" }) });
+    expect(logged.find((e) => e.area === "model")).toMatchObject({ level: "error", data: expect.objectContaining({ stop: "error", error: raw }) });
     expect(logged.find((e) => e.area === "agent" && (e.data as { outcome?: string }).outcome)).toMatchObject({ level: "error", data: expect.objectContaining({ outcome: "error" }) });
+  });
+
+  it("hitting the step cap ends with a note to the person, and identical read-only calls are refused after two", async () => {
+    const listModules = { toolCalls: [{ name: "list_modules", input: {} }] };
+    const { deps, mission, base, design } = await setup(Array.from({ length: 25 }, () => listModules));
+    const chunks = await say(base, mission.id, golden.brief);
+
+    expect(design.requests).toHaveLength(20);
+    expect(chunks.filter((c) => c.type === "tool-output-available")).toHaveLength(2);
+    expect(chunks.filter((c) => c.type === "tool-output-error").every((c) => String(c.errorText).includes("the answer won't change"))).toBe(true);
+    expect(textOf(chunks)).toContain("I stopped after 20 steps without finishing this turn");
+    const reply = (await deps.messages.list(mission.id)).at(-1)!;
+    expect(JSON.stringify(reply.parts)).toContain("I stopped after 20 steps");
+    expect(deps.debug.entries.find((e) => (e.data as { outcome?: string } | undefined)?.outcome)?.data).toMatchObject({ outcome: "done", finish: "step-cap" });
   });
 
   it("a browser that reconnects replays the running turn from its start, then follows it live", async () => {

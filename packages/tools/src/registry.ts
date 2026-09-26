@@ -27,6 +27,7 @@ import {
   defineTool,
   errorMessage,
   isClaudeNotConnected,
+  report,
   requireRevision,
   statusReport,
   verdicts,
@@ -54,10 +55,43 @@ export interface RegistryHooks {
 
 const revisionArg = z.number().int().positive().optional().describe("Revision number; the latest revision when omitted.");
 
-function brief(findings: Finding[]): { console: string; ruleId: string; severity: string; title: string; fix?: string; refs?: Finding["refs"] }[] {
+/** Longest finding detail the agent reads per finding (failed scenario steps, compiler text, measured values). */
+const DETAIL_LIMIT = 600;
+
+/**
+ * Findings the design can't fix: a stage crashed, the independent tests couldn't be written, or the independent suite
+ * doesn't cover the circuit (only the test author writes tests), plus any finding a console marks `toolSide`.
+ */
+const TOOL_SIDE_RULES: Record<string, true> = { "STAGE-CRASH": true, "TESTS-NOT-WRITTEN": true, "COV-OUTPUT": true, "COV-INPUT": true, "COV-CLAUSE": true, "COV-CATEGORY": true };
+
+export function isToolSide(finding: Finding): boolean {
+  return TOOL_SIDE_RULES[finding.ruleId] === true || ("toolSide" in finding && finding.toolSide === true);
+}
+
+interface BriefFinding {
+  console: string;
+  ruleId: string;
+  severity: string;
+  title: string;
+  detail?: string;
+  fix?: string;
+  refs?: Finding["refs"];
+  toolSide?: true;
+}
+
+function brief(findings: Finding[]): BriefFinding[] {
   return findings
     .filter((f) => f.severity !== "info")
-    .map((f) => ({ console: f.console, ruleId: f.ruleId, severity: f.severity, title: f.title, ...(f.fix ? { fix: f.fix } : {}), ...(f.refs ? { refs: f.refs } : {}) }));
+    .map((f) => ({
+      console: f.console,
+      ruleId: f.ruleId,
+      severity: f.severity,
+      title: f.title,
+      ...(f.detail ? { detail: f.detail.length > DETAIL_LIMIT ? `${f.detail.slice(0, DETAIL_LIMIT)}…` : f.detail } : {}),
+      ...(f.fix ? { fix: f.fix } : {}),
+      ...(f.refs ? { refs: f.refs } : {}),
+      ...(isToolSide(f) ? { toolSide: true as const } : {}),
+    }));
 }
 
 function verdictLine(reports: ConsoleReport[]): string {
@@ -160,13 +194,15 @@ export function createToolRegistry(deps: {
 
         let suite: TestSuite | undefined;
         let testsNote: string | undefined;
-        if (previous?.suite && interfaceKey(circuitInterface(previous.circuit)) === interfaceKey(design)) {
+        const { coverageOf } = await import("@vibread/sim"); // engines load inside handlers (see createToolRegistry)
+        // The same interface keeps its suite — unless that suite doesn't cover the circuit: then the author gets another try.
+        if (previous?.suite && interfaceKey(circuitInterface(previous.circuit)) === interfaceKey(design) && coverageOf(circuit, previous.suite).missing.length === 0) {
           suite = previous.suite;
         } else {
           try {
             suite = await ops.suiteFor(mission, circuit, ctx.signal);
           } catch (error) {
-            testsNote = `Independent tests were not written: ${errorMessage(error)}`;
+            testsNote = `The independent test writer's answer couldn't be used: ${errorMessage(error)}`;
           }
         }
 
@@ -188,17 +224,32 @@ export function createToolRegistry(deps: {
           data: { hash: revision.hash, parent: previous?.n },
         });
 
-        const evaluated = await ops.evaluate(mission, revision.n, ctx.signal);
+        let evaluated = await ops.evaluate(mission, revision.n, ctx.signal);
+        if (testsNote) {
+          // No suite: FIDO says why instead of waiting silently for tests that won't come.
+          const fido = report(
+            "FIDO",
+            [{ console: "FIDO", ruleId: "TESTS-NOT-WRITTEN", severity: "error", title: "The simulation tests couldn't be written, so nothing was simulated.", detail: testsNote, fix: "Not a design problem: propose the design again to retry the test writer, or tell the person." }],
+            "NO-GO: the independent test writer's answer couldn't be used.",
+            revision.hash,
+          );
+          evaluated = await store.saveResults(ctx.missionId, revision.n, { reports: evaluated.results.reports.map((r) => (r.console === "FIDO" ? fido : r)) });
+        }
         const reports = evaluated.results.reports;
         const go = allGo(reports);
+        const findings = brief(reports.flatMap((r) => r.findings));
+        const toolSide = findings.filter((f) => f.toolSide && f.severity === "error").length;
+        const toolSideNote = toolSide
+          ? ` — ${toolSide} blocking finding${toolSide === 1 ? " is" : "s are"} a ViBread tool problem (toolSide), not a design problem: don't redesign for ${toolSide === 1 ? "it" : "them"}; tell the person.`
+          : "";
         return {
-          summary: `Revision ${revision.n}: ${verdictLine(reports)}`,
+          summary: `Revision ${revision.n}: ${verdictLine(reports)}${toolSideNote}`,
           accepted: true,
           revision: revision.n,
           hash: revision.hash,
           verdicts: verdicts(reports),
           allGo: go,
-          findings: brief(reports.flatMap((r) => r.findings)),
+          findings,
           ...(parsed.issues.length ? { issues: parsed.issues } : {}),
           ...(testsNote ? { testsNote } : {}),
           consoles: reports.map((r) => ({ console: r.console, verdict: r.verdict, summary: r.summary })),
