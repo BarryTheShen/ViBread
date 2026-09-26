@@ -174,7 +174,7 @@ scripts            Toolchain setup, golden seeding
 ## Libraries and licenses
 
 ViBread's own code is MIT (see [LICENSE](LICENSE)). Main dependencies: Vercel AI SDK (`ai`, `@ai-sdk/anthropic`,
-Apache-2.0), Material UI + MUI X Chat/Charts/Data Grid Community (MIT), Better Auth and its MCP/OAuth plugins (MIT),
+Apache-2.0), Material UI + MUI X Chat (MIT), Better Auth and its MCP/OAuth plugins (MIT),
 Model Context Protocol SDK (MIT), A2A JS SDK (Apache-2.0), Photon `spectrum-ts` (MIT), Express (MIT), XState (MIT),
 Drizzle ORM (Apache-2.0), better-sqlite3 (MIT), tscircuit core / circuit-json / circuit-to-svg (MIT/ISC, isolated in
 `packages/assembly/schematic-runtime`), json-rules-engine (ISC), avr8js (MIT), webserial-flasher (MIT), Eta (MIT),

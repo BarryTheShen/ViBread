@@ -109,6 +109,19 @@ function eventSummary(event: TimelineEvent): string | undefined {
   return stringValue(data?.summary) ?? stringValue(data?.headline) ?? stringValue(diagnosis?.summary) ?? (event.kind === "fault" ? event.text : undefined);
 }
 
+export function faultAlertText(summary: string): string {
+  const normalized = summary.trim();
+  if (/^Houston,\s+we have a problem\s*:/i.test(normalized)) return normalized;
+  return `Houston, we have a problem: ${normalized}`;
+}
+export function isFaultAlertEvent(event: TimelineEvent): boolean {
+  if (event.kind !== "bench.run") return event.kind === "fault" || event.kind === "diagnosis" || event.kind === "bench.failed";
+  return asRecord(event.data)?.verdict === "fail";
+}
+export function shouldSendCelebrationEffect(cloud: boolean): boolean {
+  return cloud;
+}
+
 function isLaunchEvent(event: TimelineEvent): boolean {
   if (event.kind === "mission.launched" || event.kind === "launch" || event.kind === "launched") return true;
   const data = asRecord(event.data);
@@ -140,10 +153,15 @@ async function wait(ms: number): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
-function isQuietHours(): boolean {
+export function isQuietHours(): boolean {
   const hour = new Date().getHours();
   return hour >= 23 || hour < 7;
 }
+
+export function cloudSendDelayMs(elapsed: number): number {
+  return Math.max(0, 750 - elapsed);
+}
+
 
 function createSender(ctx: AppContext, state: SendState) {
   return async (space: Space, content: ContentBuilder): Promise<boolean> => {
@@ -153,7 +171,8 @@ function createSender(ctx: AppContext, state: SendState) {
         return false;
       }
       const elapsed = Date.now() - state.lastSentAt;
-      if (elapsed < 750) await wait(750 - elapsed);
+      const delay = cloudSendDelayMs(elapsed);
+      if (delay > 0) await wait(delay);
     }
     try {
       await space.responding(async () => {
@@ -238,12 +257,14 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
       if (notice) await sendApproval(space, notice);
     }
     if (event.kind === "build.step" || event.kind === "step") await sendStepImage(space, event);
-    if (event.kind === "fault" || event.kind === "diagnosis" || event.kind === "bench.run" || event.kind === "bench.failed") {
+    if (isFaultAlertEvent(event)) {
       const summary = eventSummary(event);
-      if (summary) await sendText(space, `Houston, we have a problem: ${summary}`);
+      if (summary) await sendText(space, faultAlertText(summary));
     }
     if (isLaunchEvent(event)) {
-      const celebrated = await send(space, effect(text("Mission success — the lamp is alive!"), imessage.effect.message.celebration));
+      const celebrated = shouldSendCelebrationEffect(sendState.cloud)
+        ? await send(space, effect(text("Mission success — the lamp is alive!"), imessage.effect.message.celebration))
+        : false;
       if (!celebrated) await sendText(space, "Mission success — the lamp is alive!");
     }
   };
