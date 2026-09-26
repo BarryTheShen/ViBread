@@ -3,9 +3,11 @@ async function refresh() {
   const status = await window.vibread.invoke("apikey:status");
   $("status").textContent = status.set ? "A key is saved." : "No key saved.";
   $("clear").disabled = !status.set;
-  if (!status.secureStorage) {
-    $("hint").textContent = "No secure credential store is available on this system, so the key can't be saved.";
+  if (!status.canStore) {
+    $("hint").textContent = "No credential store is available on this system, so the key can't be saved.";
     $("save").disabled = true;
+  } else if (!status.keyring) {
+    $("hint").textContent = "No system keyring was found, so the key is stored obfuscated (not encrypted) in ViBread's settings file, readable only by your user account. The server restarts to use it.";
   }
 }
 $("form").addEventListener("submit", async (event) => {

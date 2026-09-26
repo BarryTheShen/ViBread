@@ -23,9 +23,23 @@ function save(settings: StoredSettings): void {
   writeFileSync(file(), `${JSON.stringify(settings, null, 2)}\n`, { mode: 0o600 });
 }
 
+/**
+ * Linux desktops without a keyring (no gnome-keyring/KWallet: minimal window managers, kiosks) leave safeStorage on
+ * its 'basic_text' backend, which refuses to encrypt until told to use Chromium's fixed obfuscation key. The key is
+ * then only obfuscated in settings.json (mode 0600); apiKeyStatus() reports that so the UI can say so.
+ */
+function storageReady(): boolean {
+  if (safeStorage.isEncryptionAvailable()) return true;
+  if (process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text") {
+    safeStorage.setUsePlainTextEncryption(true);
+    return safeStorage.isEncryptionAvailable();
+  }
+  return false;
+}
+
 export function getApiKey(): string | undefined {
   const stored = load().anthropicApiKey;
-  if (!stored || !safeStorage.isEncryptionAvailable()) return undefined;
+  if (!stored || !storageReady()) return undefined;
   try {
     return safeStorage.decryptString(Buffer.from(stored, "base64"));
   } catch {
@@ -38,16 +52,17 @@ export function setApiKey(key: string | undefined): void {
   if (!key) {
     delete settings.anthropicApiKey;
   } else {
-    if (!safeStorage.isEncryptionAvailable()) throw new Error("This system has no secure credential store available (safeStorage).");
+    if (!storageReady()) throw new Error("This system has no credential store available (safeStorage).");
     settings.anthropicApiKey = safeStorage.encryptString(key).toString("base64");
   }
   save(settings);
 }
 
-export function apiKeyStatus(): { set: boolean; secureStorage: boolean; backend?: string } {
+export function apiKeyStatus(): { set: boolean; canStore: boolean; keyring: boolean } {
+  const canStore = storageReady();
   return {
     set: getApiKey() !== undefined,
-    secureStorage: safeStorage.isEncryptionAvailable(),
-    backend: process.platform === "linux" ? safeStorage.getSelectedStorageBackend() : undefined,
+    canStore,
+    keyring: canStore && !(process.platform === "linux" && safeStorage.getSelectedStorageBackend() === "basic_text"),
   };
 }
