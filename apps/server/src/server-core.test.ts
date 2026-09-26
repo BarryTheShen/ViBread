@@ -15,6 +15,9 @@ import { createTokenService } from "./services/tokens.js";
 import { createLinkService } from "./services/links.js";
 import { createCapcomSpaceStore } from "./services/capcom-spaces.js";
 import { createBenchAskStore } from "./services/bench-asks.js";
+import { createCatalogService } from "./services/catalog.js";
+import { createInventoryService } from "./services/inventory.js";
+import { createScanService } from "./services/scans.js";
 import { approvalOwnerMiddleware, missionOwnerMiddleware } from "./routes.js";
 import { createApiErrorHandler } from "./main.js";
 
@@ -317,7 +320,28 @@ describe("server core persistence", () => {
     }
   });
 
-
+  it("merges inventory identities and completes a fake scan lifecycle", async () => {
+    const { dir, opened } = makeDatabase();
+    try {
+      const catalog = createCatalogService({ db: opened.db, sqlite: opened.sqlite });
+      const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
+      const inventory = createInventoryService({ db: opened.db, sqlite: opened.sqlite, catalog, store });
+      const scans = createScanService({ db: opened.db, sqlite: opened.sqlite, store });
+      const resistor = (await catalog.types("operator")).find((type) => type.id === "resistor");
+      if (!resistor) throw new Error("resistor catalog type missing");
+      const first = await inventory.upsert("operator", { items: [{ typeId: resistor.id, values: { ohms: 220 }, quantity: 2, mode: "add", source: "typed" }] });
+      await inventory.upsert("operator", { items: [{ typeId: resistor.id, values: { ohms: 220 }, quantity: 3, mode: "add", source: "typed" }] });
+      expect((await inventory.entries("operator")).find((entry) => entry.id === first[0]?.id)?.quantity).toBe(5);
+      const scan = await scans.create("operator");
+      await scans.addPhoto("operator", scan.id, "photo-hash");
+      const ready = await scans.analyze("operator", scan.id, { observations: [{ photoIndex: 0, typeId: resistor.id, label: "220 ohm resistor", count: 1, confidence: "high", box: [0, 0, 10, 10] }], analyzed: [{ hash: "analyzed-hash", width: 100, height: 100 }] }, await catalog.types("operator"), await inventory.entries("operator"));
+      expect(ready.status).toBe("ready");
+      expect(ready.items[0]?.cropUrl).toContain("/crops/0");
+    } finally {
+      opened.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 
   it("mints, verifies, revokes, expires tokens and redeems links once", async () => {
     const { dir, opened } = makeDatabase();

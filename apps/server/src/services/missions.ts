@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import {
   CONSOLE_IDS,
+  toMissionInventory,
   type Actor,
   type AgentTurnResult,
   type ApprovalDecision,
@@ -123,11 +124,24 @@ export function createMissionService(
 
   const service: MissionService = {
     async create(input) {
+      // Explicit parts (older clients, MCP/A2A callers that send them) win; otherwise the owner's ready inventory entries
+      // (all, or only inventoryEntryIds) are copied in through each part type's mapping (plan §5.4). This is the one
+      // creation path for web, iMessage (CAPCOM), MCP and A2A.
+      let inventory = input.inventory;
+      let inventoryNotes: string[] | undefined;
+      if (!inventory) {
+        const [entries, types] = await Promise.all([deps.inventory.entries(input.owner.id), deps.inventory.types(input.owner.id)]);
+        const wanted = input.inventoryEntryIds ? new Set(input.inventoryEntryIds) : undefined;
+        const copied = toMissionInventory(wanted ? entries.filter((e) => wanted.has(e.id)) : entries, types);
+        inventory = copied.items;
+        inventoryNotes = copied.notes.length ? copied.notes : undefined;
+      }
       const mission = await store.createMission({
         title: input.title?.trim() || titleFrom(input.brief),
         brief: input.brief,
         ownerId: input.owner.id,
-        inventory: input.inventory,
+        inventory,
+        ...(inventoryNotes ? { inventoryNotes } : {}),
         mode: input.mode ?? "review",
       });
       // store.createMission records the "mission.created" timeline event itself (ServerCore's SQL store).

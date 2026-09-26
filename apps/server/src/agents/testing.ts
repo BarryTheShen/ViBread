@@ -7,6 +7,9 @@ import {
   type ApprovalBroker,
   type ApprovalRequest,
   type ClaudeAccountView,
+  type InventoryEntry,
+  type PartType,
+  BUILT_IN_PART_TYPES,
   type Mission,
   type MissionPhase,
   type MissionStore,
@@ -19,7 +22,7 @@ import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import pino from "pino";
 import type { ClaudeAccountService, ClaudeEndpoint } from "../claude/accounts.js";
 import { loadConfig } from "../config.js";
-import type { AgentDeps, MissionEvent, MissionMachine } from "./deps.js";
+import type { AgentDeps, InventoryReader, MissionEvent, MissionMachine } from "./deps.js";
 import type { AgentModels } from "./models.js";
 
 /**
@@ -335,5 +338,22 @@ export function testDeps(): AgentDeps & { broker: MemoryBroker; machine: Recordi
     machine: recordingMachine(store),
     messages: memoryMessages(),
     claudeAccounts: fakeClaudeAccounts(),
+    inventory: memoryInventory(),
+  };
+}
+
+/** Inventory fake: per-owner entries; types = the built-in catalog plus per-owner extras. */
+export function memoryInventory(seed: { entries?: Record<string, InventoryEntry[]>; types?: Record<string, PartType[]> } = {}): InventoryReader & {
+  set(ownerId: string, entries: InventoryEntry[]): void;
+} {
+  const entries = new Map(Object.entries(seed.entries ?? {}));
+  return {
+    set: (ownerId, list) => void entries.set(ownerId, structuredClone(list)),
+    async entries(ownerId) {
+      return structuredClone(entries.get(ownerId) ?? []);
+    },
+    async types(ownerId) {
+      return [...BUILT_IN_PART_TYPES, ...(seed.types?.[ownerId] ?? [])];
+    },
   };
 }

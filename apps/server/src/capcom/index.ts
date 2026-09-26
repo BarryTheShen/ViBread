@@ -622,7 +622,7 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
     const brief = missionBriefFrom(value);
     if (brief) {
       const actor: Actor = { kind: "human", id: userId, channel: "imessage" };
-      const mission = await ctx.missions.create({ brief, inventory: [], owner: actor, title: brief.slice(0, 80) });
+      const mission = await ctx.missions.create({ brief, owner: actor, title: brief.slice(0, 80) });
       await attachMission(space, handle, mission.id);
       const result = await ctx.missions.say(mission.id, brief, actor);
       await sendText(space, result.question ? `${result.text}\nQuestion: ${result.question}` : result.text);

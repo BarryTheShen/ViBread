@@ -195,15 +195,20 @@ const PHONE_SCOPE_MESSAGE = "This phone can only follow the build steps. Use the
 function phoneRequestAllowed(req: Request): boolean {
   const path = req.path;
   if (!path.startsWith("/api/")) {
-    return req.method === "GET" && (path === "/" || path === "/index.html" || path === "/b" || path.startsWith("/b/") || /\.[A-Za-z0-9]+$/.test(path));
+    return req.method === "GET" && (path === "/" || path === "/index.html" || path === "/b" || path.startsWith("/b/") || path === "/scan" || path.startsWith("/scan/") || /\.[A-Za-z0-9]+$/.test(path));
   }
   if (req.method === "GET" && path === "/api/me") return true;
   if (req.method === "GET" && path === "/api/oauth/providers") return true;
+  if (req.method === "GET" && path === "/api/phone/missions") return true;
   if (req.method === "GET" && /^\/api\/missions\/[^/]+\/build$/.test(path)) return true;
   if (req.method === "POST" && /^\/api\/missions\/[^/]+\/build\/step$/.test(path)) return true;
   if (req.method === "POST" && /^\/api\/missions\/[^/]+\/photo$/.test(path)) return true;
   if (req.method === "GET" && /^\/api\/missions\/[^/]+\/revisions\/[^/]+\/artifacts\/[^/]+$/.test(path)) return true;
   if (req.method === "GET" && /^\/api\/recorded\/[^/]+$/.test(path)) return true;
+  if (req.method === "POST" && path === "/api/inventory/scans") return true;
+  if (req.method === "POST" && /^\/api\/inventory\/scans\/[^/]+\/(photos|analyze|accept)$/.test(path)) return true;
+  if (req.method === "GET" && /^\/api\/inventory\/scans\/[^/]+$/.test(path)) return true;
+  if (req.method === "GET" && /^\/api\/inventory\/scans\/[^/]+\/crops\/[^/]+$/.test(path)) return true;
   return false;
 }
 

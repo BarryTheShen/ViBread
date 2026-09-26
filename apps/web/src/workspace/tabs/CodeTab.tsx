@@ -10,11 +10,12 @@ import ListItem from "@mui/material/ListItem";
 import ListItemText from "@mui/material/ListItemText";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
+import { useColorScheme } from "@mui/material/styles";
 import type { CompileDiagnostic, RevisionDetail } from "@vibread/core";
 import { useState } from "react";
 import SyntaxHighlighter from "react-syntax-highlighter/dist/esm/prism-light";
 import cpp from "react-syntax-highlighter/dist/esm/languages/prism/cpp";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+import { oneLight, vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { MONO_FONT } from "../../theme.js";
 
 SyntaxHighlighter.registerLanguage("cpp", cpp);
@@ -46,6 +47,9 @@ function DiagnosticList({ items }: { items: CompileDiagnostic[] }) {
 export function CodeTab({ revision }: { revision: RevisionDetail }) {
   const source = revision.circuit.sketch.source;
   const compile = revision.results.compile;
+  // The palette is CSS variables, so the resolved light/dark scheme comes from useColorScheme, not the theme object.
+  const { mode, systemMode } = useColorScheme();
+  const dark = (mode === "system" ? systemMode : mode) === "dark";
   const [copied, setCopied] = useState(false);
   const [showCore, setShowCore] = useState(false);
   const errors = compile?.diagnostics.filter((d) => d.severity === "error") ?? [];
@@ -58,7 +62,7 @@ export function CodeTab({ revision }: { revision: RevisionDetail }) {
   return (
     <Stack sx={{ gap: 1.5 }}>
       <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap" }}>
-        <Typography variant="h3" component="h2" sx={{ flex: 1 }}>
+        <Typography variant="h6" component="h2" sx={{ flex: 1 }}>
           Arduino sketch
         </Typography>
         {compile ? (
@@ -108,9 +112,9 @@ export function CodeTab({ revision }: { revision: RevisionDetail }) {
       <Box sx={{ borderRadius: 1, overflow: "hidden", border: 1, borderColor: "divider" }}>
         <SyntaxHighlighter
           language="cpp"
-          style={vscDarkPlus}
+          style={dark ? vscDarkPlus : oneLight}
           showLineNumbers
-          customStyle={{ margin: 0, fontSize: 13, fontFamily: MONO_FONT, background: "#060a0e", maxHeight: "65vh" }}
+          customStyle={{ margin: 0, fontSize: 13, fontFamily: MONO_FONT, background: "var(--mui-palette-code-main)", maxHeight: "65vh" }}
           codeTagProps={{ style: { fontFamily: MONO_FONT } }}
         >
           {source}

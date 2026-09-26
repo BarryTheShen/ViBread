@@ -25,6 +25,7 @@ interface MissionRow {
   mode: string;
   phase: string;
   inventory: string;
+  inventoryNotes: string | null;
   currentRevision: number | null;
   releasedRevision: number | null;
   createdAt: number;
@@ -81,15 +82,16 @@ export class SqlMissionStore implements MissionStore {
     brief: string;
     ownerId: string;
     inventory: InventoryItem[];
+    inventoryNotes?: string[];
     mode: PermissionMode;
   }): Promise<Mission> {
     const id = randomUUID();
     const now = Date.now();
     this.deps.sqlite
       .prepare(
-        'INSERT INTO "missions" ("id", "title", "brief", "ownerId", "mode", "phase", "inventory", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO "missions" ("id", "title", "brief", "ownerId", "mode", "phase", "inventory", "inventoryNotes", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       )
-      .run(id, input.title, input.brief, input.ownerId, input.mode, "BRIEF", JSON.stringify(input.inventory), now, now);
+      .run(id, input.title, input.brief, input.ownerId, input.mode, "BRIEF", JSON.stringify(input.inventory), input.inventoryNotes ? JSON.stringify(input.inventoryNotes) : null, now, now);
     const mission = await this.getMission(id);
     if (!mission) throw new Error("mission was not persisted");
     await this.appendEvent({
@@ -295,6 +297,18 @@ export class SqlMissionStore implements MissionStore {
     }));
   }
 
+  deleteMission(id: string): void {
+    const remove = this.deps.sqlite.transaction(() => {
+      this.deps.sqlite.prepare('DELETE FROM "events" WHERE "missionId" = ?').run(id);
+      this.deps.sqlite.prepare('DELETE FROM "approvals" WHERE "missionId" = ?').run(id);
+      this.deps.sqlite.prepare('DELETE FROM "runs" WHERE "missionId" = ?').run(id);
+      this.deps.sqlite.prepare('DELETE FROM "messages" WHERE "missionId" = ?').run(id);
+      this.deps.sqlite.prepare('DELETE FROM "revisions" WHERE "missionId" = ?').run(id);
+      this.deps.sqlite.prepare('DELETE FROM "missions" WHERE "id" = ?').run(id);
+    });
+    remove();
+  }
+
   private missionFromRow(row: MissionRow): Mission {
     return {
       id: row.id,
@@ -304,6 +318,7 @@ export class SqlMissionStore implements MissionStore {
       mode: row.mode as PermissionMode,
       phase: row.phase as Mission["phase"],
       inventory: JSON.parse(row.inventory) as InventoryItem[],
+      ...(row.inventoryNotes ? { inventoryNotes: JSON.parse(row.inventoryNotes) as string[] } : {}),
       currentRevision: row.currentRevision ?? undefined,
       releasedRevision: row.releasedRevision ?? undefined,
       createdAt: new Date(row.createdAt).toISOString(),

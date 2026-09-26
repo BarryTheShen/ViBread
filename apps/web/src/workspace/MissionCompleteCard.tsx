@@ -9,11 +9,15 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { keyframes } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
-import type { MissionPhase } from "@vibread/core";
+import type { MissionDetail } from "@vibread/core";
 import { useMemo } from "react";
 import { Link as RouterLink } from "react-router";
 import { HttpError } from "../api/client.js";
-import { useConfirmMission } from "../api/hooks.js";
+import { useConfirmMission, useRevision } from "../api/hooks.js";
+
+function focusComposer(): void {
+  document.querySelector<HTMLTextAreaElement>("main textarea, textarea")?.focus();
+}
 
 const rise = keyframes`
   0% { transform: translateY(0) rotate(0deg); opacity: 1; }
@@ -23,7 +27,8 @@ const rise = keyframes`
 /** /confirm 409 codes that mean "the bench must pass first" (ServerCore); their messages are already plain words. */
 const BENCH_BLOCKERS: Record<string, true> = { bench_run_required: true, bench_run_failed: true, bench_run_incomplete: true };
 
-const COLORS = ["#7dd3fc", "#fbbf24", "#4ade80", "#f87171", "#eef4fa"];
+/** Confetti colours come from the theme palette. */
+const COLORS = ["primary.main", "secondary.main", "success.main", "warning.main", "info.main"];
 
 /** Short confetti burst for DONE; replaced by a static badge when reduced motion is on. */
 function Celebration() {
@@ -58,24 +63,25 @@ function Celebration() {
  * LAUNCH: the self-test passed and the real sketch runs — ask the person whether it does what they wanted.
  * DONE: mission complete, with a celebration.
  */
-export function MissionComplete({
+export function MissionCompleteCard({
   missionId,
-  phase,
-  onTellAgent,
-  virtualBoard,
+  detail,
+  onTellAgent = focusComposer,
 }: {
   missionId: string;
-  phase: MissionPhase;
-  onTellAgent(): void;
-  /** The last bench run used the virtual board (runId "virtual-…"), not a real Arduino. */
-  virtualBoard: boolean;
+  detail: MissionDetail;
+  /** "Not quite — tell the agent": defaults to focusing the chat box. */
+  onTellAgent?: () => void;
 }) {
   const confirm = useConfirmMission(missionId);
+  const phase = detail.mission.phase;
+  const released = useRevision(missionId, phase === "LAUNCH" ? detail.mission.releasedRevision : undefined);
+  const virtualBoard = released.data?.results.bench?.at(-1)?.runId.startsWith("virtual-") ?? false;
   if (phase === "DONE") {
     return (
       <>
         <Celebration />
-        <Alert severity="success" icon={<CelebrationIcon />} sx={{ mx: 2, mt: 1, alignItems: "center" }}>
+        <Alert id="mission-complete-card" tabIndex={-1} severity="success" icon={<CelebrationIcon />} sx={{ my: 1, alignItems: "center" }}>
           <Typography sx={{ fontWeight: 700 }}>Mission complete. Your circuit works the way you wanted — well done, Flight!</Typography>
         </Alert>
       </>
@@ -86,7 +92,7 @@ export function MissionComplete({
   const realBoardRequired = virtualBoard || (confirm.error instanceof HttpError && confirm.error.code === "real_board_required");
   if (realBoardRequired) {
     return (
-      <Paper variant="outlined" role="region" aria-label="Build it for real" sx={{ mx: 2, mt: 1, p: 2, borderColor: "info.main", borderWidth: 2 }}>
+      <Paper id="mission-complete-card" tabIndex={-1} variant="outlined" role="region" aria-label="Build it for real" sx={{ my: 1, p: 2, borderColor: "info.main", borderWidth: 2 }}>
         <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 0.5 }}>
           <UsbIcon color="info" />
           <Typography variant="overline" sx={{ color: "info.main", lineHeight: 1.4 }}>
@@ -108,14 +114,14 @@ export function MissionComplete({
     );
   }
   return (
-    <Paper variant="outlined" role="region" aria-label="Does it work?" sx={{ mx: 2, mt: 1, p: 2, borderColor: "success.main", borderWidth: 2 }}>
+    <Paper id="mission-complete-card" tabIndex={-1} variant="outlined" role="region" aria-label="Does it work?" sx={{ my: 1, p: 2, borderColor: "success.main", borderWidth: 2 }}>
       <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 0.5 }}>
         <RocketLaunchIcon color="success" />
         <Typography variant="overline" sx={{ color: "success.main", lineHeight: 1.4 }}>
           Launched · the self-test passed
         </Typography>
       </Stack>
-      <Typography variant="h3" component="p">
+      <Typography variant="h6" component="p">
         Does it work the way you wanted?
       </Typography>
       <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>

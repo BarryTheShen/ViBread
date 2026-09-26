@@ -127,15 +127,57 @@ export function toolSummaryOf(output: unknown): string | undefined {
   return isRecord(output) && typeof output.summary === "string" ? output.summary : undefined;
 }
 
+/** Name + input of every tool call seen so far (loaded history and streamed chunks), keyed by toolCallId. */
+export type ToolCallRegistry = Map<string, { toolName: string; input?: unknown; dynamic?: boolean }>;
+
+/** Records the tool calls of loaded history, so later chunks for the same call can be completed. */
+export function rememberToolCalls(messages: ChatMessage[], registry: ToolCallRegistry): void {
+  for (const message of messages) {
+    for (const part of message.parts) {
+      if ((part.type !== "tool" && part.type !== "dynamic-tool") || !part.toolInvocation.toolName) continue;
+      registry.set(part.toolInvocation.toolCallId, {
+        toolName: part.toolInvocation.toolName,
+        input: part.toolInvocation.input,
+        dynamic: part.type === "dynamic-tool",
+      });
+    }
+  }
+}
+
+/** Chunks MUI X Chat applies `toolName`/`input` from — a missing field overwrites the part's value with undefined. */
+const NAMED_TOOL_CHUNKS: Record<string, true> = { "tool-input-start": true, "tool-input-available": true, "tool-approval-request": true };
+
 /**
  * Normalizes AI SDK UI-stream chunks for MUI X Chat's stream processor:
  * - AI SDK `message-metadata` carries `messageMetadata`; MUI X Chat reads `metadata` and merges it shallowly, so the
  *   `vibread.approvals` map is accumulated here to keep earlier approvals' card copy.
+ * - AI SDK `tool-approval-request` carries only ids, and a run resumed after a reconnect can start mid-call; MUI X Chat
+ *   copies `toolName`/`input` from these chunks as-is (creating a part without a name). They are filled in from the
+ *   same call's earlier chunk or the loaded history (`registry`).
  */
-export function normalizeChunks<T>(): TransformStream<T, T> {
+export function normalizeChunks<T>(registry: ToolCallRegistry = new Map()): TransformStream<T, T> {
   let approvals: Record<string, unknown> = {};
   return new TransformStream<T, T>({
     transform(chunk, controller) {
+      if (isRecord(chunk) && typeof chunk.toolCallId === "string" && typeof chunk.type === "string") {
+        const known = registry.get(chunk.toolCallId);
+        if (typeof chunk.toolName === "string") {
+          registry.set(chunk.toolCallId, {
+            toolName: chunk.toolName,
+            input: chunk.input ?? known?.input,
+            dynamic: chunk.dynamic === true || known?.dynamic === true,
+          });
+        } else if (known && NAMED_TOOL_CHUNKS[chunk.type]) {
+          const completed = {
+            ...chunk,
+            toolName: known.toolName,
+            ...(chunk.input === undefined && known.input !== undefined ? { input: known.input } : {}),
+            ...(known.dynamic && chunk.dynamic === undefined ? { dynamic: true } : {}),
+          } as T;
+          controller.enqueue(completed);
+          return;
+        }
+      }
       if (isRecord(chunk) && chunk.type === "message-metadata" && "messageMetadata" in chunk && !("metadata" in chunk)) {
         const meta: unknown = chunk.messageMetadata;
         const merged: Record<string, unknown> = isRecord(meta) ? { ...meta } : {};

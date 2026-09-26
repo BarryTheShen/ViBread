@@ -99,7 +99,7 @@ export function ReplayTab({ revision }: { revision: RevisionDetail }) {
           Reduced motion is on: nothing plays by itself. Drag the time slider to step through the test.
         </Typography>
       )}
-      <Paper variant="outlined" sx={{ p: 1, bgcolor: "#0a0f14" }}>
+      <Paper variant="outlined" sx={{ p: 1, bgcolor: "canvas.main" }}>
         {board ? (
           <SvgArtifact ref={svgRef} url={board} label="Breadboard replay" />
         ) : (

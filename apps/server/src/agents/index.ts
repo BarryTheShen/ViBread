@@ -1,4 +1,4 @@
-import type { ConsoleReport, MissionDetail, MissionService, PhotoCheckResult, ToolRegistry } from "@vibread/core";
+import type { ConsoleReport, MissionDetail, MissionService, PartType, PhotoCheckResult, ScanObservation, ToolRegistry } from "@vibread/core";
 import {
   ToolInputError,
   createDesignOps,
@@ -20,9 +20,10 @@ import { createPhotoChecker } from "./vision.js";
 import { createEventBus } from "./events.js";
 import { createApprovalLinks } from "./approval-links.js";
 import { createHumanRelease, type ReleaseInput } from "./release.js";
+import { cutCrop, identifyParts, type AnalyzedPhoto } from "./scan.js";
 import { createMissionService } from "../services/missions.js";
 
-export type { AgentDeps, MessageStore, MissionEvent, MissionMachine, ServerConfig } from "./deps.js";
+export type { AgentDeps, InventoryReader, MessageStore, MissionEvent, MissionMachine, ServerConfig } from "./deps.js";
 export type { AgentModels } from "./models.js";
 export type { ReleaseInput } from "./release.js";
 
@@ -38,6 +39,11 @@ export interface AgentRuntime {
   release(input: ReleaseInput): Promise<MissionDetail>;
   /** Runs RETRO for a revision now (seed script with a key); SKIPPED when Claude isn't connected. */
   review(missionId: string, n: number): Promise<ConsoleReport>;
+  /** Camera scan (plan §5.6): identify parts in photos with the owner's credential; cut review crops. */
+  scan: {
+    identifyParts(input: { ownerId: string; photos: Buffer[]; types: PartType[]; signal?: AbortSignal }): Promise<{ observations: ScanObservation[]; analyzed: AnalyzedPhoto[] }>;
+    cutCrop(analyzedJpeg: Buffer, box: [number, number, number, number], marginPct?: number): Promise<Buffer>;
+  };
 }
 
 /**
@@ -90,6 +96,7 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
     mountChat: (app) => mountChat(app, { store: deps.store, messages: deps.messages, runs, links, log: deps.log }),
     checkPhoto: (input) => photos.check(input),
     release,
+    scan: { identifyParts: (input) => identifyParts({ models }, input), cutCrop },
     async review(missionId, n) {
       const mission = await deps.store.getMission(missionId);
       if (!mission) throw new ToolInputError(`Mission ${missionId} does not exist.`, 404);
