@@ -152,6 +152,7 @@ export interface RevisionDetail {
   lvs?: LvsResult;
   /** URL paths for artifacts, keyed like RevisionResults.artifacts. */
   artifactUrls: Record<string, string>;
+  fallbackUpload: { command: string; args: string[] };
 }
 
 /**

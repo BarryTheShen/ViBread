@@ -21,7 +21,7 @@ const rise = keyframes`
 `;
 
 /** /confirm 409 codes that mean "the bench must pass first" (ServerCore); their messages are already plain words. */
-const BENCH_BLOCKERS: Record<string, true> = { bench_run_required: true, bench_run_failed: true };
+const BENCH_BLOCKERS: Record<string, true> = { bench_run_required: true, bench_run_failed: true, bench_run_incomplete: true };
 
 const COLORS = ["#7dd3fc", "#fbbf24", "#4ade80", "#f87171", "#eef4fa"];
 

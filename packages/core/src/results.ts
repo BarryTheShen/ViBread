@@ -19,8 +19,6 @@ export interface CompileResult {
   fqbn: string;
   /** Intel HEX text of the application image (absent when !ok). */
   hex?: string;
-  /** Server-side path of the ELF (never sent to the browser). */
-  elfPath?: string;
   sizes?: { flashBytes: number; flashMax: number; ramBytes: number; ramMax: number };
   diagnostics: CompileDiagnostic[];
   durationMs: number;

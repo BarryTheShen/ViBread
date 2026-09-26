@@ -17,7 +17,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useState } from "react";
 import { Link as RouterLink } from "react-router";
 import { HttpError } from "../api/client.js";
-import { useConnections, usePhoneOrigin, useRelease } from "../api/hooks.js";
+import { useConnections, usePhoneBuildLink, useRelease } from "../api/hooks.js";
 
 const REQUIRED: ConsoleId[] = ["EECOM", "GUIDO", "FIDO", "FAO"];
 
@@ -51,7 +51,7 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
   // The server may write missing tests and release them as the next revision, so show what it actually released.
   const [releasedN, setReleasedN] = useState<number | undefined>(undefined);
   const state = releaseReadiness(detail);
-  const phoneUrl = `${usePhoneOrigin()}/b/${missionId}`;
+  const phoneUrl = usePhoneBuildLink(missionId);
 
   const go = (acknowledgeMissingReview: boolean) =>
     state.revision !== undefined &&
