@@ -58,10 +58,36 @@ export interface RunManager {
   stream(run: ActiveRun): ReadableStream<UIMessageChunk>;
 }
 
+/**
+ * A model/provider failure as the person reads it in the chat. Provider errors arrive as "<status> <JSON body>"
+ * (or the error type alone mid-stream); the raw text goes to the debug log, never the chat.
+ */
+export function friendlyModelError(raw: string): string {
+  const status = /^\s*(\d{3})\b/.exec(raw)?.[1];
+  const type = /"type"\s*:\s*"([a-z_]+_error)"/.exec(raw)?.[1] ?? /\b([a-z]+_error)\b/.exec(raw)?.[1];
+  if (status === "401" || status === "403" || type === "authentication_error" || type === "permission_error") {
+    return "Claude rejected the key or sign-in. Reconnect your Claude account in Settings (or check the server's ANTHROPIC_API_KEY), then send your message again.";
+  }
+  const wait = /Server requested (\d+)s retry delay/.exec(raw)?.[1];
+  if (wait) return `Claude is busy right now. Try again in about ${Number(wait) >= 120 ? `${Math.ceil(Number(wait) / 60)} minutes` : `${wait} seconds`}.`;
+  if (status === "429" || type === "rate_limit_error") return "Claude is busy right now (rate limit). Wait a minute, then send your message again.";
+  if (/refused|refusal|sensitive/i.test(raw)) return "Claude declined to answer this request. Rephrase it and send it again.";
+  if (status === "529" || type === "overloaded_error" || /overloaded/i.test(raw)) return "Claude is overloaded right now. Try again in a minute.";
+  if (/timed? ?out|ETIMEDOUT|ECONNRESET|ECONNREFUSED|fetch failed|network/i.test(raw)) return "ViBread couldn't reach Claude (network problem). Check the connection and send your message again.";
+  const detail = /"message"\s*:\s*"([^"]{1,200})"/.exec(raw)?.[1];
+  if (status === "400" || type === "invalid_request_error") return `Claude couldn't process this request${detail ? ` (${detail})` : ""}. Try again; if it keeps happening, check Settings → Diagnostics.`;
+  return "The agent hit an error talking to Claude. Try again; if it keeps happening, check Settings → Diagnostics.";
+}
+
 function friendlyError(error: unknown): string {
   if (isClaudeNotConnected(error)) return errorMessage(error);
-  return `The agent hit an error: ${errorMessage(error)}`;
+  return friendlyModelError(errorMessage(error));
 }
+
+/** Identical read-only tool calls allowed per run; the next one is refused (the answer can't change). */
+const MAX_IDENTICAL_READS = 2;
+
+const STEP_CAP_NOTE = `I stopped after ${MAX_STEPS} steps without finishing this turn. Tell me to continue, or tell me what to change.`;
 
 function lastAssistant(messages: UIMessage[]): UIMessage | undefined {
   return messages.findLast((m) => m.role === "assistant");
@@ -122,6 +148,7 @@ export function createRunManager(
     const agentActor: Actor = { kind: "agent", id: "design-agent", name: "Design agent", channel: input.actor.channel };
     let turns = 0;
     let proposals = 0;
+    const reads = new Map<string, number>();
     // The pi transcript is rebuilt from the server-held UI history every run: that history is the only record.
     const agent = new Agent({
       initialState: {
@@ -135,6 +162,14 @@ export function createRunManager(
       sessionId: missionId,
       toolExecution: "sequential",
       beforeToolCall: async ({ toolCall }) => {
+        if (deps.tools.get(toolCall.name)?.actionClass === "read-only") {
+          const signature = `${toolCall.name}:${JSON.stringify(toolCall.arguments)}`;
+          const count = (reads.get(signature) ?? 0) + 1;
+          reads.set(signature, count);
+          if (count > MAX_IDENTICAL_READS) {
+            return { block: true, reason: `You already called ${toolCall.name} with exactly this input ${MAX_IDENTICAL_READS} times this turn; the answer won't change. Use the result you have, try something different, or tell the person what blocks you.` };
+          }
+        }
         if (toolCall.name !== "propose_design") return undefined;
         if (proposals >= MAX_DESIGN_ITERATIONS) {
           return { block: true, reason: `That was design attempt ${proposals + 1}; the limit is ${MAX_DESIGN_ITERATIONS} per turn. Tell the person exactly what still blocks and what they could decide or change.` };
@@ -181,8 +216,19 @@ export function createRunManager(
         }
         if (last?.stopReason === "error") {
           log.warn({ missionId, err: last.errorMessage }, "design agent model error");
+          debug.event(missionId, "agent", "design run: Claude returned an error", { runId: run.id, error: last.errorMessage ?? "unknown" }, "error");
           run.error = friendlyError(new Error(last.errorMessage ?? "the model request failed"));
           writer.write({ type: "error", errorText: run.error });
+        } else if (last?.stopReason === "toolUse" && turns >= MAX_STEPS) {
+          // The step cap ended the turn mid-work: say so instead of stopping silently.
+          run.stats.finish = "step-cap";
+          writer.write({ type: "text-start", id: "step-cap" });
+          writer.write({ type: "text-delta", id: "step-cap", delta: STEP_CAP_NOTE });
+          writer.write({ type: "text-end", id: "step-cap" });
+        } else if (last?.stopReason === "length") {
+          writer.write({ type: "text-start", id: "length" });
+          writer.write({ type: "text-delta", id: "length", delta: "My reply was cut off at Claude's output limit. Tell me to continue." });
+          writer.write({ type: "text-end", id: "length" });
         }
         writer.write({ type: "finish", finishReason: last ? FINISH_REASONS[last.stopReason] : "other" });
       },
@@ -240,6 +286,20 @@ export function createRunManager(
     resolve(outcome);
   }
 
+  /**
+   * A run that couldn't start (Claude not connected, credential broken) still leaves the person's message and the reason in
+   * the chat history and on the timeline, so a reload shows what happened.
+   */
+  async function recordFailedStart(missionId: string, input: { message: UIMessage; actor: Actor }, reason: string): Promise<void> {
+    const prior = await messages.list(missionId);
+    const withMessage = prior.some((m) => m.id === input.message.id) ? prior : [...prior, input.message];
+    const reply: UIMessage = { id: randomUUID(), role: "assistant", parts: [{ type: "text", text: reason }], metadata: { vibread: { error: true } } };
+    await messages.save(missionId, [...withMessage, reply]);
+    const text = input.message.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
+    if (text) await store.appendEvent({ missionId, channel: input.actor.channel, actor: input.actor, kind: "message", text: text.slice(0, 2000) });
+    await store.appendEvent({ missionId, channel: "system", actor: { kind: "system", id: "design-agent", name: "Design agent", channel: "system" }, kind: "agent.error", text: reason.slice(0, 2000) });
+  }
+
   return {
     active: (missionId) => runs.get(missionId),
 
@@ -272,6 +332,7 @@ export function createRunManager(
       } catch (error) {
         runs.delete(missionId);
         debug.event(missionId, "agent", `design run couldn't start: ${errorMessage(error)}`.slice(0, 300), { runId: run.id, actor: actorForLog(input.actor), error: errorMessage(error) }, "warn");
+        if (!(error instanceof ToolInputError)) await recordFailedStart(missionId, input, friendlyError(error)).catch((cause: unknown) => log.warn({ missionId, err: errorMessage(cause) }, "couldn't record the failed start"));
         throw error;
       }
       debug.event(missionId, "agent", `design run started by ${input.actor.kind} ${input.actor.id} (${input.actor.channel})`, { runId: run.id, actor: actorForLog(input.actor) });

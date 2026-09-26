@@ -15,6 +15,7 @@ import type { Express } from "express";
 import { mountChat } from "./chat.js";
 import type { AgentDeps } from "./deps.js";
 import { anthropicModels, type AgentModels } from "./models.js";
+import { StructuredAnswerError } from "./pi-object.js";
 import { createRetroReviewer } from "./retro.js";
 import { createRunManager } from "./runs.js";
 import { createTestAuthor } from "./test-author.js";
@@ -85,7 +86,7 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
           debug.event(input.missionId, "agent", `test author wrote ${suite.scenarios.length} scenarios`, { step: "test-author", ms: Date.now() - started, scenarios: suite.scenarios.map((s) => s.id) });
           return suite;
         } catch (error) {
-          debug.event(input.missionId, "agent", "test author failed", { step: "test-author", ms: Date.now() - started, error: errorMessage(error) }, "warn");
+          debug.event(input.missionId, "agent", `test author failed: ${errorMessage(error)}`.slice(0, 300), { step: "test-author", ms: Date.now() - started, error: errorMessage(error), ...(error instanceof StructuredAnswerError ? { rawAnswer: error.raw } : {}) }, "warn");
           throw error;
         }
       },

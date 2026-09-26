@@ -82,8 +82,8 @@ describe("scan vision", () => {
     const user = fast.requests[0]!.messages.find((m) => m.role === "user") as { content: { type: string; mimeType?: string; text?: string }[] };
     expect(user.content[0]).toMatchObject({ type: "image", mimeType: "image/jpeg" });
     expect(user.content[1]!.text).toContain(`${result.analyzed[0]!.width}×${result.analyzed[0]!.height} px`);
-    // One structured answer per photo: the answer schema is the only tool and Claude must call it, at low effort.
-    expect(fast.requestOptions[0]).toMatchObject({ effort: "low", toolChoice: { type: "tool", name: "scan_groups" } });
+    // One structured answer per photo: the answer schema is the only tool and Claude must call it (thinking off).
+    expect(fast.requestOptions[0]).toMatchObject({ toolChoice: { type: "tool", name: "scan_groups" }, thinkingEnabled: false });
   });
 
   it("needs a Claude credential (owner's account or server key)", async () => {

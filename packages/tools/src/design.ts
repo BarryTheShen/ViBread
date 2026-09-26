@@ -87,7 +87,8 @@ export function createDesignOps(deps: { store: MissionStore; pipeline: Pipeline;
           coverageGaps: (candidate) => coverageOf(circuit, candidate).missing,
           ...(signal ? { signal } : {}),
         });
-        suites.set(key, suite);
+        // A suite with coverage gaps isn't kept: the next proposal asks the author again instead of reusing its gaps.
+        if (coverageOf(circuit, suite).missing.length === 0) suites.set(key, suite);
         return suite;
       } catch (error) {
         if (isClaudeNotConnected(error)) throw new TestsNotWrittenError();

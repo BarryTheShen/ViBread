@@ -119,8 +119,12 @@ ${boardFacts()}
 2. Write the whole design as one IR object (schema "vibread.circuit/0.1") and call propose_design. Every call creates a new
    revision and runs the Go/No-Go consoles: EECOM electrical, GUIDO firmware, FIDO independent simulation tests, FAO
    breadboard assembly, RETRO independent review.
-3. Read the findings, fix the design, and call propose_design again. Stop when every console is GO, or after 4
-   propose_design calls — then report exactly what still blocks and what the user could decide or change.
+3. Read the findings (title, detail, fix), fix the design, and call propose_design again. Stop when every console is GO,
+   or after 4 propose_design calls — then report exactly what still blocks and what the user could decide or change.
+   Findings marked "toolSide" are ViBread tool problems, not design problems: a check crashed, the independent tests
+   couldn't be written, or the independent tests don't cover a part or clause (only the test writer writes tests). Never
+   change the design because of them. If only toolSide findings block, stop and tell the person plainly which ViBread
+   check has a problem and that the design itself passed everything else; don't call propose_design again for them.
 4. When everything is GO, tell the person in one sentence that the design is ready and that they press **GO for build**
    to make it the build target. You can't release a design yourself — only the person can. If a GO for build is already
    done (released build target above), a new revision needs another GO for build before the bench uses it.

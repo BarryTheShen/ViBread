@@ -9,8 +9,8 @@ import type { ServerConfig } from "../config.js";
 /** Which credential pays for an agent call (shown on the timeline when it is the user's own account). */
 export type ModelCredential = { kind: "claude-account"; email?: string } | { kind: "server-key" };
 
-/** Options a single-shot call may set (Anthropic Messages): forced tool, effort, output cap, cancellation. */
-export type ClaudeCallOptions = Pick<AnthropicOptions, "toolChoice" | "effort" | "maxTokens" | "signal">;
+/** Options a single-shot call may set (Anthropic Messages): forced tool, thinking off, effort, output cap, cancellation. */
+export type ClaudeCallOptions = Pick<AnthropicOptions, "toolChoice" | "thinkingEnabled" | "effort" | "maxTokens" | "signal">;
 
 /**
  * A Claude model on pi-ai, bound to the credential that pays for it: `streamFn` drives the design agent (pi's Agent),
@@ -55,13 +55,16 @@ const CLAUDE_DEFAULTS: Omit<Model<"anthropic-messages">, "id" | "name" | "baseUr
   maxTokens: 32_000,
 };
 
+/** Rate limits, overloads and dropped connections are retried as Claude asks (retry-after), up to this wait per retry. */
+const RETRY = { maxRetries: 2, maxRetryDelayMs: 30_000 } as const;
+
 function bind(models: Models, model: Model<Api>, credential: ModelCredential, transport: { fetch?: typeof globalThis.fetch }): ClaudeModel {
   return {
     model,
     modelId: model.id,
     credential,
-    streamFn: (m, context, options) => models.streamSimple(m, context, { ...options, ...transport }),
-    complete: (context, options) => models.complete(model as Model<"anthropic-messages">, context, { ...options, ...transport }),
+    streamFn: (m, context, options) => models.streamSimple(m, context, { ...RETRY, ...options, ...transport }),
+    complete: (context, options) => models.complete(model as Model<"anthropic-messages">, context, { ...RETRY, ...options, ...transport }),
   };
 }
 
