@@ -295,7 +295,7 @@ persisted snapshots in SQLite, so human waits survive restarts.
 |---|---|---|
 | EECOM (electrical) | Typed ERC + Uno rules (json-rules-engine data) + analytic limits at worst-case corners (SPICE cross-check with item 13) | research/03 |
 | GUIDO (firmware) | arduino-cli compile (`--json --warnings all`), flash/RAM budget, pin modes observed in simulation vs IR roles | research/05, 04 |
-| FIDO (simulation) | Independent intent tests pass **and** coverage rules hold | research/04 |
+| FIDO (simulation) | Independent intent tests pass **and** coverage rules hold. Failing tests are first reviewed by the test author against the intent and the failure timelines (never the sketch): tests that contradict the intent are corrected and re-run as the next revision (same circuit); ones still in doubt become `TESTS-SUSPECT` (tool-side), so a wrong test never counts as a design NO-GO (issue #16). Suites carry over between revisions: scenarios of unchanged clauses are kept, and the author writes new ones only for changed clauses. The design agent can `dispute_test` instead of changing behavior to pass a test | research/04 |
 | FAO (assembly) | Layout fits the user's breadboard; LVS derived nets == IR nets | research/07 |
 | RETRO (review agent) | Independent agent compares brief, IR, sketch, and results; votes GO/NO-GO with reasons | — |
 

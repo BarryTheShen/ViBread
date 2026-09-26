@@ -8,6 +8,7 @@ import {
   type InventoryItem,
   type Mission,
   type Revision,
+  type Scenario,
 } from "@vibread/core";
 import { GOLDEN } from "@vibread/fixtures";
 import { circuitInterface, type CircuitInterface } from "@vibread/tools";
@@ -122,9 +123,15 @@ ${boardFacts()}
 3. Read the findings (title, detail, fix), fix the design, and call propose_design again. Stop when every console is GO,
    or after 4 propose_design calls — then report exactly what still blocks and what the user could decide or change.
    Findings marked "toolSide" are ViBread tool problems, not design problems: a check crashed, the independent tests
-   couldn't be written, or the independent tests don't cover a part or clause (only the test writer writes tests). Never
-   change the design because of them. If only toolSide findings block, stop and tell the person plainly which ViBread
-   check has a problem and that the design itself passed everything else; don't call propose_design again for them.
+   couldn't be written, a test looks wrong (TESTS-SUSPECT), the tests don't cover a part or clause (only the test writer
+   writes tests), or the layout tool couldn't do something. Never change the design because of them. If only toolSide
+   findings block, stop and tell the person plainly which ViBread check has a problem and that the design itself passed
+   everything else; don't call propose_design again for them.
+   Simulation tests (FIDO) check the intent, and a test can be wrong. A SIM-FAIL detail gives the failing step with its
+   time window (t=start–end ms) and what was seen: compare it with the intent's timeline. If the test contradicts the
+   intent — not your sketch — call dispute_test with the scenario ids and why, instead of changing the design. Never
+   remove, weaken or change user-visible behavior (a feature, a light, a timer, a sound, how a button acts) just to make
+   a test pass: if you think a feature must change, ask the person with ask_user first.
 4. When everything is GO, tell the person in one sentence that the design is ready and that they press **GO for build**
    to make it the build target. You can't release a design yourself — only the person can. If a GO for build is already
    done (released build target above), a new revision needs another GO for build before the bench uses it.
@@ -138,6 +145,11 @@ ${boardFacts()}
   (led {color}, resistor {ohms, tolerancePct}, potentiometer {ohms}); give each part a plain "label" ("Rightmost moon light").
 - nets: every connection is a net {id, kind: power|ground|signal, pins:[{part, pin}]}. Board pins are
   {"part":"board","pin":"D3"} / "A0" / "5V" / "GND". Each pin appears in exactly one net. Power nets hold 5V, ground nets GND.
+- placement (optional): {"groups": [["BTN1","LED1","R1"], ["BTN2","LED2","R2"]]} puts each group's parts side by side
+  on the breadboard: the first part is the anchor, and the others go within a few rows of it on the same half. Use it
+  whenever the person asks for parts to sit together ("the light next to its button"); part order and labels don't move
+  parts. propose_design returns a "placement" summary of where every part really went: describe the layout only from it,
+  and if a group wasn't met (PLACEMENT-UNMET), say so plainly and don't label or describe parts as if it were.
 - roles: exactly one per board I/O pin the sketch uses, and none for pins it doesn't use:
   {pin, mode: OUTPUT|INPUT|INPUT_PULLUP|ANALOG_IN|PWM_OUT, part, purpose}. Roles MUST match the sketch: pinMode(pin, OUTPUT)
   → OUTPUT, INPUT_PULLUP → INPUT_PULLUP, analogWrite → PWM_OUT, analogRead → ANALOG_IN. The simulator decodes what the
@@ -174,46 +186,79 @@ ${DESIGN_EXAMPLES}
 Keep chat replies short: what you did, the console verdicts in plain words, and the next step for the person.`;
 }
 
-/** Test author: brief + interface only. The sketch never reaches this prompt (enforced by CircuitInterface). */
-export function testAuthorPrompt(input: { brief: string; design: CircuitInterface; gaps?: string[] }): string {
+/**
+ * Test author: brief + interface only. The sketch never reaches this prompt (enforced by CircuitInterface).
+ * `keep`: scenarios carried over from the previous revision (their clauses didn't change); the author writes scenarios
+ * only for `clauses` and must not repeat or contradict the kept ones.
+ */
+export function testAuthorPrompt(input: { brief: string; design: CircuitInterface; gaps?: string[]; keep?: Scenario[]; clauses?: string[] }): string {
+  const keep = input.keep?.length
+    ? `\nThese scenarios from the previous revision stay exactly as they are (their clauses didn't change) — don't repeat them:
+${JSON.stringify(input.keep)}
+Write scenarios ONLY for these intent clauses: ${input.clauses?.join(", ") || "(none)"}. Number them after ${input.keep.map((s) => s.id).join(", ")}, and
+return only your new scenarios (ViBread adds the kept ones back).\n`
+    : "";
   return `Mission brief:
 ${input.brief}
 
 Design interface (parts, pin roles, intent — you do not get the firmware):
 ${JSON.stringify(input.design, null, 2)}
-${input.gaps?.length ? `\nYour previous suite missed these coverage rules — fix them all:\n${input.gaps.map((g) => `- ${g}`).join("\n")}\n` : ""}
+${keep}${input.gaps?.length ? `\nYour previous suite missed these coverage rules — fix them all:\n${input.gaps.map((g) => `- ${g}`).join("\n")}\n` : ""}
 Write the test suite now.`;
 }
+
+/** How simulated time moves, shared by the test author and the test reviewer. */
+const SIM_TIME_RULES = `Steps run one after another, and time only moves forward. These steps ADVANCE virtual time:
+- {"wait": ms} by ms; {"press": …} by holdMs + gapMs; {"bounce": …} by ms;
+- {"expect-part": …}, {"expect-parts": …}, {"expect-pwm": …} and {"expect-tone": …} by their windowMs — an expectation is not
+  a snapshot, it watches the part over the NEXT windowMs and the clock ends at the window's end;
+- {"expect-serial": …} by up to withinMs.
+Only set-digital, set-light, set-analog and expect-pin take no time. So consecutive expect-part steps check consecutive
+windows (t..t+50, then t+50..t+100, …), never the same moment: to check several parts at the same moment, use ONE
+{"expect-parts": {checks: [{part, state}, …], windowMs}} step.
+Write the timeline down before choosing waits: start at the intent's numbers (a 1000 ms start delay, a 500 ms gap after
+a hit), subtract the windows and presses that already elapsed, and keep every window ≥ 150 ms away from any moment the
+output is meant to change.
+Worked example — intent: "At power-on all lights are off; 1 s later the first light turns on."
+  WRONG:  expect-part LED1 off 50 (t 0–50) · expect-part LED2 off 50 (t 50–100) · expect-part LED3 off 50 (t 100–150) ·
+          wait 900 (t 150–1050) · expect-part LED1 off 50 (t 1050–1100 — LED1 already came on at 1000, so this fails
+          although the firmware is right)
+  RIGHT:  expect-parts [LED1 off, LED2 off, LED3 off] 50 (t 0–50) · wait 750 (t 50–800) · expect-parts [LED1 off, LED2 off,
+          LED3 off] 50 (t 800–850) · wait 350 (t 850–1200) · expect-part LED1 on 100 (t 1200–1300)`;
 
 export const TEST_AUTHOR_SYSTEM = `You are ViBread's independent test author. You write simulation tests (schema "vibread.sim/v1")
 that check a design does what the person asked. You never see the firmware, on purpose: test the intent, not the code.
 
 Semantics (the ATmega328P simulator implements exactly this):
 - Virtual time starts at 0 at reset. "setup" values hold from t = 0. Defaults: light 0.8 (lit room), analog 0.0, digital false (button released).
-- {"wait": ms} advances time. {"press": {part, holdMs=120, gapMs=150}} presses, holds, releases, waits.
+- {"wait": ms}. {"press": {part, holdMs=120, gapMs=150}} presses, holds, releases, then waits gapMs.
 - {"bounce": {part, to, edges=6, ms=8}} simulates contact bounce ending in state "to" (true = held down, false = released).
   A bouncy press is bounce to true, then later bounce to false; releasing a button is never a press by itself.
 - {"set-digital": {part, value}}, {"set-light": {part, level 0..1}}, {"set-analog": {part, value 0..1}}.
 - {"expect-pin": {pin, level: high|low}} checks a board pin now. {"expect-part": {part, state: on|off, windowMs=50}} watches an LED/active
   buzzer over a window (on = lit ≥ 90%, off = ≤ 10%), so a dimmed (PWM) LED is neither: check in-between brightness with
   {"expect-pwm": {pin, min, max, windowMs}} (duty 0..1). {"expect-tone": {part, minHz, maxHz}}.
+  {"expect-parts": {checks: [{part, state: on|off}, …], windowMs=50}} watches several parts over ONE shared window.
   {"expect-serial": {contains, withinMs}} — avoid unless the intent names serial output.
+
+Time:
+${SIM_TIME_RULES}
 
 Rules:
 - Scenario ids T1, T2, …; each has a plain-language "title" a beginner reads ("In the dark, pressing the button 3 times lights 3 LEDs from the right"),
   the intent clause ids it covers, and categories from: ${SCENARIO_CATEGORIES.join(", ")}.
 - Coverage (checked by code; missing any one makes the simulation console NO-GO):
-  - every output part (LED, buzzer) asserted with expect-part / expect-pin / expect-pwm / expect-tone in some scenario;
+  - every output part (LED, buzzer) asserted with expect-part / expect-parts / expect-pin / expect-pwm / expect-tone in some scenario;
   - every input part (button, photoresistor, potentiometer) exercised with press/bounce/set-digital/set-light/set-analog;
   - every intent clause id listed in at least one scenario's "clauses";
   - categories: always "power-on" (state right after reset, before any input); with a button also "bounce" (a bounce step
     must count as ONE press) and "rapid" (several quick presses); with a photoresistor also "threshold" (clearly dark vs
     clearly bright) and "hysteresis" (a small change near the switch point must not flip the output back); with a
     potentiometer also "edge" (both ends of the knob travel).
-- Give the sketch time: wait ≥ 60 ms after a change before expecting its effect; use expect-part windows for LEDs.
-- Every step advances virtual time: wait, press (holdMs + gapMs), bounce, and every expect window. For timed behavior
-  (countdowns, blinks, durations), add these up from the triggering press and keep each expect window ≥ 150 ms away from
-  any moment the output is meant to change; a press acts on its press edge (after debounce), not on release.
+- Give the sketch time: wait ≥ 60 ms after a change before expecting its effect. A press acts on its press edge (after
+  debounce), not on release.
+- Test only what the intent says. Where the intent leaves something open (random order, exact timing not stated), don't
+  assert it: check what must hold in every case instead.
 - Every expectation must be able to fail if the behavior were wrong (never e.g. expect-pwm min 0 max 1).
 - Light: set-light levels give these A0 readings (photoresistor to 5V, 10 kΩ to GND; wired the other way, 1023 minus
   them): ${lightTable()}. "threshold" tests use clearly dark (≤ 0.1) and clearly bright (≥ 0.8). "hysteresis" tests need
@@ -223,6 +268,32 @@ Rules:
 - Keep each scenario under ~5 s of virtual time. author must be "test-author".
 
 ${TEST_EXAMPLE}`;
+
+/** Test reviewer: the independent test author checking its own failing scenarios against the intent (never the sketch). */
+export const TEST_REVIEW_SYSTEM = `You are ViBread's independent test author, reviewing your own simulation tests after some failed. You still
+never see the firmware. For each failing scenario decide, from the brief, the intent and the failure's timeline only:
+- "test-wrong": the scenario contradicts the intent or the simulator's time rules — e.g. it checks a moment the intent
+  doesn't fix, stacks expect windows as if they were simultaneous, forgets that elapsed windows moved the clock, or asserts
+  something the intent leaves open. Give a corrected scenario (same id, same clauses) that tests the same intent correctly.
+- "design-wrong": the scenario matches the intent and the time rules, and the failure shows the design doesn't do what the
+  intent says (wrong output, wrong timing, missing behavior). Keep it.
+- "unsure": you can't tell from the timeline. Explain in one sentence what makes it unclear.
+Never weaken a test just to make it pass: a corrected scenario must still fail if the intended behavior were missing.
+
+${SIM_TIME_RULES}`;
+
+export function testReviewPrompt(input: { brief: string; design: CircuitInterface; failures: { scenario: Scenario; detail: string }[]; dispute?: string }): string {
+  return `Mission brief:
+${input.brief}
+
+Design interface (parts, pin roles, intent — no firmware):
+${JSON.stringify(input.design, null, 2)}
+
+Failing scenarios, each with its failure timeline from the simulator (step number. t=start–end ms, what was seen):
+${input.failures.map((f) => `${JSON.stringify(f.scenario)}\nFailure: ${f.detail}`).join("\n\n")}
+${input.dispute ? `\nThe design agent disputes these tests: ${input.dispute}\nJudge it against the intent, not against the agent's wishes.\n` : ""}
+Review each failing scenario now.`;
+}
 
 export const RETRO_SYSTEM = `You are RETRO, ViBread's independent reviewer. You see the brief, the full design (IR + sketch), the independent
 tests and their results, and every console's report. You cannot change anything; you vote GO or NO-GO with short reasons a

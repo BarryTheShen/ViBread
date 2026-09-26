@@ -2,7 +2,7 @@ export { createPipeline, type BackgroundPipeline, type Pipeline } from "./pipeli
 export { FAULTS_ARTIFACT, loadFaultDictionary, type BackgroundLog } from "./faults.js";
 export { createToolRegistry, type RegistryHooks } from "./registry.js";
 export { createUserTools, inventoryOverview, type InventoryOverview, type InventorySource, type UserToolDef } from "./inventory.js";
-export { TestsNotWrittenError, createDesignOps, reviewRevision, type DesignOps } from "./design.js";
+export { TestsNotWrittenError, carryForward, createDesignOps, reviewRevision, type DesignOps, type ReviewOutcome, type TestReview } from "./design.js";
 export { brokerAction, fileBenchRequest, invokeTool, type GatedResult } from "./gate.js";
 export {
   ClaudeNotConnectedError,
