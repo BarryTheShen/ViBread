@@ -296,8 +296,9 @@ export interface DrawingBox {
 }
 
 /**
- * Drawn extent of a placed part in drawing units: body, leads, pin cues, and the callout label shown when it is added
- * (the longer of its two label texts). The allocator keeps these boxes apart so parts never hide each other.
+ * Drawn extent of a placed part in drawing units: body, leads, pin cues, and its name label (the finished-board
+ * picture labels every part by id; the longer "R1 220 Ω" callout only shows on the step that adds the part, on top of
+ * everything). The allocator keeps these boxes apart so parts never hide each other.
  */
 export function partDrawingBox(breadboard: Layout["breadboard"], part: Part, pins: Record<string, HoleId>): DrawingBox {
   const geometry = partGeometry({ breadboard }, part, { pins });
@@ -318,8 +319,7 @@ export function partDrawingBox(breadboard: Layout["breadboard"], part: Part, pin
     around(radius, radius);
     boxes.push({ left: p.x - 5, top: p.y - 20, right: p.x + 5, bottom: p.y });
   } else around(24, 14);
-  const label = `${part.id} ${valueLabel(part)}`;
-  const width = Math.max(42, label.length * 7 + 12);
+  const width = Math.max(42, part.id.length * 7 + 12);
   boxes.push({ left: x - width / 2, top: y - 43, right: x + width / 2, bottom: y - 13 });
   return {
     left: Math.min(...boxes.map((box) => box.left)),

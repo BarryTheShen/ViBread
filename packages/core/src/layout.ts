@@ -98,3 +98,15 @@ export interface LvsResult {
   /** IR net id → derived net id (when the IR net maps onto exactly one derived net). */
   netMap: Record<string, string>;
 }
+
+/**
+ * Where each part ended up and whether each requested placement group is side by side (issue #16). The design agent
+ * describes the layout from this, never from its own intentions.
+ */
+export interface PlacementSummary {
+  /** `rows`: breadboard row numbers (1…63), which run left to right in every drawing; `side`: half of the board. */
+  parts: { part: string; rows: [number, number]; side: "a-e" | "f-j" | "both" }[];
+  groups: { parts: string[]; met: boolean; detail: string }[];
+  /** Plain-language summary for the agent and the person. */
+  text: string;
+}

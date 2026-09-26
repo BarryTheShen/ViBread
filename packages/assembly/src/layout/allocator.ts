@@ -36,6 +36,7 @@ import {
 } from "@vibread/core";
 import { defaultNetColors } from "./colors.js";
 import { lvs } from "./lvs.js";
+import { GROUP_GAP, partExtent, placementSummary } from "./placement.js";
 import { headerRow, partDrawingBox, type DrawingBox } from "./svg.js";
 
 type Side = "left" | "right";
@@ -61,9 +62,11 @@ interface Strategy {
   spread: boolean;
   /** Part order: connected parts together (true) or by reference designator. */
   grouped: boolean;
+  /** Honour the circuit's placement groups (side by side, left to right as listed). */
+  placementGroups: boolean;
 }
 
-const STRATEGIES: Strategy[] = [
+const PACKINGS: Omit<Strategy, "placementGroups">[] = [
   { reserve: 1, spread: true, grouped: true },
   { reserve: 2, spread: true, grouped: true },
   { reserve: 1, spread: false, grouped: true },
@@ -90,6 +93,12 @@ interface Ctx {
   placements: Placement[];
   /** Drawn extents of placed parts. */
   bodies: DrawingBox[];
+  /** Placement groups being honoured: part → group index, and each group's rows/half so far. */
+  groupOfPart: Map<string, number>;
+  groupSpans: ([number, number] | undefined)[];
+  /** Rows of each group's first listed part (its anchor: the others sit within GROUP_GAP rows of it). */
+  groupAnchor: ([number, number] | undefined)[];
+  groupHalf: ("a-e" | "f-j" | undefined)[];
   jumpers: { jumper: Jumper; phase: number }[];
   /** Net → rail it uses (the Arduino 5 V net → T+, the Arduino GND net → T−). */
   railOf: Map<string, "T+" | "T-">;
@@ -270,11 +279,62 @@ function slot(ctx: Ctx, part: Part, column: Column, row: number, pin?: string): 
   return { hole, row, group: stripId(column <= "e" ? "left" : "right", row), ...(pin === undefined ? {} : { net: ctx.pinNet.get(`${part.id}.${pin}`)! }) };
 }
 
+/**
+ * Placement-group rule for a candidate (issue #16): a grouped part stays within GROUP_GAP rows of its group's anchor
+ * (first listed part), on the group's half, to the right of every earlier group; an ungrouped part stays out of the
+ * groups' rows.
+ */
+function groupAllows(ctx: Ctx, part: Part, pins: Record<string, HoleId>): boolean {
+  const extent = partExtent(pins);
+  if (!extent) return true;
+  const [from, to] = extent.rows;
+  const group = ctx.groupOfPart.get(part.id);
+  if (group === undefined) return ctx.groupSpans.every((span) => !span || to < span[0] || from > span[1]);
+  const earlier = ctx.groupSpans.slice(0, group).filter((span): span is [number, number] => span !== undefined);
+  if (earlier.length > 0 && from <= Math.max(...earlier.map((span) => span[1])) + 1) return false;
+  const anchor = ctx.groupAnchor[group];
+  if (anchor && Math.max(from - anchor[1], anchor[0] - to, 0) > GROUP_GAP) return false;
+  const half = ctx.groupHalf[group];
+  return !(half && extent.side !== "both" && extent.side !== half);
+}
+
 function place(ctx: Ctx, part: Part): void {
+  const constrained = ctx.groupSpans.length > 0;
+  const group = ctx.groupOfPart.get(part.id);
+  const span = group === undefined ? undefined : ctx.groupSpans[group];
+  const anchor = group === undefined ? undefined : ctx.groupAnchor[group];
+  // Within a group, closer is better: pull each part against its anchor (beats the header-row pull).
+  const closeness = anchor
+    ? (pins: Record<string, HoleId>) => {
+        const [from, to] = partExtent(pins)?.rows ?? [0, 0];
+        return Math.max(from - anchor[1], anchor[0] - to, 0) * 0.5;
+      }
+    : undefined;
+  const chosen = search(ctx, part, constrained ? (pins) => groupAllows(ctx, part, pins) : undefined, closeness) ?? (constrained ? search(ctx, part) : undefined);
+  if (!chosen) throw new LayoutFitError(`No room for ${part.id} (${MODULES[part.module].name}) on the ${ctx.profile.name}.`, true);
+  for (const [pin, hole] of Object.entries(chosen.pins)) {
+    occupy(ctx, hole, `${part.id}.${pin}`);
+    claimStrip(ctx, groupOf(ctx, hole), ctx.pinNet.get(`${part.id}.${pin}`)!);
+  }
+  for (const hole of chosen.covered) occupy(ctx, hole, `body:${part.id}`);
+  ctx.placements.push({ part: part.id, pins: chosen.pins });
+  ctx.bodies.push(chosen.body);
+  const extent = partExtent(chosen.pins);
+  if (group !== undefined && extent) {
+    ctx.groupSpans[group] = span ? [Math.min(span[0], extent.rows[0]), Math.max(span[1], extent.rows[1])] : extent.rows;
+    if (ctx.circuit.placement?.groups[group]?.[0] === part.id) ctx.groupAnchor[group] = extent.rows;
+    if (extent.side !== "both") ctx.groupHalf[group] ??= extent.side;
+  }
+}
+
+/** Cheapest legal position for `part` (optionally also passing `accept`), or undefined. */
+function search(ctx: Ctx, part: Part, accept?: (pins: Record<string, HoleId>) => boolean, extraCost?: (pins: Record<string, HoleId>) => number): Candidate | undefined {
   let best: Candidate | undefined;
   const consider = (pins: Record<string, HoleId>, slots: Slot[], spanPenalty: number) => {
-    const cost = slotCost(ctx, slots, spanPenalty);
+    const base = slotCost(ctx, slots, spanPenalty);
+    const cost = base === undefined ? undefined : base + (extraCost?.(pins) ?? 0);
     if (cost === undefined || (best && cost >= best.cost - 1e-9)) return;
+    if (accept && !accept(pins)) return;
     const body = partDrawingBox(ctx.profile.id, part, pins);
     if (ctx.strategy.spread) {
       const margin = 4;
@@ -316,19 +376,25 @@ function place(ctx: Ctx, part: Part): void {
       }
     }
   }
-  if (!best) throw new LayoutFitError(`No room for ${part.id} (${MODULES[part.module].name}) on the ${ctx.profile.name}.`, true);
-  const chosen: Candidate = best;
-  for (const [pin, hole] of Object.entries(chosen.pins)) {
-    occupy(ctx, hole, `${part.id}.${pin}`);
-    claimStrip(ctx, groupOf(ctx, hole), ctx.pinNet.get(`${part.id}.${pin}`)!);
-  }
-  for (const hole of chosen.covered) occupy(ctx, hole, `body:${part.id}`);
-  ctx.placements.push({ part: part.id, pins: chosen.pins });
-  ctx.bodies.push(chosen.body);
+  return best;
 }
 
 /** Parts connected by signal nets are placed back to back, starting from the Arduino pins in pin order. */
 function placementOrder(ctx: Ctx): Part[] {
+  const byId = new Map(ctx.circuit.parts.map((part) => [part.id, part]));
+  // Placement groups first, in the order listed (left to right): each group's anchor, then its other parts with
+  // resistors last (their span stretches to fit, so the parts the person asked about get the spots next to the anchor).
+  const first = ctx.groupSpans.length > 0
+    ? (ctx.circuit.placement?.groups ?? []).flatMap((group) => {
+        const [anchor, ...others] = group.flatMap((id) => byId.get(id) ?? []);
+        return anchor ? [anchor, ...others.filter((part) => part.module !== "resistor"), ...others.filter((part) => part.module === "resistor")] : [];
+      })
+    : [];
+  const rest = connectedOrder(ctx).filter((part) => !first.includes(part));
+  return [...first, ...rest];
+}
+
+function connectedOrder(ctx: Ctx): Part[] {
   const parts = [...ctx.circuit.parts].sort((a, b) => a.id.localeCompare(b.id));
   if (!ctx.strategy.grouped) return parts;
   const signalNets = ctx.circuit.nets.filter((net) => net.kind === "signal");
@@ -589,11 +655,23 @@ function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strateg
     netRows: new Map(),
     placements: [],
     bodies: [],
+    groupOfPart: new Map(),
+    groupSpans: [],
+    groupAnchor: [],
+    groupHalf: [],
     jumpers: [],
     railOf: new Map(),
     headerHoles: new Map(),
     homeRow: new Map(),
   };
+  if (strategy.placementGroups) {
+    (circuit.placement?.groups ?? []).forEach((group, index) => {
+      for (const id of group) ctx.groupOfPart.set(id, index);
+      ctx.groupSpans.push(undefined);
+      ctx.groupAnchor.push(undefined);
+      ctx.groupHalf.push(undefined);
+    });
+  }
   reserveNano(ctx);
   assignRails(ctx);
   for (const part of placementOrder(ctx)) place(ctx, part);
@@ -623,17 +701,31 @@ export function layoutBoard(circuit: Circuit): Layout {
   if (!profile) throw new LayoutFitError(`Unknown breadboard profile ${circuit.breadboard.profile}.`, true);
   if (!BOARD_PROFILES[circuit.board.profile]) throw new LayoutFitError(`Unknown board profile ${circuit.board.profile}.`, true);
   const failures: string[] = [];
-  for (const strategy of STRATEGIES) {
+  // With placement groups: every packing honouring them first, then the same packings without (the placement summary
+  // then reports the unmet groups). The first LVS-clean layout with the fewest unmet groups wins.
+  const grouped = (circuit.placement?.groups.length ?? 0) > 0;
+  const strategies: Strategy[] = [
+    ...(grouped ? PACKINGS.map((packing) => ({ ...packing, placementGroups: true })) : []),
+    ...PACKINGS.map((packing) => ({ ...packing, placementGroups: false })),
+  ];
+  let fallback: { layout: Layout; unmet: number } | undefined;
+  for (const strategy of strategies) {
     try {
       const layout = attempt(circuit, profile, strategy);
       const result = lvs(circuit, layout);
-      if (result.ok) return layout;
-      failures.push(result.issues.filter((issue) => issue.severity === "error").map((issue) => issue.message).join("; "));
+      if (!result.ok) {
+        failures.push(result.issues.filter((issue) => issue.severity === "error").map((issue) => issue.message).join("; "));
+        continue;
+      }
+      const unmet = grouped ? placementSummary(circuit, layout).groups.filter((group) => !group.met).length : 0;
+      if (unmet === 0) return layout;
+      if (!fallback || unmet < fallback.unmet) fallback = { layout, unmet };
     } catch (error) {
       if (error instanceof LayoutFitError && !error.toolSide) throw error;
       failures.push(error instanceof Error ? error.message : String(error));
     }
   }
+  if (fallback) return fallback.layout;
   const reason = [...new Set(failures)].slice(0, 2).join(" / ");
   throw new LayoutFitError(`ViBread could not fit this circuit on the ${profile.name}: ${reason}`, true);
 }

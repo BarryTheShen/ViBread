@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import { GOLDEN } from "@vibread/fixtures";
-import { CircuitSchema, ENVELOPE, validateCircuit, type Circuit, type Layout } from "@vibread/core";
+import { CircuitSchema, ENVELOPE, parseCircuit, parseHole, validateCircuit, type Circuit, type Layout } from "@vibread/core";
 
-import { LayoutFitError, assemblyReport, buildSteps, layoutBoard, layoutFailureReport, layoutHash, lvs } from "./index.js";
+import { LayoutFitError, assemblyReport, buildSteps, layoutBoard, layoutFailureReport, layoutHash, lvs, placementSummary } from "./index.js";
 import { renderBreadboardSvg } from "./svg.js";
 
 function issueKinds(circuit: (typeof GOLDEN)[number]["circuit"], layout: Layout): string[] {
@@ -164,7 +164,7 @@ type Ref = { part: string; pin: string };
 const board = (pin: string): Ref => ({ part: "board", pin });
 const pin = (part: string, id: string): Ref => ({ part, pin: id });
 
-function circuitOf(input: { parts: unknown[]; nets: unknown[]; roles: unknown[]; breadboard?: "bb-830" | "bb-400" }): Circuit {
+function circuitOf(input: { parts: unknown[]; nets: unknown[]; roles: unknown[]; breadboard?: "bb-830" | "bb-400"; placement?: unknown }): Circuit {
   return CircuitSchema.parse({
     schema: "vibread.circuit/0.1",
     title: "Layout regression",
@@ -176,6 +176,7 @@ function circuitOf(input: { parts: unknown[]; nets: unknown[]; roles: unknown[];
     roles: input.roles,
     sketch: { source: "void setup() {}\nvoid loop() {}\n" },
     intent: [{ id: "C1", text: "Regression." }],
+    ...(input.placement ? { placement: input.placement } : {}),
   });
 }
 
@@ -462,5 +463,102 @@ describe("allocator realizes every net (issue #13)", () => {
       expect((error as LayoutFitError).toolSide).toBe(false);
       expect(layoutFailureReport({ error: error as LayoutFitError, revisionHash: "test" }).findings[0]?.toolSide).toBeUndefined();
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Issue #16: "put each light next to its button" must be built, or reported as not built.
+
+/** The whack-a-mole from issue #16: buttons D2–D4, LEDs D8–D10 through 1 kΩ, optionally grouped button+R+LED. */
+function whackAMole(options: { groups?: boolean; breadboard?: "bb-830" | "bb-400" } = {}): Circuit {
+  const moles = [1, 2, 3];
+  return circuitOf({
+    breadboard: options.breadboard,
+    parts: [
+      ...moles.map((i) => ({ id: `BTN${i}`, module: "button", params: {} })),
+      ...moles.map((i) => ({ id: `R${i}`, module: "resistor", params: { ohms: 1000 } })),
+      ...moles.map((i) => ({ id: `LED${i}`, module: "led", params: { color: ["red", "yellow", "green"][i - 1] } })),
+    ],
+    nets: [
+      { id: "GND", kind: "ground", pins: [board("GND"), ...moles.map((i) => pin(`BTN${i}`, "3")), ...moles.map((i) => pin(`LED${i}`, "K"))] },
+      ...moles.map((i) => ({ id: `D${i + 1}`, kind: "signal", pins: [board(`D${i + 1}`), pin(`BTN${i}`, "1")] })),
+      ...moles.map((i) => ({ id: `D${i + 7}`, kind: "signal", pins: [board(`D${i + 7}`), pin(`R${i}`, "1")] })),
+      ...moles.map((i) => ({ id: `L${i}`, kind: "signal", pins: [pin(`R${i}`, "2"), pin(`LED${i}`, "A")] })),
+    ],
+    roles: [
+      ...moles.map((i) => ({ pin: `D${i + 1}`, mode: "INPUT_PULLUP", part: `BTN${i}`, purpose: `Button ${i}` })),
+      ...moles.map((i) => ({ pin: `D${i + 7}`, mode: "OUTPUT", part: `LED${i}`, purpose: `Mole ${i}` })),
+    ],
+    ...(options.groups ? { placement: { groups: moles.map((i) => [`BTN${i}`, `R${i}`, `LED${i}`]) } } : {}),
+  });
+}
+
+/** Rows and board halves of a placed part, straight from its holes. */
+function where(layout: Layout, part: string): { from: number; to: number; halves: Set<string> } {
+  const holes = Object.values(layout.placements.find((placement) => placement.part === part)!.pins).map((hole) => parseHole(hole)!);
+  const rows = holes.map((hole) => (hole.kind === "terminal" ? hole.row : 0));
+  return { from: Math.min(...rows), to: Math.max(...rows), halves: new Set(holes.map((hole) => (hole.kind === "terminal" && "abcde".includes(hole.column) ? "top" : "bottom"))) };
+}
+
+describe("placement groups (issue #16)", () => {
+  it.each(["bb-830", "bb-400"] as const)("puts each light and its resistor next to its button on %s, groups left to right", (breadboard) => {
+    const circuit = whackAMole({ groups: true, breadboard });
+    const layout = assertBuildable(circuit);
+    let previousEnd = 0;
+    for (const i of [1, 2, 3]) {
+      const button = where(layout, `BTN${i}`);
+      const led = where(layout, `LED${i}`);
+      const resistor = where(layout, `R${i}`);
+      // Within 4 rows of the button's rows, one half of the board for LED and resistor.
+      for (const part of [led, resistor]) expect(Math.max(part.from - button.to, button.from - part.to, 0), `mole ${i}`).toBeLessThanOrEqual(4);
+      expect(led.halves.size).toBe(1);
+      expect([...resistor.halves]).toEqual([...led.halves]);
+      const start = Math.min(button.from, led.from, resistor.from);
+      expect(start, `group ${i} starts right of group ${i - 1}`).toBeGreaterThan(previousEnd);
+      previousEnd = Math.max(button.to, led.to, resistor.to);
+    }
+    const report = assemblyReport({ circuit, layout, lvs: lvs(circuit, layout), revisionHash: "test" });
+    expect(report.findings.some((finding) => finding.ruleId === "PLACEMENT-UNMET")).toBe(false);
+    expect(placementSummary(circuit, layout).groups.map((group) => group.met)).toEqual([true, true, true]);
+  });
+
+  it("leaves designs without groups as they were: no placement findings, nothing reported as grouped", () => {
+    const circuit = whackAMole();
+    const layout = assertBuildable(circuit);
+    const report = assemblyReport({ circuit, layout, lvs: lvs(circuit, layout), revisionHash: "test" });
+    expect(report.findings.some((finding) => finding.ruleId === "PLACEMENT-UNMET")).toBe(false);
+    expect(placementSummary(circuit, layout).groups).toEqual([]);
+    expect(placementSummary(circuit, layout).parts.map((entry) => entry.part).sort()).toEqual(circuit.parts.map((part) => part.id).sort());
+  });
+
+  it("reports a group it cannot build as PLACEMENT-UNMET (tool-side) and still lays the circuit out", () => {
+    const keys = [1, 2, 3, 4, 5, 6];
+    const circuit = circuitOf({
+      parts: keys.map((i) => ({ id: `BTN${i}`, module: "button", params: {} })),
+      nets: [
+        ...keys.map((i) => ({ id: `D${i + 1}`, kind: "signal", pins: [board(`D${i + 1}`), pin(`BTN${i}`, "1")] })),
+        { id: "GND", kind: "ground", pins: [board("GND"), ...keys.map((i) => pin(`BTN${i}`, "3"))] },
+      ],
+      roles: keys.map((i) => ({ pin: `D${i + 1}`, mode: "INPUT_PULLUP", part: `BTN${i}`, purpose: "key" })),
+      // Six buttons cannot all sit within 4 rows of BTN1.
+      placement: { groups: [keys.map((i) => `BTN${i}`)] },
+    });
+    const layout = assertBuildable(circuit);
+    const report = assemblyReport({ circuit, layout, lvs: lvs(circuit, layout), revisionHash: "test" });
+    const unmet = report.findings.filter((finding) => finding.ruleId === "PLACEMENT-UNMET");
+    expect(unmet).toHaveLength(1);
+    expect(unmet[0]).toMatchObject({ toolSide: true, severity: "warning", refs: { parts: keys.map((i) => `BTN${i}`) } });
+    expect(unmet[0]!.title).toContain("BTN1, BTN2, BTN3, BTN4, BTN5, BTN6");
+    expect(report.verdict).toBe("GO");
+    expect((report.evidence?.placement as { groups: { met: boolean }[] }).groups[0]!.met).toBe(false);
+  });
+
+  it("rejects placement groups naming unknown parts or a part twice", () => {
+    const base = whackAMole();
+    const unknown = parseCircuit({ ...base, placement: { groups: [["BTN1", "LED9"]] } });
+    expect(unknown.ok).toBe(false);
+    expect(unknown.issues.map((issue) => issue.code)).toContain("IR-PLACEMENT");
+    const twice = parseCircuit({ ...base, placement: { groups: [["BTN1", "LED1"], ["BTN2", "LED1"]] } });
+    expect(twice.issues.filter((issue) => issue.code === "IR-PLACEMENT")).toHaveLength(1);
   });
 });

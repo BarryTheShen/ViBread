@@ -200,6 +200,7 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
     const { layout, lvs } = laid.value;
     run.patch.layout = layout;
     run.patch.layoutHash = laid.value.layoutHash;
+    run.patch.placement = lib.placementSummary(circuit, layout);
     const fao = await run.stage("fao", () => lib.assemblyReport({ circuit, layout, lvs, revisionHash: hash }));
     const faoBase = fao.ok ? fao.value : report("FAO", [crashFinding("FAO", "assembly check", fao.error)], "The assembly check crashed.", hash);
     const faoExtra: Finding[] = [];
