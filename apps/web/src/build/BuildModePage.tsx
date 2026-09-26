@@ -19,8 +19,10 @@ import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
+import AddHomeOutlined from "@mui/icons-material/AddHomeOutlined";
 import CameraAltOutlined from "@mui/icons-material/CameraAltOutlined";
 import CheckCircleOutlined from "@mui/icons-material/CheckCircleOutlined";
+import Close from "@mui/icons-material/Close";
 import CloudOffOutlined from "@mui/icons-material/CloudOffOutlined";
 import ErrorOutlined from "@mui/icons-material/ErrorOutlined";
 import FactCheckOutlined from "@mui/icons-material/FactCheckOutlined";
@@ -120,34 +122,23 @@ function PlugBanner({ plug, reducedMotion }: { plug: BuildStep["plug"]; reducedM
   const plugged = plug === "plugged";
   const Icon = plugged ? Usb : UsbOff;
   return (
-    <Paper
+    <Chip
       component="section"
       aria-label={plugged ? "USB plugged in" : "USB unplugged"}
+      icon={<Icon aria-hidden="true" />}
+      label={plugged ? "USB plugged in · Plug the USB cable in now" : "USB unplugged · Keep the USB cable unplugged"}
       variant="outlined"
       sx={{
-        p: 1.75,
-        borderRadius: 3,
-        borderWidth: 2,
+        alignSelf: "flex-start",
+        minHeight: 40,
+        maxWidth: "100%",
+        color: plugged ? "success.main" : "warning.main",
         borderColor: plugged ? "success.main" : "warning.main",
         bgcolor: "background.paper",
-        transition: reducedMotion ? "none" : "border-color 180ms ease, background-color 180ms ease",
+        transition: reducedMotion ? "none" : "border-color 180ms ease",
+        "& .MuiChip-label": { whiteSpace: "normal", py: 0.75 },
       }}
-    >
-      <Stack direction="row" spacing={1.5} sx={{ alignItems: "center" }}>
-        <Icon
-          aria-hidden="true"
-          sx={{ fontSize: 34, color: plugged ? "success.main" : "warning.main", flexShrink: 0 }}
-        />
-        <Box>
-          <Typography variant="subtitle1" sx={{ fontWeight: 800, lineHeight: 1.2 }}>
-            {plugged ? "USB plugged in" : "USB unplugged"}
-          </Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.35 }}>
-            {plugged ? "Plug the USB cable in now" : "Keep the USB cable unplugged"}
-          </Typography>
-        </Box>
-      </Stack>
-    </Paper>
+    />
   );
 }
 function preloadImage(url?: string): void {
@@ -233,7 +224,7 @@ function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: bo
         sx={{
           position: "relative",
           width: "100%",
-          aspectRatio: "4 / 3",
+          aspectRatio: { xs: "16 / 9", sm: "4 / 3" },
           overflow: "hidden",
           bgcolor: "canvas.main",
         }}
@@ -917,38 +908,42 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
                 Build your circuit
               </Typography>
             </Box>
+          <Stack direction="row" sx={{ alignItems: "center", flexWrap: "wrap", gap: 0.75 }}>
+            {showPwaTip && (
+              <Chip
+                icon={<AddHomeOutlined />}
+                label="Add to Home Screen · Share → Add to Home Screen"
+                onDelete={dismissPwaTip}
+                deleteIcon={<ErrorOutlined aria-label="Dismiss Add to Home Screen tip" />}
+                variant="outlined"
+                sx={{
+                  minHeight: 40,
+                  maxWidth: "100%",
+                  "& .MuiChip-label": { whiteSpace: "normal", py: 0.75 },
+                }}
+              />
+            )}
             {stale && (
               <Chip
                 icon={<WifiOff />}
                 label={`Connection stale · ${ageLabel(query.dataUpdatedAt, now)}`}
                 color="warning"
                 variant="outlined"
-                sx={{
-                  alignSelf: { xs: "flex-start", sm: "flex-end" },
-                  minHeight: 36,
-                  maxWidth: 230,
-                  "& .MuiChip-label": { whiteSpace: "nowrap" },
-                }}
+                sx={{ minHeight: 36 }}
+              />
+            )}
+            {headline && (
+              <Chip
+                icon={stale ? <WifiOff /> : <FactCheckOutlined />}
+                label={headline}
+                color={stale ? "warning" : "info"}
+                variant="outlined"
+                role="status"
+                sx={{ minHeight: 36, maxWidth: "100%", "& .MuiChip-label": { whiteSpace: "normal" } }}
               />
             )}
           </Stack>
-          {showPwaTip && (
-            <Alert
-              severity="info"
-              onClose={dismissPwaTip}
-              closeText="Dismiss Add to Home Screen tip"
-              sx={{ alignItems: "center", "& .MuiAlert-message": { fontSize: "0.875rem", lineHeight: 1.45 } }}
-            >
-              Add to Home Screen: tap Share, then Add to Home Screen — the build opens like an app.
-            </Alert>
-          )}
-
-          {headline && (
-            <Alert severity={stale ? "warning" : "info"} icon={stale ? <WifiOff /> : <FactCheckOutlined />} role="status">
-              <AlertTitle>{headline}</AlertTitle>
-              {stale ? "The last successful update is old. Showing the last known checklist." : "Follow one step at a time."}
-            </Alert>
-          )}
+          </Stack>
 
           {query.error && build && (
             <Alert severity="warning" icon={<CloudOffOutlined />}>
