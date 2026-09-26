@@ -33,6 +33,8 @@ export const TOOL_LABELS: Record<string, ToolLabel> = {
   ask_user: { active: "Preparing a question…", done: "Asked you a question" },
 };
 
-export function toolLabel(toolName: string): ToolLabel {
+/** A tool part can arrive without its name (e.g. its output streams in after a reconnect); label it generically. */
+export function toolLabel(toolName: string | undefined): ToolLabel {
+  if (!toolName) return { active: "Working…", done: "Finished a step" };
   return TOOL_LABELS[toolName] ?? { active: `Working (${toolName.replace(/_/g, " ")})…`, done: `Finished ${toolName.replace(/_/g, " ")}` };
 }
