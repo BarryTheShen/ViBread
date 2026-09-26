@@ -2,14 +2,29 @@ import { readFileSync } from "node:fs";
 import { beforeAll, describe, expect, it } from "vitest";
 import { GOLDEN } from "@vibread/fixtures";
 import { compileSketch } from "@vibread/firmware";
+import type { Scenario } from "@vibread/core";
 import { coverageOf, observePinModes, runScenario, runSuite } from "./index.js";
 import { SimSession } from "./browser.js";
 const blinkHex = readFileSync(new URL("../test-fixtures/Blink.ino.hex", import.meta.url), "utf8");
+const blink25Hex = readFileSync(new URL("../test-fixtures/Blink25.ino.hex", import.meta.url), "utf8");
 const echoHex = readFileSync(new URL("../test-fixtures/Echo.ino.hex", import.meta.url), "utf8");
 const moon = GOLDEN.find((design) => design.key === "moon-phase-lamp");
 if (!moon) throw new Error("moon-phase-lamp fixture is required");
 
 let wrongMoonHex: string | undefined;
+function knobDutyScenario(id: "T25" | "T75", level: number): Scenario {
+  return {
+    id,
+    title: `Knob duty at ${level}`,
+    clauses: ["C1"],
+    categories: ["normal"],
+    setup: { analog: { POT1: level } },
+    steps: [
+      { wait: 200 },
+      { "expect-pwm": { pin: "D9", min: level - 0.03, max: level + 0.03, windowMs: 200 } },
+    ],
+  };
+}
 
 describe("avr8js golden simulation", () => {
   beforeAll(async () => {
@@ -71,6 +86,30 @@ describe("avr8js golden simulation", () => {
     expect(session.pinLevel("D13")).toBe(0);
     session.run(500);
     expect(session.pinLevel("D13")).toBe(1);
+  }, 30_000);
+  it("measures knob PWM duty without inversion", async () => {
+    const design = GOLDEN.find((entry) => entry.key === "knob-night-light");
+    if (!design) throw new Error("knob fixture is required");
+    for (const [id, level] of [["T25", 0.25] as const, ["T75", 0.75] as const]) {
+      const outcome = await runScenario({ circuit: design.circuit, hex: readFileSync(design.hexFile, "utf8"), scenario: knobDutyScenario(id, level) });
+      expect(outcome.result.ok, `${id}: ${outcome.result.steps.map((step) => step.message).join("; ")}`).toBe(true);
+    }
+  }, 30_000);
+
+  it("measures a cached 25 percent Blink duty cycle", async () => {
+    const scenario: Scenario = {
+      id: "T25",
+      title: "One-quarter duty Blink",
+      clauses: ["C1"],
+      categories: ["normal"],
+      setup: {},
+      steps: [
+        { wait: 100 },
+        { "expect-pwm": { pin: "D13", min: 0.22, max: 0.28, windowMs: 1_000 } },
+      ],
+    };
+    const outcome = await runScenario({ circuit: moon.circuit, hex: blink25Hex, scenario });
+    expect(outcome.result.ok, outcome.result.steps.map((step) => step.message).join("; ")).toBe(true);
   }, 30_000);
 
   it("supports a SimSession serial round trip without RX overrun", () => {
