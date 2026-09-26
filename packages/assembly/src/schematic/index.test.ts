@@ -3,7 +3,7 @@ import { GOLDEN } from "@vibread/fixtures";
 import { renderSchematicSvg, schematicSummary } from "./index.js";
 
 describe("schematic renderer", () => {
-  it.each(GOLDEN)("renders every part in $circuit.title", async (fixture) => {
+  it.each(GOLDEN)("draws every part and power symbol in $circuit.title", async (fixture) => {
     const started = performance.now();
     const svg = await renderSchematicSvg(fixture.circuit);
     const elapsedMs = performance.now() - started;
@@ -12,10 +12,11 @@ describe("schematic renderer", () => {
     const repeatElapsedMs = performance.now() - repeatStarted;
 
     expect(svg.startsWith("<svg ")).toBe(true);
-    for (const part of fixture.circuit.parts) expect(svg).toContain(part.id);
-    expect(svg).toContain(">5V<");
-    expect(svg).toContain(">GND<");
-    expect(elapsedMs).toBeGreaterThanOrEqual(0);
+    expect(svg).toContain('data-schematic="drawing"');
+    for (const part of fixture.circuit.parts) expect(svg).toContain(`data-part="${part.id}"`);
+    for (const net of fixture.circuit.nets.filter((candidate) => candidate.kind !== "signal")) {
+      for (const ref of net.pins) expect(svg).toContain(`data-net="${net.id}" data-pin="${ref.part}.${ref.pin}"`);
+    }
     expect(repeat).toBe(svg);
     if (fixture.circuit.title === "Moon-Phase Lamp") expect(repeatElapsedMs).toBeLessThan(elapsedMs);
   });

@@ -1,0 +1,169 @@
+{
+  "schema": "vibread.circuit/0.1",
+  "title": "Servo Knob",
+  "summary": "A knob sets the servo angle; the button sweeps it.",
+  "board": {
+    "profile": "uno-r3-atmega328p-5v"
+  },
+  "breadboard": {
+    "profile": "bb-830"
+  },
+  "parts": [
+    {
+      "id": "U1",
+      "module": "generic",
+      "label": "Micro servo SG90",
+      "params": {
+        "role": "digital-actuator",
+        "description": "Hobby servo, PWM signal"
+      },
+      "pinout": [
+        {
+          "id": "SIG",
+          "name": "signal (orange)",
+          "etype": "input"
+        },
+        {
+          "id": "VCC",
+          "name": "+5V (red)",
+          "etype": "power_in"
+        },
+        {
+          "id": "GND",
+          "name": "ground (brown)",
+          "etype": "power_in"
+        }
+      ]
+    },
+    {
+      "id": "POT1",
+      "module": "potentiometer",
+      "label": "Angle knob",
+      "params": {
+        "ohms": 10000
+      }
+    },
+    {
+      "id": "BTN1",
+      "module": "button",
+      "label": "Sweep button",
+      "params": {}
+    }
+  ],
+  "nets": [
+    {
+      "id": "5V",
+      "kind": "power",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "5V"
+        },
+        {
+          "part": "U1",
+          "pin": "VCC"
+        },
+        {
+          "part": "POT1",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "GND",
+      "kind": "ground",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "GND"
+        },
+        {
+          "part": "U1",
+          "pin": "GND"
+        },
+        {
+          "part": "POT1",
+          "pin": "B"
+        },
+        {
+          "part": "BTN1",
+          "pin": "3"
+        }
+      ]
+    },
+    {
+      "id": "D9",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D9"
+        },
+        {
+          "part": "U1",
+          "pin": "SIG"
+        }
+      ]
+    },
+    {
+      "id": "A0",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "A0"
+        },
+        {
+          "part": "POT1",
+          "pin": "W"
+        }
+      ]
+    },
+    {
+      "id": "D2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D2"
+        },
+        {
+          "part": "BTN1",
+          "pin": "1"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "pin": "D9",
+      "mode": "PWM_OUT",
+      "part": "U1",
+      "purpose": "servo"
+    },
+    {
+      "pin": "A0",
+      "mode": "ANALOG_IN",
+      "part": "POT1",
+      "purpose": "angle"
+    },
+    {
+      "pin": "D2",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN1",
+      "purpose": "sweep"
+    }
+  ],
+  "sketch": {
+    "source": "void setup() {}\nvoid loop() {}\n"
+  },
+  "intent": [
+    {
+      "id": "C1",
+      "text": "A knob sets the servo angle; the button sweeps it."
+    }
+  ],
+  "assumptions": [
+    "Schematic layout regression fixture."
+  ]
+}

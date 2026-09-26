@@ -1,0 +1,289 @@
+{
+  "schema": "vibread.circuit/0.1",
+  "title": "Distance Color Light",
+  "summary": "The RGB light turns from green to red as something gets closer to the distance sensor.",
+  "board": {
+    "profile": "uno-r3-atmega328p-5v"
+  },
+  "breadboard": {
+    "profile": "bb-830"
+  },
+  "parts": [
+    {
+      "id": "U1",
+      "module": "generic",
+      "label": "HC-SR04 distance sensor",
+      "params": {
+        "role": "digital-sensor",
+        "description": "Ultrasonic ranger"
+      },
+      "pinout": [
+        {
+          "id": "VCC",
+          "name": "VCC",
+          "etype": "power_in"
+        },
+        {
+          "id": "TRIG",
+          "name": "trigger",
+          "etype": "input"
+        },
+        {
+          "id": "ECHO",
+          "name": "echo",
+          "etype": "output"
+        },
+        {
+          "id": "GND",
+          "name": "GND",
+          "etype": "power_in"
+        }
+      ]
+    },
+    {
+      "id": "U2",
+      "module": "generic",
+      "label": "RGB LED (common cathode)",
+      "params": {
+        "role": "digital-actuator",
+        "description": "RGB LED"
+      },
+      "pinout": [
+        {
+          "id": "R",
+          "name": "red anode",
+          "etype": "passive"
+        },
+        {
+          "id": "G",
+          "name": "green anode",
+          "etype": "passive"
+        },
+        {
+          "id": "B",
+          "name": "blue anode",
+          "etype": "passive"
+        },
+        {
+          "id": "K",
+          "name": "common cathode",
+          "etype": "passive"
+        }
+      ]
+    },
+    {
+      "id": "R1",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R2",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R3",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    }
+  ],
+  "nets": [
+    {
+      "id": "5V",
+      "kind": "power",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "5V"
+        },
+        {
+          "part": "U1",
+          "pin": "VCC"
+        }
+      ]
+    },
+    {
+      "id": "GND",
+      "kind": "ground",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "GND"
+        },
+        {
+          "part": "U1",
+          "pin": "GND"
+        },
+        {
+          "part": "U2",
+          "pin": "K"
+        }
+      ]
+    },
+    {
+      "id": "D7",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D7"
+        },
+        {
+          "part": "U1",
+          "pin": "TRIG"
+        }
+      ]
+    },
+    {
+      "id": "D8",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D8"
+        },
+        {
+          "part": "U1",
+          "pin": "ECHO"
+        }
+      ]
+    },
+    {
+      "id": "D9",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D9"
+        },
+        {
+          "part": "R1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "NR",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R1",
+          "pin": "2"
+        },
+        {
+          "part": "U2",
+          "pin": "R"
+        }
+      ]
+    },
+    {
+      "id": "D10",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D10"
+        },
+        {
+          "part": "R2",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "NG",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R2",
+          "pin": "2"
+        },
+        {
+          "part": "U2",
+          "pin": "G"
+        }
+      ]
+    },
+    {
+      "id": "D11",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D11"
+        },
+        {
+          "part": "R3",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "NB",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R3",
+          "pin": "2"
+        },
+        {
+          "part": "U2",
+          "pin": "B"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "pin": "D7",
+      "mode": "OUTPUT",
+      "part": "U1",
+      "purpose": "trigger"
+    },
+    {
+      "pin": "D8",
+      "mode": "INPUT",
+      "part": "U1",
+      "purpose": "echo"
+    },
+    {
+      "pin": "D9",
+      "mode": "PWM_OUT",
+      "part": "U2",
+      "purpose": "red"
+    },
+    {
+      "pin": "D10",
+      "mode": "PWM_OUT",
+      "part": "U2",
+      "purpose": "green"
+    },
+    {
+      "pin": "D11",
+      "mode": "PWM_OUT",
+      "part": "U2",
+      "purpose": "blue"
+    }
+  ],
+  "sketch": {
+    "source": "void setup() {}\nvoid loop() {}\n"
+  },
+  "intent": [
+    {
+      "id": "C1",
+      "text": "The RGB light turns from green to red as something gets closer to the distance sensor."
+    }
+  ],
+  "assumptions": [
+    "Schematic layout regression fixture."
+  ]
+}

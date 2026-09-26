@@ -153,7 +153,10 @@ function sendRender(circuit: Circuit): Promise<string> {
   });
 }
 
-/** Render ViBread IR in the isolated zod-3 tscircuit child process. */
+/**
+ * Render ViBread IR as a schematic SVG in the isolated elkjs child process. The result is either a drawing that passed
+ * `checkSchematicSvg` (`data-schematic="drawing"`) or the connection table (`data-schematic="connection-table"`).
+ */
 export async function renderSchematicSvg(circuit: Circuit): Promise<string> {
   return sendRender(circuit);
 }
@@ -181,3 +184,6 @@ export function schematicSummary(circuit: Circuit): string {
     ...rows,
   ].join("\n");
 }
+
+export { checkSchematicSvg, type SchematicIssue } from "./check.js";
+export { connectionRows, connectionTableSvg, type ConnectionRow } from "./fallback.js";

@@ -1,0 +1,257 @@
+{
+  "schema": "vibread.circuit/0.1",
+  "title": "Dark Alarm",
+  "summary": "When the room goes dark the red light turns on and the buzzer sounds; in light the green light is on.",
+  "board": {
+    "profile": "uno-r3-atmega328p-5v"
+  },
+  "breadboard": {
+    "profile": "bb-830"
+  },
+  "parts": [
+    {
+      "id": "LDR1",
+      "module": "photoresistor",
+      "label": "Darkness sensor",
+      "params": {}
+    },
+    {
+      "id": "R1",
+      "module": "resistor",
+      "params": {
+        "ohms": 10000,
+        "tolerancePct": 5
+      },
+      "label": "LDR partner"
+    },
+    {
+      "id": "BZ1",
+      "module": "buzzer-passive",
+      "label": "Alarm buzzer",
+      "params": {}
+    },
+    {
+      "id": "R2",
+      "module": "resistor",
+      "params": {
+        "ohms": 100,
+        "tolerancePct": 5
+      },
+      "label": "Buzzer resistor"
+    },
+    {
+      "id": "LED1",
+      "module": "led",
+      "label": "Bright light",
+      "params": {
+        "color": "green"
+      }
+    },
+    {
+      "id": "LED2",
+      "module": "led",
+      "label": "Dark light",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "R3",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R4",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    }
+  ],
+  "nets": [
+    {
+      "id": "5V",
+      "kind": "power",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "5V"
+        },
+        {
+          "part": "LDR1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "GND",
+      "kind": "ground",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "GND"
+        },
+        {
+          "part": "R1",
+          "pin": "2"
+        },
+        {
+          "part": "BZ1",
+          "pin": "N"
+        },
+        {
+          "part": "LED1",
+          "pin": "K"
+        },
+        {
+          "part": "LED2",
+          "pin": "K"
+        }
+      ]
+    },
+    {
+      "id": "A0",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "A0"
+        },
+        {
+          "part": "LDR1",
+          "pin": "2"
+        },
+        {
+          "part": "R1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D8",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D8"
+        },
+        {
+          "part": "R2",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "BZ",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R2",
+          "pin": "2"
+        },
+        {
+          "part": "BZ1",
+          "pin": "P"
+        }
+      ]
+    },
+    {
+      "id": "D10",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D10"
+        },
+        {
+          "part": "R3",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L1",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R3",
+          "pin": "2"
+        },
+        {
+          "part": "LED1",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "D11",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D11"
+        },
+        {
+          "part": "R4",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R4",
+          "pin": "2"
+        },
+        {
+          "part": "LED2",
+          "pin": "A"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "pin": "A0",
+      "mode": "ANALOG_IN",
+      "part": "LDR1",
+      "purpose": "light"
+    },
+    {
+      "pin": "D8",
+      "mode": "OUTPUT",
+      "part": "BZ1",
+      "purpose": "alarm"
+    },
+    {
+      "pin": "D10",
+      "mode": "OUTPUT",
+      "part": "LED1",
+      "purpose": "bright"
+    },
+    {
+      "pin": "D11",
+      "mode": "OUTPUT",
+      "part": "LED2",
+      "purpose": "dark"
+    }
+  ],
+  "sketch": {
+    "source": "void setup() {}\nvoid loop() {}\n"
+  },
+  "intent": [
+    {
+      "id": "C1",
+      "text": "When the room goes dark the red light turns on and the buzzer sounds; in light the green light is on."
+    }
+  ],
+  "assumptions": [
+    "Schematic layout regression fixture."
+  ]
+}
