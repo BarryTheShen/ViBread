@@ -4,14 +4,17 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
 import CardContent from "@mui/material/CardContent";
+import CircularProgress from "@mui/material/CircularProgress";
 import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { Link as RouterLink } from "react-router";
 import { authClient } from "../api/auth.js";
 import { HttpError } from "../api/client.js";
-import { useMe } from "../api/hooks.js";
-import { oauthClient, operatorLogin } from "./oauth.js";
+import { ProviderButtons, safeNext, useProviders } from "../components/SignIn.js";
+import { oauthClient, operatorLogin, rawOAuthQuery } from "./oauth.js";
 
 /** Single-operator servers have one built-in account; the server bootstraps its credential (Channels' contract). */
 const OPERATOR_EMAIL = "operator@vibread.local";
@@ -21,18 +24,35 @@ const LOGIN_ERRORS: Record<string, string> = {
   invalid_credentials: "ViBread couldn't sign you in. Start the connection again from the app.",
 };
 
-/** OAuth sign-in step for apps like Claude Code connecting to ViBread (the server sends the browser here). */
+/**
+ * `/login` serves two flows:
+ * - OAuth (the server sends the browser here with a signed `client_id=…` query, e.g. Claude Code connecting):
+ *   single-operator → "Continue as Operator"; multi-user → provider buttons whose `callbackURL` is this same
+ *   `/login?<signed query>`, and once signed in the page resumes at `/consent?<same query>`.
+ * - Plain sign-in (`/login?next=/m/…`, linked from any page that got a 401): provider buttons, then back to `next`.
+ */
 export default function OAuthLoginPage() {
   const params = new URLSearchParams(window.location.search);
   const clientId = params.get("client_id") ?? "";
-  const client = useQuery({ queryKey: ["oauth-client", clientId], queryFn: ({ signal }) => oauthClient(clientId, signal), enabled: Boolean(clientId), retry: false });
-  const me = useMe();
+  const oauthFlow = Boolean(clientId);
+  const next = safeNext(params.get("next"));
+  const client = useQuery({ queryKey: ["oauth-client", clientId], queryFn: ({ signal }) => oauthClient(clientId, signal), enabled: oauthFlow, retry: false });
+  const providers = useProviders();
+  const multiUser = providers.data !== undefined && !providers.data.singleOperator;
+  const session = authClient.useSession();
+  const signedIn = multiUser && Boolean(session.data?.user);
+
+  useEffect(() => {
+    if (!signedIn) return;
+    window.location.replace(oauthFlow ? `/consent?${rawOAuthQuery()}` : next);
+  }, [signedIn, oauthFlow, next]);
+
   const login = useMutation({
     mutationFn: () => operatorLogin(OPERATOR_EMAIL, ""),
     onSuccess: ({ redirect }) => window.location.assign(redirect),
   });
-  const appName = client.data?.name ?? "An app";
   const failure = login.error instanceof HttpError && LOGIN_ERRORS[login.error.code] ? LOGIN_ERRORS[login.error.code] : login.error?.message;
+  const blocked = oauthFlow && client.isError;
 
   return (
     <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 2 }}>
@@ -45,38 +65,48 @@ export default function OAuthLoginPage() {
             </Typography>
           </Stack>
           <Typography variant="h2" component="h1">
-            Sign in to connect {client.data ? client.data.name : "an app"}
+            {oauthFlow ? `Sign in to connect ${client.data ? client.data.name : "an app"}` : "Sign in to ViBread"}
           </Typography>
-          {!clientId ? (
-            <Alert severity="error">This sign-in link is incomplete. Start the connection again from the app.</Alert>
-          ) : client.isError ? (
-            <Alert severity="error">
-              {client.error instanceof HttpError && client.error.status === 404
-                ? "ViBread doesn't know the app that sent you here. Start the connection again from the app."
-                : `Couldn't check the app: ${client.error.message}`}
-            </Alert>
+          {oauthFlow ? (
+            client.isError ? (
+              <Alert severity="error">
+                {client.error instanceof HttpError && client.error.status === 404
+                  ? "ViBread doesn't know the app that sent you here. Start the connection again from the app."
+                  : `Couldn't check the app: ${client.error.message}`}
+              </Alert>
+            ) : (
+              <Typography sx={{ color: "text.secondary" }}>
+                {client.data?.name ?? "An app"} wants to work with your ViBread missions. Sign in first; next you'll see exactly what it can do.
+              </Typography>
+            )
           ) : (
-            <Typography sx={{ color: "text.secondary" }}>
-              {appName} wants to work with your ViBread missions. Sign in first; next you'll see exactly what it can do.
-            </Typography>
+            <Typography sx={{ color: "text.secondary" }}>Sign in to see your missions. You'll come straight back to where you were.</Typography>
           )}
-          {me.isPending ? (
+          {providers.isPending || (multiUser && session.isPending) ? (
             <Skeleton variant="rounded" height={48} />
-          ) : me.data?.auth === "google" ? (
-            <Button
-              variant="contained"
-              size="large"
-              onClick={() => void authClient.signIn.social({ provider: "google", callbackURL: window.location.href })}
-            >
-              Continue with Google
-            </Button>
-          ) : (
+          ) : signedIn ? (
+            <Stack direction="row" sx={{ gap: 1.5, alignItems: "center" }}>
+              <CircularProgress size={20} aria-hidden />
+              <Typography>Signed in as {session.data?.user.name ?? session.data?.user.email}. Continuing…</Typography>
+            </Stack>
+          ) : multiUser ? (
+            <ProviderButtons callbackURL={oauthFlow ? `/login?${rawOAuthQuery()}` : next} disabled={blocked} />
+          ) : providers.isError ? (
+            <Alert severity="error">Couldn't reach ViBread's sign-in service: {providers.error.message}</Alert>
+          ) : oauthFlow ? (
             <>
               <Typography variant="body2" sx={{ color: "text.secondary" }}>
                 This ViBread runs for one person on this computer, so there's no password: continue as the operator.
               </Typography>
-              <Button variant="contained" size="large" disabled={!clientId || client.isError || login.isPending} onClick={() => login.mutate()}>
-                {login.isPending ? "Signing in…" : `Continue as ${me.data?.user?.name ?? "Operator"}`}
+              <Button variant="contained" size="large" disabled={blocked || login.isPending} onClick={() => login.mutate()}>
+                {login.isPending ? "Signing in…" : "Continue as Operator"}
+              </Button>
+            </>
+          ) : (
+            <>
+              <Typography>This ViBread runs for one person on this computer, so there's nothing to sign in to.</Typography>
+              <Button component={RouterLink} to={next} variant="contained" size="large">
+                Continue
               </Button>
             </>
           )}

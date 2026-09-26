@@ -25,6 +25,14 @@ export function oauthClient(clientId: string, signal?: AbortSignal): Promise<OAu
   return getJson<OAuthClientInfo>(`/api/oauth/client?client_id=${encodeURIComponent(clientId)}`, signal);
 }
 
+/** Social sign-in providers a multi-user server can offer. */
+export type OAuthProvider = "google" | "github";
+
+/** GET /api/oauth/providers: single-operator servers have no social sign-in; others list configured providers. */
+export function oauthProviders(signal?: AbortSignal): Promise<{ singleOperator: boolean; providers: OAuthProvider[] }> {
+  return getJson<{ singleOperator: boolean; providers: OAuthProvider[] }>("/api/oauth/providers", signal);
+}
+
 export function operatorLogin(email: string, password: string): Promise<{ redirect: string }> {
   return sendJson<{ redirect: string }>("POST", "/api/oauth/operator-login", { email, password, oauth_query: rawOAuthQuery() });
 }

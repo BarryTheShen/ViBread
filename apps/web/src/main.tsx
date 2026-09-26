@@ -11,9 +11,11 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { lazy, StrictMode, Suspense, useMemo } from "react";
 import { createRoot } from "react-dom/client";
-import { createBrowserRouter, Outlet } from "react-router";
+import { createBrowserRouter, Outlet, useLocation } from "react-router";
 import { RouterProvider } from "react-router/dom";
 import { RouteError } from "./components/RouteError.js";
+import { SignInRequired, useProviders } from "./components/SignIn.js";
+import { authClient } from "./api/auth.js";
 import { HttpError } from "./api/client.js";
 import { createMissionTheme } from "./theme.js";
 
@@ -43,9 +45,27 @@ function Loading() {
   );
 }
 
+/**
+ * Bench and Build Mode fetch on their own and show raw errors on a 401; on a multi-user server with nobody signed in,
+ * put the sign-in prompt above them (the workspace, Home and Settings render their own).
+ */
+function SignedOutBanner() {
+  const location = useLocation();
+  const providers = useProviders();
+  const session = authClient.useSession();
+  const onDevicePage = /^\/m\/[^/]+\/bench$|^\/b\/[^/]+$/.test(location.pathname);
+  if (!onDevicePage || !providers.data || providers.data.singleOperator || session.isPending || session.data?.user) return null;
+  return (
+    <Box sx={{ p: 2, pb: 0 }}>
+      <SignInRequired />
+    </Box>
+  );
+}
+
 function Shell() {
   return (
     <Suspense fallback={<Loading />}>
+      <SignedOutBanner />
       <Outlet />
     </Suspense>
   );
