@@ -19,6 +19,7 @@ import { loadFaultDictionary } from "@vibread/tools";
 import { runs } from "./db/schema.js";
 import { SqlApprovalBroker } from "./services/approvals.js";
 import { SqlMissionStore } from "./store/missions.js";
+import { WIRE_COLOR_EVENT, wireColorChange, wireOverrides } from "./services/wire-colors.js";
 import type { AppContext } from "./context.js";
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
 interface WebUser {
@@ -443,6 +444,53 @@ export function mountApi(app: Express, ctx: AppContext): void {
       await ctx.machine.send(missionId, { type: "BUILD_DONE" });
     }
     res.json(await ctx.missions.build(missionId));
+  });
+  /** The revision Build Mode shows (released, else the latest) with the builder's wire-colour overrides. */
+  async function buildRevision(missionId: string): Promise<{ revision: Revision; overrides: Record<string, string> }> {
+    const mission = await ctx.store.getMission(missionId);
+    const n = mission?.releasedRevision ?? mission?.currentRevision;
+    const revision = n === undefined ? null : await ctx.store.getRevision(missionId, n);
+    if (!revision?.results.layout) throw httpError(404, "LAYOUT_NOT_FOUND", "This design has no breadboard layout yet.");
+    return { revision, overrides: wireOverrides(await ctx.store.listEvents(missionId), revision.n) };
+  }
+  router.post("/missions/:id/build/wire-color", async (req, res) => {
+    const missionId = String(req.params.id);
+    const { revision } = await buildRevision(missionId);
+    const change = wireColorChange(revision, req.body);
+    if ("error" in change) throw httpError(400, "INVALID_WIRE_COLOR", change.error);
+    await ctx.store.appendEvent({ missionId, channel: "web", actor: actorFor(res, ctx), kind: WIRE_COLOR_EVENT, text: change.text, revision: revision.n, data: change.data });
+    res.json(await ctx.missions.build(missionId));
+  });
+  router.get("/missions/:id/build/steps/:file", async (req, res) => {
+    const match = /^(\d+)\.(svg|png)$/.exec(String(req.params.file));
+    if (!match) throw httpError(404, "STEP_NOT_FOUND", "step picture not found");
+    const { revision, overrides } = await buildRevision(String(req.params.id));
+    const { buildSteps, jumperColors, renderBreadboardSvg, svgToPng } = await import("@vibread/assembly");
+    const layout = revision.results.layout!;
+    const wireColors = jumperColors(revision.circuit, layout, overrides);
+    const steps = buildSteps(revision.circuit, layout, { wireColors });
+    const n = Number(match[1]);
+    if (n < 1 || n > steps.steps.length) throw httpError(404, "STEP_NOT_FOUND", "step picture not found");
+    const svg = renderBreadboardSvg({ circuit: revision.circuit, layout, steps, upToStep: n, wireColors, ...(req.query.focus === "1" ? { focus: true } : {}) });
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    // URLs carry ?v=<hash of revision + overrides>, so a colour change is a new URL; the drawing code can still change
+    // between deploys, so browsers revalidate (express answers 304 from the ETag).
+    res.setHeader("Cache-Control", "private, no-cache");
+    if (match[2] === "svg") {
+      res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
+      res.type("image/svg+xml").send(svg);
+      return;
+    }
+    res.type("image/png").send(Buffer.from(await svgToPng(svg, 1200)));
+  });
+  router.get("/missions/:id/build/schematic.svg", async (req, res) => {
+    const { revision, overrides } = await buildRevision(String(req.params.id));
+    const { netColors, renderSchematicSvg } = await import("@vibread/assembly");
+    const svg = await renderSchematicSvg(revision.circuit, { netColors: netColors(revision.circuit, overrides) });
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
+    res.setHeader("Cache-Control", "private, no-cache");
+    res.type("image/svg+xml").send(svg);
   });
   router.post("/missions/:id/bench/firmware", async (req, res) => {
     const missionId = String(req.params.id);

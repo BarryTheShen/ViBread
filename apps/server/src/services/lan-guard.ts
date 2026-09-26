@@ -202,6 +202,8 @@ function phoneRequestAllowed(req: Request): boolean {
   if (req.method === "GET" && path === "/api/phone/missions") return true;
   if (req.method === "GET" && /^\/api\/missions\/[^/]+\/build$/.test(path)) return true;
   if (req.method === "POST" && /^\/api\/missions\/[^/]+\/build\/step$/.test(path)) return true;
+  if (req.method === "POST" && /^\/api\/missions\/[^/]+\/build\/wire-color$/.test(path)) return true;
+  if (req.method === "GET" && /^\/api\/missions\/[^/]+\/build\/(steps\/\d+\.(svg|png)|schematic\.svg)$/.test(path)) return true;
   if (req.method === "POST" && /^\/api\/missions\/[^/]+\/photo$/.test(path)) return true;
   if (req.method === "GET" && /^\/api\/missions\/[^/]+\/revisions\/[^/]+\/artifacts\/[^/]+$/.test(path)) return true;
   if (req.method === "GET" && /^\/api\/recorded\/[^/]+$/.test(path)) return true;

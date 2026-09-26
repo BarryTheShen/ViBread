@@ -23,7 +23,9 @@ import { useEffect, useRef, useState } from "react";
 import { sendJson } from "../../api/client.js";
 import { queryKeys, useBuildState } from "../../api/hooks.js";
 import { needVsHave } from "../../inventory/PartsView.js";
+import { SvgArtifact } from "../../components/SvgArtifact.js";
 import { PhoneQr } from "../PhoneLink.js";
+import { StepWireChips, WireColorPicker, WireLegend, useWireColor, type WireTarget } from "../WireColors.js";
 
 const buildKey = (missionId: string) => ["mission", missionId, "build"] as const;
 
@@ -116,10 +118,17 @@ export function BuildStepsView({
     onSettled: () => void qc.invalidateQueries({ queryKey: queryKeys.mission(missionId) }),
   });
 
+  const liveBuild = build.data?.revision === revision.n ? build.data : undefined;
+  const wires = liveBuild?.wires;
+  const setWireColor = useWireColor(missionId, buildKey(missionId));
+  const [picker, setPicker] = useState<{ target: WireTarget; anchor: { top: number; left: number } } | null>(null);
+  const openPicker = (target: WireTarget, anchor: { top: number; left: number }) => setPicker({ target, anchor });
+
   if (steps.length === 0) {
     return <Alert severity="info">Build steps appear here once the design passes its checks and is laid out on the breadboard.</Alert>;
   }
   if (!step) return null;
+  const liveStep = liveBuild?.steps.find((candidate) => candidate.n === step.n);
   const image = revision.artifactUrls[`step-${step.n}.svg`] ?? revision.artifactUrls[`step-${step.n}.png`];
   const canMark = released && current !== undefined && step.n >= current;
   return (
@@ -159,7 +168,20 @@ export function BuildStepsView({
             label={step.plug === "plugged" ? "USB plugged in" : "USB unplugged"}
           />
         </Stack>
-        {image ? (
+        {liveStep?.svgUrl ? (
+          // Inline so each wire can be tapped to change its colour (drawn with the builder's colours).
+          <Box
+            onClick={(event) => {
+              const wire = (event.target as Element).closest("[data-jumper]");
+              const id = wire?.getAttribute("data-jumper");
+              const net = wire?.getAttribute("data-net");
+              if (id && net) openPicker({ jumper: id, net }, { top: event.clientY, left: event.clientX });
+            }}
+            sx={{ bgcolor: "canvas.main", borderRadius: 1, "& [data-jumper]": { cursor: "pointer" } }}
+          >
+            <SvgArtifact url={liveStep.svgUrl} label={`Breadboard for step ${step.n}: ${step.title}. Tap a wire to change its colour.`} sx={{ "& svg": { maxHeight: "44vh" } }} />
+          </Box>
+        ) : image ? (
           // Breadboard drawings are dark canvases in every theme.
           <Box
             component="img"
@@ -170,7 +192,10 @@ export function BuildStepsView({
         ) : (
           <Alert severity="info">No picture for this step.</Alert>
         )}
-        <Typography sx={{ mt: 1.5 }}>{step.text}</Typography>
+        <WireLegend wires={wires} />
+        <Typography sx={{ mt: 1.5 }}>{liveStep?.text ?? step.text}</Typography>
+        <StepWireChips jumpers={step.adds.jumpers} layout={liveBuild?.layout} wires={wires} onEdit={openPicker} />
+        {setWireColor.isError && <Typography sx={{ color: "error.main" }}>Colour not saved: {setWireColor.error.message}</Typography>}
         {step.kind === "inventory" ? (
           <GatherParts revision={revision} inventory={inventory} />
         ) : (
@@ -198,6 +223,7 @@ export function BuildStepsView({
           </Stack>
         )}
       </Paper>
+      <WireColorPicker anchor={picker?.anchor ?? null} target={picker?.target ?? null} wires={wires} revision={revision.n} onClose={() => setPicker(null)} onPick={(request) => setWireColor.mutate(request)} />
       {released && (
         <Paper variant="outlined" sx={{ p: 2 }}>
           <PhoneQr missionId={missionId} />

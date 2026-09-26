@@ -3,6 +3,7 @@ import {
   BREADBOARD_PROFILES,
   COLUMNS,
   MODULES,
+  KIT_WIRE_CSS,
   modulePins,
   parseHole,
   resistorBands,
@@ -28,22 +29,10 @@ const CANVAS_FILL = "#1B1D2B";
 const BOARD_FILL = "#EEF1F4";
 
 const COLORS: Record<string, string> = {
-  red: "#e5484d",
-  black: "#202a31",
-  yellow: "#f2c94c",
-  green: "#2fbf71",
-  blue: "#3d8bfd",
-  orange: "#f08c2e",
-  white: "#f4f6f8",
+  ...KIT_WIRE_CSS,
+  // LED colours that are not wire colours.
   "warm-white": "#fff1d6",
-  purple: "#9b6bdb",
-  cyan: "#27c2d1",
-  magenta: "#d653a8",
-  lime: "#91c73e",
-  teal: "#168f8f",
   pink: "#ed6b9a",
-  brown: "#986b4f",
-  gold: "#bf8b2e",
 };
 
 const BAND_COLORS: Record<string, string> = {
@@ -73,6 +62,8 @@ type RenderInput = {
   highlight?: { holes?: HoleId[]; parts?: string[]; jumpers?: string[] };
   partStates?: Record<string, number>;
   width?: number;
+  /** Jumper id → colour (kit name or #rrggbb) from `jumperColors`, so the builder's choices show in every picture. */
+  wireColors?: Record<string, string>;
 };
 
 function escapeSvg(value: string): string {
@@ -430,12 +421,13 @@ function renderJumper(input: RenderInput, jumper: Jumper, pins: Map<string, Poin
   const from = endpointPoint(input.layout, jumper.from, pins);
   const to = endpointPoint(input.layout, jumper.to, pins);
   const bend = Math.max(25, Math.abs(to.x - from.x) * 0.25);
+  const stroke = cssColor(input.wireColors?.[jumper.id] ?? String(jumper.color));
   const direction = to.x >= from.x ? 1 : -1;
   const path = `M ${from.x} ${from.y} C ${from.x + bend * direction} ${from.y + 18}, ${to.x - bend * direction} ${to.y - 18}, ${to.x} ${to.y}`;
   const newItem = state.newJumpers.has(jumper.id);
   const highlighted = isHighlighted("jumper", jumper.id, input.highlight);
-  const label = newItem ? `<rect x="${(from.x + to.x) / 2 - 33}" y="${(from.y + to.y) / 2 - 11}" width="66" height="18" rx="5" class="wire-bg" stroke="${cssColor(String(jumper.color))}"/><text x="${(from.x + to.x) / 2}" y="${(from.y + to.y) / 2 + 2}" text-anchor="middle" class="wire-label">${escapeSvg(`${jumper.id} ${jumper.net}`)}</text>` : "";
-  return `<g id="wire-${escapeSvg(jumper.id)}" class="${classes("wire", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(jumper.id)} ${escapeSvg(jumper.net)}"><title>${escapeSvg(jumper.id)} — ${escapeSvg(jumper.net)}: ${escapeSvg(endpointLabel(jumper.from))} to ${escapeSvg(endpointLabel(jumper.to))}</title><path d="${path}" class="wire-casing"/><path d="${path}" stroke="${cssColor(String(jumper.color))}" class="wire-path"/>${label}</g>`;
+  const label = newItem ? `<rect x="${(from.x + to.x) / 2 - 33}" y="${(from.y + to.y) / 2 - 11}" width="66" height="18" rx="5" class="wire-bg" stroke="${stroke}"/><text x="${(from.x + to.x) / 2}" y="${(from.y + to.y) / 2 + 2}" text-anchor="middle" class="wire-label">${escapeSvg(`${jumper.id} ${jumper.net}`)}</text>` : "";
+  return `<g id="wire-${escapeSvg(jumper.id)}" data-jumper="${escapeSvg(jumper.id)}" data-net="${escapeSvg(jumper.net)}" class="${classes("wire", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(jumper.id)} ${escapeSvg(jumper.net)}"><title>${escapeSvg(jumper.id)} — ${escapeSvg(jumper.net)}: ${escapeSvg(endpointLabel(jumper.from))} to ${escapeSvg(endpointLabel(jumper.to))}</title><path d="${path}" class="wire-casing"/><path d="${path}" stroke="${stroke}" class="wire-path"/>${label}</g>`;
 }
 
 function renderRailLabels(layout: Layout): string {

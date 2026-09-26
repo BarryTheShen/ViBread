@@ -396,7 +396,8 @@ export function parseSchematicSvg(svg: string): ParsedSchematic {
       continue;
     }
     if (currentNet) {
-      if (name === "polyline" || name === "line") {
+      // Transparent tap targets ("wire-hit") are not drawn; only visible wires count.
+      if ((name === "polyline" || name === "line") && !cls.includes("wire-hit")) {
         const points = name === "line"
           ? [{ x: num(attrs, "x1"), y: num(attrs, "y1") }, { x: num(attrs, "x2"), y: num(attrs, "y2") }]
           : pointsOf(attrs);

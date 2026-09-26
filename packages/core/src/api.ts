@@ -40,6 +40,9 @@ import type { DeviceLine } from "./telemetry.js";
  *   POST   /api/missions/:id/release      ReleaseRequest        → MissionDetail (the person's "GO for build"; 409 not_all_go | tests_missing | retro_missing | retro_no_go)
  *   GET    /api/missions/:id/build                              → BuildState   (phone Build Mode polls every 1–2 s)
  *   POST   /api/missions/:id/build/step   { n }                 → BuildState   ("I did this")
+ *   POST   /api/missions/:id/build/wire-color WireColorRequest → BuildState   (the builder recolours a wire or net)
+ *   GET    /api/missions/:id/build/steps/:n.svg|.png[?focus=1]  → step picture with the builder's wire colours
+ *   GET    /api/missions/:id/build/schematic.svg                → schematic with the builder's wire colours
  *   POST   /api/missions/:id/bench/firmware { kind }            → BenchFirmwareResponse  kind: "bench" | "app"
  *   POST   /api/missions/:id/bench/runs   BenchRunRequest       → BenchRunResult
  *   POST   /api/missions/:id/photo        multipart photo + step → PhotoCheckResult
@@ -172,14 +175,37 @@ export interface BuildState {
   missionId: string;
   revision?: number;
   layout?: Layout;
-  /** imageUrl = whole board (step-<n>.png); focusImageUrl = cropped around this step's new items (step-<n>-focus.png). */
-  steps: (Step & { imageUrl?: string; focusImageUrl?: string })[];
+  /**
+   * imageUrl = whole board (PNG); focusImageUrl = cropped around this step's new items (PNG); svgUrl = whole board as an
+   * inline-able SVG whose wires (`g.wire[data-jumper]`) can be tapped. All show the builder's wire colours.
+   */
+  steps: (Step & { imageUrl?: string; focusImageUrl?: string; svgUrl?: string })[];
+  /** Wire colours: the builder's overrides ("wire:W3" / "net:D2" → kit name or #rrggbb) and the effective colours. */
+  wires?: {
+    overrides: Record<string, string>;
+    /** Jumper id → effective colour. */
+    jumpers: Record<string, string>;
+    /** Net id → effective colour (what a whole-net change would replace). */
+    nets: Record<string, string>;
+    /** Short legend: "orange–yellow–green = LED1–LED3 (D2–D4)". */
+    legend: { colors: string[]; label: string }[];
+    /** Schematic drawn with these colours. */
+    schematicUrl: string;
+  };
   /** 1-based index of the step the builder is on. */
   current: number;
   plug: "unplugged" | "plugged";
   /** Last thing that happened, for the phone header ("Self-test passed", "Houston, we have a problem…"). */
   headline?: string;
   updatedAt: string;
+}
+
+/** POST /build/wire-color: recolour one wire (`jumper`) or a whole net (`net`); `color: null` resets to the suggestion. */
+export interface WireColorRequest {
+  revision: number;
+  target: { jumper: string } | { net: string };
+  /** Kit colour name (red, black, orange, yellow, green, blue, purple, white, brown, gray) or "#rrggbb". */
+  color: string | null;
 }
 
 export interface BenchRunRequest {

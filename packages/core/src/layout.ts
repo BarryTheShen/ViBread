@@ -16,6 +16,34 @@ export interface Placement {
 export const WIRE_COLORS = ["red", "black", "yellow", "green", "blue", "orange", "white", "purple"] as const;
 export type WireColor = (typeof WIRE_COLORS)[number];
 
+/** Colours found in ordinary jumper-wire kits: the builder's picker swatches (a custom #rrggbb is also allowed). */
+export const KIT_WIRE_COLORS = ["red", "black", "orange", "yellow", "green", "blue", "purple", "white", "brown", "gray"] as const;
+export type KitWireColor = (typeof KIT_WIRE_COLORS)[number];
+
+/** Screen colour of each kit wire colour (breadboard drawings, schematic, picker). */
+export const KIT_WIRE_CSS: Record<KitWireColor, string> = {
+  red: "#e5484d",
+  black: "#202a31",
+  orange: "#f08c2e",
+  yellow: "#f2c94c",
+  green: "#2fbf71",
+  blue: "#3d8bfd",
+  purple: "#9b6bdb",
+  white: "#f4f6f8",
+  brown: "#986b4f",
+  gray: "#8a939c",
+};
+
+/** A kit colour name or a custom "#rrggbb". */
+export function isWireColorValue(value: unknown): value is string {
+  return typeof value === "string" && ((KIT_WIRE_COLORS as readonly string[]).includes(value) || /^#[0-9a-f]{6}$/i.test(value));
+}
+
+/** CSS colour for a kit name or custom #rrggbb. */
+export function wireCss(value: string): string {
+  return (KIT_WIRE_CSS as Record<string, string>)[value] ?? (/^#[0-9a-f]{6}$/i.test(value) ? value : KIT_WIRE_CSS.white);
+}
+
 export interface Jumper {
   /** W1, W2 … in build order. */
   id: string;

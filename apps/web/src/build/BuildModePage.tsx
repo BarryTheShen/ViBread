@@ -34,6 +34,7 @@ import Usb from "@mui/icons-material/Usb";
 import UsbOff from "@mui/icons-material/UsbOff";
 import WifiOff from "@mui/icons-material/WifiOff";
 import { useNavigate, useParams } from "react-router";
+import { StepWireChips, WireColorPicker, WireLegend, useWireColor, type WireTarget } from "../workspace/WireColors.js";
 import {
   BuildApiError,
   createInventoryScan,
@@ -316,7 +317,22 @@ function FinishedBuild({ total, onReview }: { total: number; onReview: () => voi
 }
 
 
-function StepCard({ step, total, reducedMotion }: { step: BuildStep; total: number; reducedMotion: boolean }) {
+/** Wire colours on the phone: the legend plus a chip per wire the step adds; tapping a chip opens the picker. */
+function StepWireColors({ missionId, build, step }: { missionId: string; build: BuildState; step: BuildStep }) {
+  const setWireColor = useWireColor(missionId, buildQueryKey(missionId));
+  const [picker, setPicker] = useState<{ target: WireTarget; anchor: { top: number; left: number } } | null>(null);
+  if (!build.wires || build.revision === undefined) return null;
+  return (
+    <Box sx={{ mt: 1.5 }}>
+      <WireLegend wires={build.wires} />
+      <StepWireChips jumpers={step.adds.jumpers} layout={build.layout} wires={build.wires} onEdit={(target, anchor) => setPicker({ target, anchor })} />
+      {setWireColor.isError && <Typography sx={{ color: "error.main", mt: 0.5 }}>Colour not saved: {errorMessage(setWireColor.error)}</Typography>}
+      <WireColorPicker anchor={picker?.anchor ?? null} target={picker?.target ?? null} wires={build.wires} revision={build.revision} onClose={() => setPicker(null)} onPick={(request) => setWireColor.mutate(request)} />
+    </Box>
+  );
+}
+
+function StepCard({ step, total, reducedMotion, wires }: { step: BuildStep; total: number; reducedMotion: boolean; wires?: React.ReactNode }) {
   return (
     <Card
       component="article"
@@ -343,6 +359,7 @@ function StepCard({ step, total, reducedMotion }: { step: BuildStep; total: numb
         >
           {step.text}
         </Typography>
+        {wires}
 
         {step.holes.length > 0 && (
           <Box sx={{ mt: 2 }}>
@@ -635,7 +652,7 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
         }
       />
 
-      <StepCard step={step} total={steps.length} reducedMotion={reducedMotion} />
+      <StepCard step={step} total={steps.length} reducedMotion={reducedMotion} wires={<StepWireColors missionId={missionId} build={build} step={step} />} />
 
       <Button
         type="button"

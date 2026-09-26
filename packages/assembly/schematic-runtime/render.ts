@@ -7,13 +7,13 @@ import type { Circuit } from "@vibread/core";
 import { connectionTableSvg, verifiedSchematic } from "../src/schematic/fallback.js";
 import { drawSchematic } from "./draw.js";
 
-type WorkerRequest = { id: string; circuit: Circuit };
+type WorkerRequest = { id: string; circuit: Circuit; netColors?: Record<string, string> };
 type WorkerResponse = { id: string; svg?: string; error?: string };
 
-async function renderSchematic(circuit: Circuit): Promise<string> {
+async function renderSchematic(circuit: Circuit, netColors?: Record<string, string>): Promise<string> {
   let drawing: string;
   try {
-    drawing = await drawSchematic(circuit);
+    drawing = await drawSchematic(circuit, netColors);
   } catch (error) {
     const reason = `SCH-LAYOUT: ${error instanceof Error ? error.message : String(error)}`;
     process.stderr.write(`schematic: "${circuit.title}" falls back to the connection table: ${reason}\n`);
@@ -44,7 +44,7 @@ for await (const line of input) {
     const parsed: unknown = JSON.parse(line);
     if (!isWorkerRequest(parsed)) throw new Error("invalid schematic worker request");
     requestId = parsed.id;
-    writeResponse({ id: requestId, svg: await renderSchematic(parsed.circuit) });
+    writeResponse({ id: requestId, svg: await renderSchematic(parsed.circuit, parsed.netColors) });
   } catch (error) {
     writeResponse({ id: requestId, error: error instanceof Error ? error.message : String(error) });
   }

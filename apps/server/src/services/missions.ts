@@ -21,6 +21,7 @@ import type { UIMessage } from "ai";
 import type { AgentDeps, MissionEvent } from "../agents/deps.js";
 import type { EventBus } from "../agents/events.js";
 import { AgentBusyError, type RunManager } from "../agents/runs.js";
+import { wireOverrides, withWireColors } from "./wire-colors.js";
 
 export class ApprovalNotFoundError extends Error {
   readonly code = "approval_not_found";
@@ -203,15 +204,18 @@ export function createMissionService(
         .filter((x) => Number.isInteger(x));
       const current = Math.min(Math.max(1, (done.length ? Math.max(...done) : 0) + 1), Math.max(steps.length, 1));
       const headlineEvent = events.findLast((e) => ["bench.run", "photo.checked", "build.step", "revision.released"].includes(e.kind));
+      const baseSteps: BuildState["steps"] = steps.map((s) => ({
+        ...s,
+        ...(revision && revision.results.artifacts[`step-${s.n}.png`] ? { imageUrl: artifactUrl(missionId, revision.n, `step-${s.n}.png`) } : {}),
+        ...(revision && revision.results.artifacts[`step-${s.n}-focus.png`] ? { focusImageUrl: artifactUrl(missionId, revision.n, `step-${s.n}-focus.png`) } : {}),
+      }));
+      const colored = revision ? withWireColors(missionId, revision, baseSteps, wireOverrides(events, revision.n)) : { steps: baseSteps };
       const state: BuildState = {
         missionId,
         ...(revision ? { revision: revision.n } : {}),
         ...(revision?.results.layout ? { layout: revision.results.layout } : {}),
-        steps: steps.map((s) => ({
-          ...s,
-          ...(revision && revision.results.artifacts[`step-${s.n}.png`] ? { imageUrl: artifactUrl(missionId, revision.n, `step-${s.n}.png`) } : {}),
-          ...(revision && revision.results.artifacts[`step-${s.n}-focus.png`] ? { focusImageUrl: artifactUrl(missionId, revision.n, `step-${s.n}-focus.png`) } : {}),
-        })),
+        steps: colored.steps,
+        ...(colored.wires ? { wires: colored.wires } : {}),
         current,
         plug: steps[current - 1]?.plug ?? "unplugged",
         ...(headlineEvent ? { headline: headlineEvent.text } : {}),
