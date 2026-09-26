@@ -26,12 +26,14 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Linux and Windows gate the release. macOS legs are best effort: a failure there never blocks publishing.
         include:
-          - { os: ubuntu-latest, label: linux-x64, builder: --linux AppImage deb }
-          - { os: windows-latest, label: windows-x64, builder: --win nsis }
-          - { os: macos-14, label: macos-arm64, builder: --mac dmg zip }
-          - { os: macos-15-intel, label: macos-x64, builder: --mac dmg zip }
+          - { os: ubuntu-latest, label: linux-x64, builder: --linux AppImage deb, optional: false }
+          - { os: windows-latest, label: windows-x64, builder: --win nsis, optional: false }
+          - { os: macos-14, label: macos-arm64, builder: --mac dmg zip, optional: true }
+          - { os: macos-15-intel, label: macos-x64, builder: --mac dmg zip, optional: true }
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.optional }}
     timeout-minutes: 60
     env:
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
@@ -92,8 +94,8 @@ jobs:
   release:
     name: Prerelease desktop-v0.1.0
     needs: package
-    # Only a fully green run on main (push or workflow_dispatch) republishes; superseded runs are cancelled above.
-    if: github.ref == 'refs/heads/main'
+    # Runs on main (push or workflow_dispatch) once Linux and Windows passed; optional macOS legs may have failed.
+    if: github.ref == 'refs/heads/main' && needs.package.result == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v5
@@ -105,12 +107,31 @@ jobs:
         run: |
           set -euo pipefail
           mkdir upload
-          find artifacts -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \) -exec cp {} upload/ \;
+          missing=""
+          # Attach a platform's installers only when its packaged-app smoke test passed.
+          for dir in artifacts/vibread-*; do
+            label="${dir#artifacts/vibread-}"
+            if [ -f "$dir/smoke/smoke.json" ] && jq -e '.ok == true' "$dir/smoke/smoke.json" >/dev/null; then
+              find "$dir" -type f \( -name '*.AppImage' -o -name '*.deb' -o -name '*.exe' -o -name '*.dmg' -o -name '*.zip' \) -exec cp {} upload/ \;
+            else
+              missing="$missing $label"
+            fi
+          done
+          for label in macos-arm64 macos-x64; do
+            [ -d "artifacts/vibread-$label" ] || missing="$missing $label"
+          done
           (cd upload && sha256sum * > SHA256SUMS.txt)
           ls -la upload
           # Delete the release and its tag so the tag moves to this commit.
           gh release delete desktop-v0.1.0 --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || true
-          printf 'Built from %s on %s\n\nUnsigned preview builds of the ViBread desktop app (Linux x64 AppImage/deb, Windows x64 installer, macOS arm64/x64 dmg/zip). See the README "Desktop app" section for first-run steps.\n' \
-            "${GITHUB_SHA::7}" "$(date -u '+%Y-%m-%d %H:%M UTC')" > notes.md
+          {
+            printf 'Built from %s on %s\n\n' "${GITHUB_SHA::7}" "$(date -u '+%Y-%m-%d %H:%M UTC')"
+            printf 'Unsigned preview builds of the ViBread desktop app. See the README "Desktop app" section for first-run steps.\n'
+            if [ -n "$missing" ]; then
+              printf '\nNot in this build (packaging or smoke test failed, see %s/%s/actions/runs/%s):%s\n' \
+                "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$missing"
+            fi
+          } > notes.md
+          cat notes.md
           gh release create desktop-v0.1.0 upload/* --prerelease --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
             --title "ViBread desktop v0.1.0 (preview)" --notes-file notes.md
