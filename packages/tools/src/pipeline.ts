@@ -78,7 +78,7 @@ class Run {
 
 /**
  * Four independent branches run concurrently after parsing:
- *   EECOM · firmware (compile → pin modes ∥ suite → GUIDO, FIDO) · assembly (layout/LVS/FAO/steps → drawings ∥ schematic)
+ *   EECOM (+ SPICE cross-check as non-blocking evidence) · firmware (compile → pin modes ∥ suite → GUIDO, FIDO) · assembly (layout/LVS/FAO/steps → drawings ∥ schematic)
  *   · bench (self-test plan → bench firmware).
  * Every stage is timed and failure-isolated: a thrown stage becomes an error finding on its console. After the results
  * are saved, the fault dictionary (`faults.json`) is queued in the background (faults.ts); `faults: false` disables it.
@@ -91,12 +91,24 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
   const faultQueue = createFaultQueue({ store, ...(deps.log ? { log: deps.log } : {}) });
 
   async function eecomBranch(run: Run, circuit: Circuit, irWarnings: Finding[]): Promise<void> {
-    const eecom = await run.stage("eecom", async () => (await import("@vibread/checks")).runElectricalChecks(circuit, run.hash));
+    const [eecom, spice] = await Promise.all([
+      run.stage("eecom", async () => (await import("@vibread/checks")).runElectricalChecks(circuit, run.hash)),
+      run.stage("spice", async () => (await import("@vibread/checks")).spiceCrossCheck(circuit)),
+    ]);
+    // SPICE is corroborating evidence (PLAN §5.5, item 13): it never blocks. Its errors become warnings; a missing
+    // ngspice or a crash is an info finding.
+    const spiceFindings: Finding[] = spice.ok
+      ? spice.value.findings.map((f) => (f.severity === "error" ? { ...f, severity: "warning" as const } : f))
+      : [{ ...crashFinding("EECOM", "SPICE cross-check", spice.error, "info"), fix: "Electrical checks still use the analytic limits." }];
+    const spiceEvidence = { spice: spice.ok ? { ok: spice.value.ok, rows: spice.value.rows, stageMs: spice.ms } : { ok: false, rows: [], stageMs: spice.ms } };
     run.reports.set(
       "EECOM",
       eecom.ok
-        ? withFindings(eecom.value, irWarnings, { stageMs: eecom.ms })
-        : report("EECOM", [crashFinding("EECOM", "electrical check", eecom.error), ...irWarnings], "The electrical check crashed.", run.hash, { stageMs: eecom.ms }),
+        ? withFindings(eecom.value, [...irWarnings, ...spiceFindings], { stageMs: eecom.ms, ...spiceEvidence })
+        : report("EECOM", [crashFinding("EECOM", "electrical check", eecom.error), ...irWarnings, ...spiceFindings], "The electrical check crashed.", run.hash, {
+            stageMs: eecom.ms,
+            ...spiceEvidence,
+          }),
     );
   }
 

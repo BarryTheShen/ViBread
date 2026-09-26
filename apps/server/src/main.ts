@@ -4,6 +4,7 @@ import http from "node:http";
 import express, { type ErrorRequestHandler, type Express } from "express";
 import rateLimit from "express-rate-limit";
 import pino from "pino";
+import type { Logger } from "pino";
 import pinoHttp from "pino-http";
 import { toNodeHandler } from "better-auth/node";
 import { mountA2a, mountMcp } from "./interop/index.js";
@@ -11,7 +12,7 @@ import { startCapcom } from "./capcom/index.js";
 import { createAppContext, type AppContextHandle } from "./context.js";
 import { getSessionUser } from "./auth.js";
 import { loadConfig, type ServerConfig } from "./config.js";
-import { mountApi } from "./routes.js";
+import { mountApi, approvalOwnerMiddleware, missionOwnerMiddleware } from "./routes.js";
 
 export interface RunningServer {
   app: Express;
@@ -43,7 +44,7 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   app.get("/.well-known/oauth-protected-resource/mcp", (_req, res) => {
     res.json({
       resource: `${config.publicUrl}/mcp`,
-      authorization_servers: [config.publicUrl],
+      authorization_servers: [`${config.publicUrl}/api/auth`],
       bearer_methods_supported: ["header"],
       scopes_supported: ["circuits:read", "circuits:write", "bench:request"],
     });
@@ -77,6 +78,8 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
     }
   });
 
+  app.use("/api/missions/:id", missionOwnerMiddleware(ctx));
+  app.use("/api/approvals/:approvalId", approvalOwnerMiddleware(ctx));
   mountApi(app, ctx);
   ctx.runtime.mountChat(app);
   mountMcp(app, ctx, auth);
@@ -92,10 +95,11 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
 
   const apiErrorHandler: ErrorRequestHandler = (error, _req, res, next) => {
     if (res.headersSent) return next(error);
-    const status = typeof error?.status === "number" ? error.status : 500;
-    const code = typeof error?.code === "string" ? error.code : "INTERNAL_ERROR";
-    const message = status >= 500 && code === "INTERNAL_ERROR" ? "internal server error" : error instanceof Error ? error.message : "request failed";
-    if (status >= 500) log.error({ err: error }, "request failed");
+    const deliberate = typeof error?.status === "number" && typeof error?.code === "string";
+    const status = deliberate ? error.status : 500;
+    const code = deliberate ? error.code : "INTERNAL_ERROR";
+    const message = deliberate && error instanceof Error ? error.message : "internal server error";
+    if (!deliberate || status >= 500) log.error({ err: error }, "request failed");
     res.status(status).json({ error: { code, message } });
   };
   app.use(apiErrorHandler);

@@ -9,7 +9,12 @@ import { z } from "zod";
  *    After "all", `done`.
  *  - Read before drive — `pins.readonly` runs first and gates everything that drives a pin:
  *      1. passive reads: for every subject pin, `samples` reads without pull-up then with pull-up → two `read` lines.
- *      2. readback probe: for each output subject not already stuck, drive it to its active level for ≤ 4 µs with
+ *         An OUTPUT subject (LED, buzzer) is first checked from these reads alone, before anything is driven:
+ *         active-high (load to GND): all samples HIGH with the pull-up OFF → shorted to 5 V → `stuck {pin, level: 1}`;
+ *         active-low (load to 5 V): all samples LOW with the pull-up ON → shorted to GND → `stuck {pin, level: 0}`.
+ *         (The opposite short can't be seen passively: a healthy LED clamps the pin near its forward voltage.)
+ *         Stuck pins are never probed or driven.
+ *      2. readback probe: only for output subjects that passed step 1, drive to the active level for ≤ 4 µs with
  *         interrupts off, read PINx back, return to INPUT → one `probe` line. A readback that disagrees with the drive
  *         means a hard short to the other rail → `stuck` line.
  *    A pin that is stuck is never driven again in this run; tests that need it report `end` with status "fail" and

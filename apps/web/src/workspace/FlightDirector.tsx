@@ -17,7 +17,7 @@ import { QRCodeSVG } from "qrcode.react";
 import { useState } from "react";
 import { Link as RouterLink } from "react-router";
 import { HttpError } from "../api/client.js";
-import { useConnections, useRelease } from "../api/hooks.js";
+import { useConnections, usePhoneOrigin, useRelease } from "../api/hooks.js";
 
 const REQUIRED: ConsoleId[] = ["EECOM", "GUIDO", "FIDO", "FAO"];
 
@@ -51,7 +51,7 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
   // The server may write missing tests and release them as the next revision, so show what it actually released.
   const [releasedN, setReleasedN] = useState<number | undefined>(undefined);
   const state = releaseReadiness(detail);
-  const phoneUrl = `${window.location.origin}/b/${missionId}`;
+  const phoneUrl = `${usePhoneOrigin()}/b/${missionId}`;
 
   const go = (acknowledgeMissingReview: boolean) =>
     state.revision !== undefined &&
@@ -155,7 +155,9 @@ export function FlightDirector({ missionId, detail }: { missionId: string; detai
       <Snackbar
         open={toastOpen}
         onClose={(_, why) => why !== "clickaway" && setToastOpen(false)}
-        anchorOrigin={{ vertical: "top", horizontal: "center" }}
+        // Above the console bar (bottom), clear of the header's Permission mode control.
+        anchorOrigin={{ vertical: "bottom", horizontal: "center" }}
+        sx={{ bottom: { xs: 104, sm: 104 } }}
       >
         <Alert severity="success" variant="filled" onClose={() => setToastOpen(false)} icon={<FlightTakeoffIcon />} sx={{ alignItems: "center" }}>
           <Stack direction="row" sx={{ gap: 2, alignItems: "center" }}>

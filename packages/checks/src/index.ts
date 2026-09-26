@@ -26,6 +26,7 @@ import { verdictOf } from "@vibread/core";
 const VCC_MIN = 4.75;
 const VCC_MAX = 5.25;
 const MAX_BRIGHTNESS_CURRENT_MA = 4;
+const SPICE_LOW_CURRENT_FLOOR_MA = 5;
 const SPICE_TIMEOUT_MS = 2_000;
 const SPICE_TYPICAL_VF: Record<string, number> = {
   red: 2.05,
@@ -1036,18 +1037,66 @@ export function runFirmwareChecks(input: {
   return reportFromFindings("GUIDO", input.revisionHash, findings, evidence);
 }
 
-function spiceModel(color: string): { is: string; n: string } {
-  const targetVf = SPICE_TYPICAL_VF[color] ?? 2.0;
-  const targetMa = (5 - targetVf) / 220 * 1_000;
-  const n = 2;
-  const thermalV = 0.02585;
-  const is = (targetMa / 1_000) / (Math.exp(targetVf / (n * thermalV)) - 1);
-  return { is: is.toExponential(6), n: String(n) };
+interface SpiceDiodeModel {
+  is: string;
+  n: number;
+  rs: number;
 }
 
-function spiceDeck(color: string, resistance: number): string {
-  const model = spiceModel(color);
-  return `* ViBread server-owned LED branch cross-check\nVVB source 0 5\nRLED source led ${resistance}\nDLED led 0 D_${color}\n.model D_${color} D(Is=${model.is} N=${model.n})\n.control\nset noaskquit\nset filetype=ascii\nop\nprint vvb#branch\n.endc\n.end\n`;
+type SpiceModelCorner = "min" | "typ" | "max";
+
+/**
+ * Fixed per-color/per-corner diode models. Is/N/Rs were chosen once at 27 C
+ * so each model's 20 mA forward voltage matches the corresponding
+ * MODULES.led.electrical.vf corner; none is fitted to the circuit under test.
+ */
+const SPICE_MODELS: Record<string, Record<SpiceModelCorner, SpiceDiodeModel>> = {
+  red: {
+    min: { is: "7.254071e-16", n: 2, rs: 10 },
+    typ: { is: "1.515395e-17", n: 2, rs: 10 },
+    max: { is: "3.165700e-19", n: 2, rs: 10 },
+  },
+  yellow: {
+    min: { is: "1.048465e-16", n: 2, rs: 10 },
+    typ: { is: "2.190271e-18", n: 2, rs: 10 },
+    max: { is: "6.613232e-21", n: 2, rs: 10 },
+  },
+  green: {
+    min: { is: "1.048465e-16", n: 2, rs: 10 },
+    typ: { is: "3.165700e-19", n: 2, rs: 10 },
+    max: { is: "1.259475e-27", n: 2, rs: 10 },
+  },
+  blue: {
+    min: { is: "2.886036e-24", n: 2, rs: 10 },
+    typ: { is: "8.714002e-27", n: 2, rs: 10 },
+    max: { is: "2.631077e-29", n: 2, rs: 10 },
+  },
+  white: {
+    min: { is: "2.886036e-24", n: 2, rs: 10 },
+    typ: { is: "8.714002e-27", n: 2, rs: 10 },
+    max: { is: "2.631077e-29", n: 2, rs: 10 },
+  },
+};
+
+function spiceModel(color: string, corner: SpiceModelCorner): SpiceDiodeModel {
+  return (SPICE_MODELS[color] ?? SPICE_MODELS.red)[corner];
+}
+
+function spiceDeck(color: string, corner: SpiceModelCorner, resistance: number, volts: number): string {
+  const model = spiceModel(color, corner);
+  return `* ViBread server-owned LED branch cross-check
+VVB source 0 ${volts}
+RLED source led ${resistance}
+DLED led 0 D_${color}
+.model D_${color} D(Is=${model.is} N=${model.n} Rs=${model.rs})
+.control
+set noaskquit
+set filetype=ascii
+op
+print vvb#branch
+.endc
+.end
+`;
 }
 
 function parseSpiceCurrent(output: string): number | undefined {
@@ -1088,59 +1137,159 @@ function runNgspice(deckPath: string, cwd: string, rawPath: string): Promise<str
   });
 }
 
-function spiceBranches(circuit: Circuit): { part: Part; color: string; resistance: number; analyticMa: number }[] {
+interface SpiceBranch {
+  part: Part;
+  color: string;
+  resistance: number;
+  minResistance: number;
+  maxResistance: number;
+  analyticMa: number;
+  analyticMaxMa: number;
+  analyticMinMa: number;
+}
+
+export interface SpiceCrossCheckOptions {
+  /** Test seam for auditing a deliberately wrong analytic Vf assumption. */
+  analyticVf?: Record<string, number>;
+}
+
+type SpiceCornerName = "nominal" | "maximum" | "minimum";
+
+function spiceBranches(circuit: Circuit, options: SpiceCrossCheckOptions): SpiceBranch[] {
   const { nets, pinNets } = makeNets(circuit);
   const { sources } = makeSources(circuit, nets);
   const resistors = circuit.parts.filter((part) => part.module === "resistor").map((part) => resistorInfo(part, pinNets));
-  const branches: { part: Part; color: string; resistance: number; analyticMa: number }[] = [];
+  const branches: SpiceBranch[] = [];
   for (const led of circuit.parts.filter((part) => part.module === "led")) {
     const anode = partPinNet(pinNets, led.id, "A");
     const cathode = partPinNet(pinNets, led.id, "K");
     const sourcePath = sources.map((candidate) => ({
-      candidate,
       path: mergeResistorPaths(
         resistorPath(candidate.net, anode, resistors),
         resistorPathToRail(nets, cathode, "GND", resistors),
       ),
     })).find((entry) => entry.path?.length);
     if (!sourcePath?.path) continue;
-    const source = sourcePath.candidate;
     const path = sourcePath.path;
     const color = typeof led.params.color === "string" ? led.params.color : "red";
+    const vfCorners = MODULES.led.electrical.vf?.[color as keyof NonNullable<typeof MODULES.led.electrical.vf>] ?? MODULES.led.electrical.vf?.red;
+    if (!vfCorners) continue;
+    const nominalVf = options.analyticVf?.[color] ?? SPICE_TYPICAL_VF[color] ?? vfCorners.typ;
+    const maximumCurrentVf = options.analyticVf?.[color] ?? vfCorners.min;
+    const minimumCurrentVf = options.analyticVf?.[color] ?? vfCorners.max;
     const resistance = sumResistance(path);
-    const vf = SPICE_TYPICAL_VF[color] ?? 2;
-    branches.push({ part: led, color, resistance, analyticMa: currentMa(5, vf, resistance) });
+    const minimumResistance = minResistance(path);
+    const maximumResistance = maxResistance(path);
+    branches.push({
+      part: led,
+      color,
+      resistance,
+      minResistance: minimumResistance,
+      maxResistance: maximumResistance,
+      analyticMa: currentMa(5, nominalVf, resistance),
+      analyticMaxMa: currentMa(VCC_MAX, maximumCurrentVf, minimumResistance),
+      analyticMinMa: currentMa(VCC_MIN, minimumCurrentVf, maximumResistance + BOARD_PROFILES[circuit.board.profile].driverOhms.effective),
+    });
   }
   return branches;
 }
 
-/** Cross-check every forward-biased LED branch against a short ngspice run. */
-export async function spiceCrossCheck(circuit: Circuit): Promise<{
+function missingNgspice(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  return error.code === "ENOENT";
+}
+
+/** Cross-check every forward-biased LED branch against bounded ngspice corner runs. */
+export async function spiceCrossCheck(circuit: Circuit, options: SpiceCrossCheckOptions = {}): Promise<{
   ok: boolean;
   findings: Finding[];
-  rows: { part: string; analyticMa: number; spiceMa: number }[];
+  rows: {
+    part: string;
+    analyticMa: number;
+    spiceMa: number;
+    analyticMaxMa: number;
+    spiceMaxMa: number;
+    analyticMinMa: number;
+    spiceMinMa: number;
+  }[];
 }> {
-  const branches = spiceBranches(circuit);
+  const branches = spiceBranches(circuit, options);
   if (!branches.length) return { ok: true, findings: [], rows: [] };
   const work = await mkdtemp(join(tmpdir(), "vibread-spice-"));
   const findings: Finding[] = [];
-  const rows: { part: string; analyticMa: number; spiceMa: number }[] = [];
+  const rows: {
+    part: string;
+    analyticMa: number;
+    spiceMa: number;
+    analyticMaxMa: number;
+    spiceMaxMa: number;
+    analyticMinMa: number;
+    spiceMinMa: number;
+  }[] = [];
   try {
     for (const branch of branches) {
-      const deckPath = join(work, `${branch.part.id}.cir`);
-      const rawPath = join(work, `${branch.part.id}.raw`);
-      await writeFile(deckPath, spiceDeck(branch.color, branch.resistance), "utf8");
-      try {
-        const output = await runNgspice(deckPath, work, rawPath);
-        const spiceMa = parseSpiceCurrent(output);
-        if (spiceMa === undefined) throw new Error(`could not parse source current from ngspice output: ${output.slice(-1_000)}`);
-        rows.push({ part: branch.part.id, analyticMa: Number(branch.analyticMa.toFixed(3)), spiceMa: Number(spiceMa.toFixed(3)) });
-        const deviation = Math.abs(spiceMa - branch.analyticMa) / Math.max(branch.analyticMa, 0.001);
-        if (deviation > 0.2) {
-          findings.push({ console: "EECOM", ruleId: "SPICE-DEVIATION", severity: "warning", title: "The analytic LED current differs from ngspice by more than 20%.", detail: `${branch.part.id}: analytic ${branch.analyticMa.toFixed(2)} mA versus ngspice ${spiceMa.toFixed(2)} mA (${(deviation * 100).toFixed(1)}% apart).`, fix: "Review the LED model, resistor value, and intended voltage corner.", refs: { parts: [branch.part.id] } });
+      const corners: { name: SpiceCornerName; model: SpiceModelCorner; volts: number; resistance: number; analyticMa: number }[] = [
+        { name: "nominal", model: "typ", volts: 5, resistance: branch.resistance, analyticMa: branch.analyticMa },
+        { name: "maximum", model: "min", volts: VCC_MAX, resistance: branch.minResistance, analyticMa: branch.analyticMaxMa },
+        { name: "minimum", model: "max", volts: VCC_MIN, resistance: branch.maxResistance + BOARD_PROFILES[circuit.board.profile].driverOhms.effective, analyticMa: branch.analyticMinMa },
+      ];
+      const measured: Partial<Record<SpiceCornerName, number>> = {};
+      let branchFailed = false;
+      for (const corner of corners) {
+        const deckPath = join(work, `${branch.part.id}-${corner.name}.cir`);
+        const rawPath = join(work, `${branch.part.id}-${corner.name}.raw`);
+        await writeFile(deckPath, spiceDeck(branch.color, corner.model, corner.resistance, corner.volts), "utf8");
+        try {
+          const output = await runNgspice(deckPath, work, rawPath);
+          const spiceMa = parseSpiceCurrent(output);
+          if (spiceMa === undefined) throw new Error(`could not parse source current from ngspice output: ${output.slice(-1_000)}`);
+          measured[corner.name] = spiceMa;
+        } catch (error) {
+          branchFailed = true;
+          const unavailable = missingNgspice(error);
+          findings.push({
+            console: "EECOM",
+            ruleId: unavailable ? "SPICE-UNAVAILABLE" : "SPICE-RUN",
+            severity: unavailable ? "info" : "error",
+            title: unavailable ? "The optional SPICE cross-check is unavailable." : "The SPICE cross-check could not run this LED branch.",
+            detail: error instanceof Error ? error.message : String(error),
+            fix: unavailable ? "Install ngspice to add independent current evidence; electrical checks still use the analytic limits." : "Check that the generated branch has a valid ngspice operating point.",
+            refs: { parts: [branch.part.id] },
+          });
+          break;
         }
-      } catch (error) {
-        findings.push({ console: "EECOM", ruleId: "SPICE-RUN", severity: "error", title: "The SPICE cross-check could not run this LED branch.", detail: error instanceof Error ? error.message : String(error), fix: "Check that ngspice is installed and the branch has a valid forward path.", refs: { parts: [branch.part.id] } });
+      }
+      const nominal = measured.nominal;
+      const maximum = measured.maximum;
+      const minimum = measured.minimum;
+      if (branchFailed || nominal === undefined || maximum === undefined || minimum === undefined) continue;
+      rows.push({
+        part: branch.part.id,
+        analyticMa: Number(branch.analyticMa.toFixed(3)),
+        spiceMa: Number(nominal.toFixed(3)),
+        analyticMaxMa: Number(branch.analyticMaxMa.toFixed(3)),
+        spiceMaxMa: Number(maximum.toFixed(3)),
+        analyticMinMa: Number(branch.analyticMinMa.toFixed(3)),
+        spiceMinMa: Number(minimum.toFixed(3)),
+      });
+      for (const corner of corners) {
+        const spiceMa = measured[corner.name];
+        if (spiceMa === undefined) continue;
+        const deviation = Math.abs(spiceMa - corner.analyticMa) / Math.max(corner.analyticMa, 0.001);
+        // Below the 5 mA visibility floor, the LED-DIM rule is the actionable signal;
+        // avoid a duplicate model-spread warning for that already-dim corner.
+        const lowCurrentCorner = corner.name === "minimum" && corner.analyticMa < SPICE_LOW_CURRENT_FLOOR_MA;
+        if (deviation > 0.2 && !lowCurrentCorner) {
+          findings.push({
+            console: "EECOM",
+            ruleId: "SPICE-DEVIATION",
+            severity: "warning",
+            title: "The analytic LED current differs from ngspice by more than 20%.",
+            detail: `${branch.part.id} ${corner.name} corner: analytic ${corner.analyticMa.toFixed(2)} mA versus ngspice ${spiceMa.toFixed(2)} mA (${(deviation * 100).toFixed(1)}% apart).`,
+            fix: "Review the LED model, resistor value, and voltage/current corner assumptions.",
+            refs: { parts: [branch.part.id] },
+          });
+        }
       }
     }
   } finally {

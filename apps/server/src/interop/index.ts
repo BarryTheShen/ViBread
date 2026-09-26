@@ -127,9 +127,10 @@ function extractObjectShape(schema: z.ZodType<unknown>): Record<string, z.ZodTyp
 
 function mcpToolShape(def: ToolDef): Record<string, z.ZodType<unknown>> {
   const existing = extractObjectShape(def.input);
-  if (existing) return { ...existing, missionId: z.string().describe("ViBread mission ID") };
+  if (existing) return { ...existing, missionId: z.string().describe("ViBread mission ID"), approvalId: z.string().optional().describe("Approval id returned by a previous call") };
   return {
     missionId: z.string().describe("ViBread mission ID"),
+    approvalId: z.string().optional().describe("Approval id returned by a previous call"),
     input: def.input,
   };
 }
@@ -149,7 +150,7 @@ async function callTool(def: ToolDef, args: Record<string, unknown>, request: Re
   const needed = requiredScope(def.actionClass);
   if (!hasScope(scopes, needed)) throw new Error(`Missing scope: ${needed}`);
 
-  const { missionId: _ignored, input: nestedInput, ...objectInput } = args;
+  const { missionId: _ignored, approvalId, input: nestedInput, ...objectInput } = args;
   const input = extractObjectShape(def.input) ? objectInput : nestedInput;
   const parsed = await def.input.parseAsync(input);
   const gated = await invokeTool({
@@ -159,6 +160,7 @@ async function callTool(def: ToolDef, args: Record<string, unknown>, request: Re
     ctx: { missionId, actor },
     name: def.name,
     args: parsed,
+    ...(typeof approvalId === "string" ? { approvalId } : {}),
   });
   switch (gated.status) {
     case "executed":
@@ -166,7 +168,7 @@ async function callTool(def: ToolDef, args: Record<string, unknown>, request: Re
     case "denied":
       return { executed: false, denied: true, reason: gated.reason };
     case "approval-required":
-      return { executed: false, pending: true, approval: approvalView(gated.approval), message: "This action is waiting for a human approval." };
+      return { executed: false, pending: true, approvalId: gated.approval.id, approval: approvalView(gated.approval), message: "Ask the human to approve this in ViBread, then call this tool again with approvalId." };
     case "bench-click":
       return {
         requested: true,
@@ -241,7 +243,7 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
       {
         title: "Talk to the ViBread agent",
         description: "Send a natural-language turn to a mission agent.",
-        inputSchema: { missionId: z.string(), text: z.string().min(1) },
+        inputSchema: { missionId: z.string(), text: z.string().min(1), approvalId: z.string().optional() },
       },
       async ({ missionId, text }) => {
         await ownedMission(ctx, missionId, request);
@@ -254,7 +256,7 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
       {
         title: "Continue an ask-back task",
         description: "Answer the last question from ViBread and continue the mission turn.",
-        inputSchema: { missionId: z.string(), answer: z.string().min(1) },
+        inputSchema: { missionId: z.string(), answer: z.string().min(1), approvalId: z.string().optional() },
       },
       async ({ missionId, answer }) => {
         await ownedMission(ctx, missionId, request);

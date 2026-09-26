@@ -110,13 +110,13 @@ const RULE_DATA: RuleData[] = [
       {
         cause: "output-jumper-in-rail-row",
         title: "Output jumper is in a power-rail row",
-        likelihood: 0.7,
+        likelihood: 0.95,
         fix: "Unplug the highlighted output jumper from the rail row and use the signal row.",
       },
       {
         cause: "missing-resistor",
         title: "Current-limiting resistor is missing",
-        likelihood: 0.3,
+        likelihood: 0.05,
         fix: "Add the highlighted resistor in series before trying the output again.",
       },
     ],

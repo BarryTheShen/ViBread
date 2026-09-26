@@ -25,7 +25,7 @@ import type { BenchRunResult, BoardProfileId, Circuit, DeviceLine, Layout, Missi
 import { BOARD_PROFILES, revisionHash } from "@vibread/core";
 import { FAULTS, evaluateRun, planSelfTest, promptFor } from "@vibread/bench";
 import { BenchRunner, type BenchRunnerState } from "./runner.js";
-import { circuitWithFault } from "./faults.js";
+import { applyBrowserFault, circuitWithFault } from "./faults.js";
 import { decorateBreadboardSvg, fallbackBreadboardSvg, candidateHighlight, type SvgHighlight } from "./svg.js";
 import {
   describePort,
@@ -36,14 +36,27 @@ import {
   type FlashProgress,
 } from "./serial.js";
 import { faultLabel, VirtualBenchTransport, type VirtualFault, type VirtualPartTelemetry } from "./virtual.js";
+import { BenchAskBridge, type RemoteAskStatus } from "./askBridge.js";
 
-const STEPS = ["Connect board", "Safe firmware", "Rail checkpoint", "Self-test", "Diagnose", "App firmware", "Celebrate"];
+const STEPS = ["Connect your board", "Make it safe", "Check power", "Test each part", "Find the problem", "Run your project", "Celebrate"];
 const BOARD_LOST_POWER = "Board lost power — unplug, then check the rails and the cable";
 
 interface FirmwareResponse {
   hex: string;
   design?: string;
   plan?: SelfTestPlan;
+}
+interface BenchApprovalRequest {
+  id: string;
+  action: "flash-bench" | "rail-checkpoint" | "run-selftest" | "flash-app";
+  summary: string;
+  note?: string;
+  revision: number;
+  status: "pending" | "approved";
+  requestedBy: { name?: string; id: string; channel: string };
+  preApprovedBy?: { name?: string; channel: string };
+  createdAt: string;
+  expiresAt: string;
 }
 
 interface LoadedBench {
@@ -124,15 +137,25 @@ function virtualPromptHint(ask: Extract<DeviceLine, { t: "ask" }>): string | und
   };
   return hints[ask.kind];
 }
+function promptTitle(ask: Extract<DeviceLine, { t: "ask" }>, plan: SelfTestPlan, fallback: string): string {
+  const subject = plan.subjects.find((candidate) => candidate.part === ask.part);
+  if (ask.kind === "which-led" && subject?.kind === "led") {
+    const total = plan.subjects.filter((candidate) => candidate.kind === "led").length;
+    return `Light ${subject.order} of ${total}: ${fallback}`;
+  }
+  return subject === undefined ? fallback : `${subject.label}: ${fallback}`;
+}
 
 const actionButtonSx = { minHeight: 46, borderRadius: 2 } as const;
 
 export default function BenchPage(): ReactElement {
   const { missionId = "" } = useParams<{ missionId: string }>();
+  const [logPinned, setLogPinned] = useState(true);
   const [loaded, setLoaded] = useState<LoadedBench | undefined>();
   const [loadError, setLoadError] = useState<string>();
   const [mode, setMode] = useState<"physical" | "virtual">("virtual");
   const [boardProfileChoice, setBoardProfileChoice] = useState<BoardProfileId | "auto">("auto");
+  const logRef = useRef<HTMLPreElement | null>(null);
   const [fault, setFault] = useState<VirtualFault>("none");
   const [activeStep, setActiveStep] = useState(0);
   const [connection, setConnection] = useState<BoardPortConnection | undefined>();
@@ -146,11 +169,16 @@ export default function BenchPage(): ReactElement {
   const [highlight, setHighlight] = useState<SvgHighlight>({ holes: [], parts: [], jumpers: [] });
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  const [remoteAnswer, setRemoteAnswer] = useState<{ id: string; value: string; by: string }>();
+  const [requests, setRequests] = useState<BenchApprovalRequest[]>([]);
+  const askBridgeRef = useRef<Map<string, BenchAskBridge>>(new Map());
   const [reducedMotion, setReducedMotion] = useState(false);
   const virtualRef = useRef<VirtualBenchTransport | undefined>(undefined);
   const connectionRef = useRef<BoardPortConnection | undefined>(undefined);
   const runnerRef = useRef<BenchRunner | undefined>(undefined);
   const railRequestAt = useRef<number | undefined>(undefined);
+  const currentAskIdForBridge = runnerState?.asks[0]?.id;
+  const currentAskValue = currentAskIdForBridge === undefined ? undefined : runnerState?.answers[currentAskIdForBridge];
 
   useEffect(() => {
     let alive = true;
@@ -174,6 +202,24 @@ export default function BenchPage(): ReactElement {
       void virtualRef.current?.close();
     };
   }, [missionId]);
+  useEffect(() => {
+    let alive = true;
+    const refresh = async (): Promise<void> => {
+      if (!missionId) return;
+      try {
+        const result = await readJson<{ requests: BenchApprovalRequest[] }>(`/api/missions/${encodeURIComponent(missionId)}/bench/requests`);
+        if (alive) setRequests(result.requests.filter((request) => request.status === "pending" || request.status === "approved"));
+      } catch {
+        // Approval polling is advisory; the local bench stays usable.
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 2_000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, [missionId]);
 
   useEffect(() => {
     const query = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -182,6 +228,55 @@ export default function BenchPage(): ReactElement {
     query.addEventListener?.("change", update);
     return () => query.removeEventListener?.("change", update);
   }, []);
+  useEffect(() => {
+    if (!logPinned || !logRef.current) return;
+    logRef.current.scrollTop = logRef.current.scrollHeight;
+  }, [logPinned, runnerState?.rawLines.length]);
+  useEffect(() => {
+    if (!loaded || !currentAskIdForBridge || currentAskValue !== undefined) return undefined;
+    const ask = runnerState?.asks[0];
+    if (!ask) return undefined;
+    const bridge = new BenchAskBridge(missionId);
+    askBridgeRef.current.set(ask.id, bridge);
+    setRemoteAnswer(undefined);
+    const prompt = promptFor(ask, loaded.plan);
+    void bridge.publish(ask, prompt).catch(() => undefined);
+    let active = true;
+    let polling = false;
+    const poll = async (): Promise<void> => {
+      if (!active || polling) return;
+      polling = true;
+      try {
+        const status = await bridge.poll(ask.id);
+        if (active && status.status === "answered" && typeof status.answer === "string") {
+          active = false;
+          const by = status.answeredBy?.name ?? "iMessage";
+          setRemoteAnswer({ id: ask.id, value: status.answer, by });
+          try {
+            await runnerRef.current?.answer(ask.id, status.answer);
+          } catch {
+            // A local answer won the race; the server's first-answer contract keeps it authoritative.
+          }
+        }
+      } catch {
+        // CAPCOM is advisory; the local prompt remains usable when polling fails.
+      } finally {
+        polling = false;
+      }
+    };
+    void poll();
+    const interval = window.setInterval(() => void poll(), 1_000);
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      askBridgeRef.current.delete(ask.id);
+    };
+  }, [currentAskIdForBridge, currentAskValue, loaded, missionId]);
+
+  useEffect(() => {
+    if (!currentAskIdForBridge || currentAskValue === undefined) return;
+    void askBridgeRef.current.get(currentAskIdForBridge)?.close(currentAskIdForBridge, currentAskValue).catch(() => undefined);
+  }, [currentAskIdForBridge, currentAskValue]);
 
   useEffect(() => {
     if (activeStep !== 2 || !railRequestAt.current) return undefined;
@@ -211,6 +306,7 @@ export default function BenchPage(): ReactElement {
       plan,
       circuit,
       revision,
+      runId: nextTransport instanceof VirtualBenchTransport ? `virtual-${Date.now().toString(36)}` : undefined,
       transport: nextTransport,
       onState: (next) => {
         setRunnerState({ ...next });
@@ -220,6 +316,7 @@ export default function BenchPage(): ReactElement {
     runnerRef.current = nextRunner;
     setRunner(nextRunner);
     setRunnerState(nextRunner.state);
+    setLogPinned(true);
     return nextRunner;
   }, []);
 
@@ -378,8 +475,16 @@ export default function BenchPage(): ReactElement {
         const selected = connectionRef.current;
         if (!selected) throw new Error("Connect the board before flashing app firmware.");
         await flashHex({ connection: selected, hex: firmware.hex, onProgress: setFlashProgress });
+        setFlashProgress({ stage: "verified", percent: 100 });
+      } else {
+        if (!virtualRef.current) throw new Error("Connect the virtual board before running app firmware.");
+        runnerRef.current?.dispose();
+        virtualRef.current.start({ circuit: loaded.revision.circuit, hex: firmware.hex, fault: "none" });
+        setRunner(undefined);
+        setRunnerState(undefined);
+        setTelemetry(undefined);
+        setFlashProgress({ stage: "Virtual app firmware running", percent: 100 });
       }
-      setFlashProgress({ stage: mode === "virtual" ? "Virtual flash skipped" : "verified", percent: 100 });
       setActiveStep(6);
     } catch (reason: unknown) {
       const message = isLostPowerError(reason) ? BOARD_LOST_POWER : reason instanceof Error ? reason.message : String(reason);
@@ -388,6 +493,44 @@ export default function BenchPage(): ReactElement {
       setBusy(undefined);
     }
   }, [loaded, missionId, mode]);
+
+  const runApproval = useCallback(async (request: BenchApprovalRequest): Promise<void> => {
+    if (!runner) {
+      setError("Connect the board or start the virtual board before running this request.");
+      return;
+    }
+    setBusy(`approval:${request.id}`);
+    try {
+      const started = await readJson<{ id: string; action: BenchApprovalRequest["action"]; revision: number }>(`/api/missions/${encodeURIComponent(missionId)}/bench/requests/${encodeURIComponent(request.id)}/start`, { method: "POST" });
+      setRequests((current) => current.filter((candidate) => candidate.id !== request.id));
+      if (started.action === "flash-bench") await flashSafe();
+      else if (started.action === "rail-checkpoint") {
+        setActiveStep(2);
+        await startRail();
+      } else if (started.action === "run-selftest") {
+        setActiveStep(3);
+        await startSelfTest();
+      } else {
+        await flashApp();
+      }
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(undefined);
+    }
+  }, [flashApp, flashSafe, missionId, runner, startRail, startSelfTest]);
+
+  const denyApproval = useCallback(async (request: BenchApprovalRequest): Promise<void> => {
+    setBusy(`deny:${request.id}`);
+    try {
+      await readJson<unknown>(`/api/missions/${encodeURIComponent(missionId)}/bench/requests/${encodeURIComponent(request.id)}/deny`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+      setRequests((current) => current.filter((candidate) => candidate.id !== request.id));
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(undefined);
+    }
+  }, [missionId]);
 
   const answerAsk = useCallback(async (askId: string, value: string): Promise<void> => {
     if (!runner) return;
@@ -417,6 +560,47 @@ export default function BenchPage(): ReactElement {
     }
   }, [attachRunner, benchHex, fault, loaded, mode]);
 
+  const restartSelfTest = useCallback((): void => {
+    if (!loaded) return;
+    try {
+      let nextRunner: BenchRunner;
+      if (mode === "virtual") {
+        if (!benchHex || !virtualRef.current) throw new Error("Reconnect the virtual board before restarting the self-test.");
+        const simulatedCircuit = circuitWithFault(loaded.revision.circuit, fault, loaded.layout);
+        nextRunner = attachRunner(virtualRef.current, loaded.plan, simulatedCircuit, loaded.revision.n);
+        virtualRef.current.start({ circuit: simulatedCircuit, hex: benchHex, fault });
+      } else {
+        const selected = connectionRef.current;
+        if (!selected) throw new Error("Reconnect the board before restarting the self-test.");
+        nextRunner = attachRunner(selected.transport, loaded.plan, loaded.revision.circuit, loaded.revision.n);
+      }
+      setRunner(nextRunner);
+      setRunnerState(nextRunner.state);
+      setRun(undefined);
+      setSelectedCandidate(0);
+      setTelemetry(undefined);
+      setHighlight({ holes: [], parts: [], jumpers: [] });
+      setError(undefined);
+      railRequestAt.current = undefined;
+      setActiveStep(2);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }, [attachRunner, benchHex, fault, loaded, mode]);
+
+  const availableFaults = useMemo(
+    () => {
+      if (!loaded) return [];
+      return FAULTS.filter((definition) => {
+        try {
+          return applyBrowserFault(loaded.revision.circuit, definition.id, loaded.layout) !== undefined;
+        } catch {
+          return false;
+        }
+      });
+    },
+    [loaded],
+  );
   if (!loaded) {
     return (
       <Box sx={{ minHeight: "100vh", p: { xs: 2, md: 5 } }}>
@@ -428,9 +612,14 @@ export default function BenchPage(): ReactElement {
 
   const railReady = Boolean(runnerState?.seenHello && runnerState.seenVcc);
   const pendingAsks = (runnerState?.asks ?? []).filter((ask) => runnerState?.answers[ask.id] === undefined);
-  const topCandidate = run?.diagnosis.candidates[selectedCandidate];
+  const topCandidate = run?.verdict === "pass" ? undefined : run?.diagnosis.candidates[selectedCandidate];
+  const indistinguishable = run !== undefined && /indistinguishable|equally likely|cannot distinguish/i.test(run.diagnosis.summary);
   const allLines = runnerState?.rawLines ?? [];
   const currentProfile = connection?.profile;
+  const boardFqbn = BOARD_PROFILES[loaded.revision.circuit.board.profile].fqbn;
+  const benchArtifactUrl = loaded.revision.artifactUrls["bench.hex"];
+  const appArtifactUrl = loaded.revision.artifactUrls["app.hex"];
+  const lastRun = loaded.revision.results.bench?.at(-1);
 
   return (
     <Box sx={{ minHeight: "100vh", p: { xs: 2, md: 4 }, background: "radial-gradient(circle at 80% 0%, rgba(57,91,148,.24), transparent 38%)" }}>
@@ -464,13 +653,14 @@ export default function BenchPage(): ReactElement {
                 <Button variant={mode === "physical" ? "contained" : "outlined"} onClick={() => setMode("physical")} sx={actionButtonSx}>Use USB board</Button>
               </Stack>
             </Stack>
+            {lastRun && <Alert severity={lastRun.verdict === "pass" ? "success" : "warning"} sx={{ mt: 2 }}>Last self-test: {lastRun.verdict.toUpperCase()} · {lastRun.diagnosis.summary}</Alert>}
             {mode === "virtual" && (
               <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mt: 2, alignItems: { md: "flex-end" } }}>
                 <FormControl size="small" sx={{ minWidth: 290 }}>
                   <InputLabel id="virtual-fault-label">Inject a wiring fault</InputLabel>
                   <Select labelId="virtual-fault-label" value={fault} label="Inject a wiring fault" onChange={(event) => setFault(event.target.value as VirtualFault)}>
                     <MenuItem value="none">{faultLabel("none")}</MenuItem>
-                    {FAULTS.map((definition) => <MenuItem key={definition.id} value={definition.id}>{definition.title}</MenuItem>)}
+                    {availableFaults.map((definition) => <MenuItem key={definition.id} value={definition.id}>{definition.title}</MenuItem>)}
                   </Select>
                 </FormControl>
                 {virtualRef.current && <Button variant="outlined" onClick={resetForFault} sx={actionButtonSx}>Apply fault and restart</Button>}
@@ -505,12 +695,26 @@ export default function BenchPage(): ReactElement {
         </Card>
 
         {error && <Alert severity="error" onClose={() => setError(undefined)} action={error === BOARD_LOST_POWER ? <Button color="inherit" size="small" onClick={() => { setError(undefined); void startRail(); }}>Retry rail checkpoint</Button> : undefined}>{error}</Alert>}
+        {requests.map((request) => (
+          <Card key={request.id} variant="outlined">
+            <CardContent>
+              <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Claude Code asked: {request.summary} (r{request.revision})</Typography>
+              {request.note && <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{request.note}</Typography>}
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 1, alignItems: { sm: "center" } }}>
+                <Chip label={request.preApprovedBy?.channel === "imessage" ? `Pre-approved from iMessage by ${request.preApprovedBy.name ?? "your helper"}` : "Needs your OK"} color={request.preApprovedBy?.channel === "imessage" ? "success" : "default"} size="small" />
+                <Button variant="contained" size="small" disabled={!runner || Boolean(busy)} title={runner ? undefined : "Connect the board or start the virtual board first"} onClick={() => void runApproval(request)}>Run it now</Button>
+                <Button variant="outlined" size="small" disabled={Boolean(busy)} onClick={() => void denyApproval(request)}>Decline</Button>
+                {!runner && <Typography variant="caption" color="text.secondary">Connect a board before running this request.</Typography>}
+              </Stack>
+            </CardContent>
+          </Card>
+        ))}
 
         {activeStep >= 1 && (
           <Card>
             <CardContent>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 1 · Safe firmware</Typography>
-              <Typography color="text.secondary" sx={{ mt: 0.5 }}>Before the breadboard is trusted, every pin becomes an input. The firmware banner is tied to design hash <strong>{loaded.revision.hash.slice(0, 12)}</strong>.</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 1 · Make it safe</Typography>
+              <Typography color="text.secondary" sx={{ mt: 0.5 }}>ViBread puts every pin in a safe listening mode before it tests your parts. This check belongs to design <strong>{loaded.revision.hash.slice(0, 12)}</strong>.</Typography>
               {currentProfile && connection && <Chip label={describePort(connection)} size="small" sx={{ mt: 1 }} />}
               <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mt: 2, alignItems: { sm: "center" } }}>
                 <Button variant="contained" onClick={() => void flashSafe()} disabled={Boolean(busy) || activeStep !== 1} sx={actionButtonSx}>{mode === "virtual" ? "Skip flash · load virtual HEX" : "Flash safe firmware"}</Button>
@@ -524,8 +728,8 @@ export default function BenchPage(): ReactElement {
         {activeStep >= 2 && (
           <Card>
             <CardContent>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 2 · Rail checkpoint</Typography>
-              <Typography color="text.secondary" sx={{ mt: 0.5 }}>The board must print a matching hello banner and a normal VCC reading before any output is driven.</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 2 · Check the power</Typography>
+              <Typography color="text.secondary" sx={{ mt: 0.5 }}>The board should say hello and show a healthy power reading before anything is switched on.</Typography>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
                 <Chip label={runnerState?.seenHello ? `Banner: ${runnerState.seenHello.design}` : "Waiting for hello banner"} color={runnerState?.seenHello ? "success" : "default"} />
                 <Chip label={runnerState?.seenVcc ? `VCC ${runnerState.seenVcc.mv} mV` : "Waiting for VCC"} color={runnerState?.seenVcc ? "success" : "default"} />
@@ -542,8 +746,8 @@ export default function BenchPage(): ReactElement {
             <CardContent>
               <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ justifyContent: "space-between" }}>
                 <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 3 · Self-test</Typography>
-                  <Typography color="text.secondary" sx={{ mt: 0.5 }}>Read-only checks run first. LED pulses stay below 5 ms and 10% duty.</Typography>
+                  <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 3 · Test each part</Typography>
+                  <Typography color="text.secondary" sx={{ mt: 0.5 }}>We look first, then gently test each button, sensor, buzzer, and light.</Typography>
                 </Box>
                 <Chip label={`${runnerState?.lines.length ?? 0} telemetry lines`} color="info" variant="outlined" />
               </Stack>
@@ -553,7 +757,7 @@ export default function BenchPage(): ReactElement {
                     const prompt = promptFor(ask, loaded.plan);
                     const hint = mode === "virtual" ? virtualPromptHint(ask) : undefined;
                     return <Paper key={ask.id} sx={{ p: 2.5, border: "2px solid", borderColor: "secondary.main", background: "rgba(101,78,163,.15)" }}>
-                      <Typography variant="h6" sx={{ fontWeight: 700 }}>{prompt.title}</Typography>
+                      <Typography variant="h6" sx={{ fontWeight: 700 }}>{promptTitle(ask, loaded.plan, prompt.title)}</Typography>
                       <Typography color="text.secondary" sx={{ mb: 2 }}>{hint ? `${hint} Tap Done to continue.` : prompt.body}</Typography>
                       <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                         {prompt.choices.map((choice) => <Button key={choice.value} variant="contained" onClick={() => void answerAsk(ask.id, choice.value)} disabled={Boolean(busy)} sx={actionButtonSx}>{choice.label}</Button>)}
@@ -562,10 +766,17 @@ export default function BenchPage(): ReactElement {
                   })}
                 </Stack>
               )}
+              {mode === "virtual" && (
+                <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }}>
+                  <Typography variant="subtitle2">Virtual board — watch the lights here</Typography>
+                  <Box sx={{ mt: 1, maxHeight: 360, overflow: "auto", "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3 } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
+                </Paper>
+              )}
+              {remoteAnswer && <Alert severity="info" sx={{ mt: 2 }}>Answered from iMessage by {remoteAnswer.by}: {remoteAnswer.value}</Alert>}
               {runnerState?.done && <Alert severity="info" sx={{ mt: 2 }}>All device tests finished. Preparing the Houston diagnosis…</Alert>}
               <Divider sx={{ my: 2 }} />
               <Typography variant="subtitle2">Live line log</Typography>
-              <Box component="pre" aria-live="polite" sx={{ maxHeight: 220, overflow: "auto", p: 1.5, mt: 1, borderRadius: 1, bgcolor: "#0b1322", color: "#a9c8f2", fontFamily: "monospace", fontSize: 12, whiteSpace: "pre-wrap" }}>{allLines.length > 0 ? allLines.join("\n") : "Waiting for NDJSON…"}</Box>
+              <Box component="pre" ref={logRef} onScroll={(event) => { const element = event.currentTarget; setLogPinned(element.scrollHeight - element.scrollTop - element.clientHeight < 32); }} aria-live="polite" sx={{ maxHeight: 220, overflow: "auto", p: 1.5, mt: 1, borderRadius: 1, bgcolor: "#0b1322", color: "#a9c8f2", fontFamily: "monospace", fontSize: 12, whiteSpace: "pre-wrap" }}>{allLines.length > 0 ? allLines.join("\n") : "Waiting for NDJSON…"}</Box>
             </CardContent>
           </Card>
         )}
@@ -575,7 +786,7 @@ export default function BenchPage(): ReactElement {
             <CardContent>
               <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ justifyContent: "space-between", alignItems: { md: "center" } }}>
                 <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 4 · Diagnose</Typography>
+                  <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 4 · Find the problem</Typography>
                   <Typography variant="h6" sx={{ mt: 1, color: run.verdict === "pass" ? "success.main" : "warning.main" }}>{run.verdict === "pass" ? "Houston, we are GO." : run.diagnosis.summary}</Typography>
                   <Typography color="text.secondary" sx={{ mt: 0.5 }}>Attribution: {run.diagnosis.attribution}. Candidates are ranked from the telemetry and the revision netlist.</Typography>
                 </Box>
@@ -583,8 +794,8 @@ export default function BenchPage(): ReactElement {
               </Stack>
               <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mt: 2 }}>
                 <Box sx={{ flex: 1 }}>
-                  {run.diagnosis.candidates.length === 0 ? <Alert severity={run.verdict === "pass" ? "success" : "warning"}>{run.verdict === "pass" ? "No wiring fault found. The self-test agrees with the released design." : "No single wiring cause was identified. Check the highlighted area, then rerun the self-test."}</Alert> : <Stack spacing={1}>{run.diagnosis.candidates.map((candidate, index) => <Button key={candidate.cause} variant={selectedCandidate === index ? "contained" : "outlined"} onClick={() => setSelectedCandidate(index)} sx={{ ...actionButtonSx, justifyContent: "space-between", textAlign: "left" }}><span>{index + 1}. {candidate.title}</span><span>{Math.round(candidate.likelihood * 100)}%</span></Button>)}</Stack>}
-                  {topCandidate && <Paper variant="outlined" sx={{ p: 2, mt: 2 }}><Typography sx={{ fontWeight: 700 }}>Recommended fix</Typography><Typography color="text.secondary">{topCandidate.fix}</Typography></Paper>}
+                  {run.verdict === "pass" ? <Alert severity="success">No wiring fault found. The self-test agrees with the released design.</Alert> : run.diagnosis.candidates.length === 0 ? <Alert severity="warning">No single wiring cause was identified. Check the highlighted area, then rerun the self-test.</Alert> : <Stack spacing={1}>{run.diagnosis.candidates.map((candidate, index) => <Button key={candidate.cause} variant={selectedCandidate === index ? "contained" : "outlined"} onClick={() => setSelectedCandidate(index)} sx={{ ...actionButtonSx, justifyContent: "space-between", textAlign: "left" }}><span>{index + 1}. {candidate.title}</span><span>{Math.round(candidate.likelihood * 100)}%</span></Button>)}</Stack>}
+                  {run.verdict !== "pass" && (indistinguishable ? <Stack spacing={1} sx={{ mt: 2 }}>{run.diagnosis.candidates.slice(0, 2).map((candidate) => <Paper key={candidate.cause} variant="outlined" sx={{ p: 2 }}><Typography sx={{ fontWeight: 700 }}>{candidate.title}</Typography><Typography color="text.secondary">{candidate.fix}</Typography></Paper>)}</Stack> : topCandidate ? <Paper variant="outlined" sx={{ p: 2, mt: 2 }}><Typography sx={{ fontWeight: 700 }}>Recommended fix</Typography><Typography color="text.secondary">{topCandidate.fix}</Typography></Paper> : null)}
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography variant="subtitle2" sx={{ mb: 1 }}>Highlighted breadboard artifact</Typography>
@@ -592,7 +803,7 @@ export default function BenchPage(): ReactElement {
                 </Box>
               </Stack>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
-                <Button variant="outlined" onClick={() => { setRun(undefined); setActiveStep(3); }} sx={actionButtonSx}>{run.verdict === "pass" ? "Run the self-test again" : "Fix wiring and rerun"}</Button>
+                <Button variant="outlined" onClick={restartSelfTest} disabled={Boolean(busy)} sx={actionButtonSx}>{run.verdict === "pass" ? "Run the self-test again" : "Fix wiring and rerun"}</Button>
                 {run.verdict === "pass" && <Button variant="contained" onClick={() => void flashApp()} disabled={Boolean(busy)} sx={actionButtonSx}>{mode === "virtual" ? "Continue to celebration" : "Flash app firmware with calibration"}</Button>}
               </Stack>
             </CardContent>
@@ -603,6 +814,7 @@ export default function BenchPage(): ReactElement {
           <Paper sx={{ p: { xs: 3, md: 6 }, textAlign: "center", overflow: "hidden", position: "relative", "@keyframes vb-liftoff": { from: { transform: "translateY(20px)", opacity: 0 }, to: { transform: "translateY(0)", opacity: 1 } }, animation: reducedMotion ? "none" : "vb-liftoff .8s ease-out" }}>
             <Typography variant="h2" sx={{ fontWeight: 900 }}>Mission verified</Typography>
             <Typography variant="h6" color="text.secondary" sx={{ mt: 1 }}>The bench telemetry agrees with the design. ViBread is GO for launch.</Typography>
+            {mode === "virtual" && <><Typography variant="body2" sx={{ mt: 2 }}>Your project firmware is running on the virtual board.</Typography><Box sx={{ maxWidth: 720, mx: "auto", mt: 2, "& svg": { display: "block", width: "100%", height: "auto" } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} /></>}
             <Button component={Link} to={`/m/${missionId}`} variant="contained" sx={{ ...actionButtonSx, mt: 3 }}>Return to mission control</Button>
           </Paper>
         )}
@@ -610,9 +822,13 @@ export default function BenchPage(): ReactElement {
         {mode === "physical" && (
           <Alert severity="info" icon={false}>
             <Typography sx={{ fontWeight: 700 }}>Laptop fallback</Typography>
-            <Typography variant="body2">If this browser cannot use Web Serial, release the port and run the server-built HEX on the laptop:</Typography>
-            <Box component="code" sx={{ display: "block", mt: 1, fontFamily: "monospace", overflowX: "auto" }}>arduino-cli upload --input-file &lt;server-built-hex&gt;</Box>
-            <Typography variant="body2" sx={{ mt: 1 }}>This fallback is intentionally outside the browser; reconnect here afterward to read the NDJSON self-test.</Typography>
+            <Typography variant="body2">If this browser cannot use Web Serial, release the port and upload either server-built HEX on the laptop:</Typography>
+            <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 1 }}>
+              {benchArtifactUrl && <Button component="a" href={benchArtifactUrl} download="bench.hex" variant="outlined" sx={actionButtonSx}>Download bench.hex</Button>}
+              {appArtifactUrl && <Button component="a" href={appArtifactUrl} download="app.hex" variant="outlined" sx={actionButtonSx}>Download app.hex</Button>}
+            </Stack>
+            <Box component="code" sx={{ display: "block", mt: 1, fontFamily: "monospace", overflowX: "auto" }}>.toolchain/bin/arduino-cli upload --input-file &lt;file&gt; -p &lt;port&gt; -b {boardFqbn}</Box>
+            <Typography variant="body2" sx={{ mt: 1 }}>Reconnect here afterward to read the NDJSON self-test. The browser never grants a serial port to the agent.</Typography>
           </Alert>
         )}
       </Stack>

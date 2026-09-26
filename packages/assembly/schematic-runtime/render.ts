@@ -7,6 +7,7 @@ import {
   Net,
   NetLabel,
   Potentiometer,
+  SchematicText,
   type Port,
   PushButton,
   Resistor,
@@ -213,7 +214,7 @@ function makeBoard(circuit: Circuit): Chip {
   });
   return new Chip({
     name: "ARDUINO",
-    displayName: `ARDUINO ${boardDisplayName(circuit)}`,
+    displayName: " ",
     pinLabels,
     pinAttributes,
     schPinArrangement: boardArrangement(circuit, pins),
@@ -281,7 +282,9 @@ function partPositions(circuit: Circuit): Map<string, Point> {
     }).find((ref) => ref.part !== part.id && ref.part !== "board");
     const linkedY = linked ? positions.get(linked.part)?.y : undefined;
     const y = boardPin ? yByPin.get(boardPin) ?? linkedY ?? 0 : linkedY ?? 0;
-    positions.set(part.id, { x: linked && circuit.parts.find((candidate) => candidate.id === linked.part)?.module === "photoresistor" ? -7 : 7, y });
+    const isPhotoPartner = linked && circuit.parts.find((candidate) => candidate.id === linked.part)?.module === "photoresistor";
+    const adjustedY = isPhotoPartner ? y - 1.4 : y;
+    positions.set(part.id, { x: isPhotoPartner ? -7 : 7, y: adjustedY });
   }
   let fallback = 0;
   for (const part of circuit.parts) {
@@ -305,7 +308,7 @@ function makePart(part: Part, position: Point): SchematicPart {
       return new Potentiometer({ name: part.id, displayName: label, maxResistance: numericParam(part, "ohms", 10_000), pinVariant: "three_pin", schX: position.x, schY: position.y });
     case "buzzer-active":
     case "buzzer-passive":
-      return new Chip({ name: part.id, displayName: label, pinLabels: { 1: "P", 2: "N" }, pinAttributes: { P: { isPassive: true }, N: { isPassive: true } }, schPinArrangement: { leftSide: ["N"], rightSide: ["P"] }, schX: position.x, schY: position.y });
+      return new Chip({ name: part.id, displayName: " ", pinLabels: { 1: "P", 2: "N" }, pinAttributes: { P: { isPassive: true }, N: { isPassive: true } }, schPinArrangement: { leftSide: ["N"], rightSide: ["P"] }, schX: position.x, schY: position.y });
     case "generic": {
       const pins = part.pinout ?? [];
       const pinLabels: Record<number, string> = {};
@@ -343,9 +346,28 @@ function addNetConnections(
         const selector = selectors[index];
         const ref = net.pins[index];
         const part = ref?.part === "board" ? undefined : partsById.get(ref?.part ?? "");
+        if (ref?.part === "board" && net.kind === "ground") continue;
         if (part?.module === "led" && net.kind === "ground") {
           const position = positions.get(part.id);
           if (position) tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom", schX: position.x, schY: position.y - 2 }));
+          else tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom" }));
+          continue;
+        }
+        if ((part?.module === "resistor" || part?.module === "photoresistor") && net.kind === "ground") {
+          const position = positions.get(part.id);
+          if (position) tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom", schX: position.x, schY: position.y - 2 }));
+          else tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom" }));
+          continue;
+        }
+        if ((part?.module === "button" || part?.module === "buzzer-active" || part?.module === "buzzer-passive") && net.kind === "ground") {
+          const position = positions.get(part.id);
+          if (position) tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom", schX: position.x, schY: position.y - 2 }));
+          else tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom" }));
+          continue;
+        }
+        if (part?.module === "photoresistor" && net.kind === "power") {
+          const position = positions.get(part.id);
+          if (position) tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom", schX: position.x - 1.5, schY: position.y + 2 }));
           else tscircuitBoard.add(new NetLabel({ net: internalName, connectsTo: selector, anchorSide: "bottom" }));
           continue;
         }
@@ -382,18 +404,39 @@ function addSyntheticPowerLabels(circuit: Circuit, board: SchematicPart, tscircu
   }
 }
 
-function hidePhotoresistorValue(elements: AnyCircuitElement[], partId: string): AnyCircuitElement[] {
-  const sourceComponent = elements.find((element) => element.type === "source_component" && element.name === partId);
-  const sourceId = sourceComponent?.type === "source_component" ? sourceComponent.source_component_id : undefined;
+function massageCircuitJson(elements: AnyCircuitElement[], photoPartId: string): AnyCircuitElement[] {
+  const photoSource = elements.find((element) => element.type === "source_component" && element.name === photoPartId);
+  const photoSourceId = photoSource?.type === "source_component" ? photoSource.source_component_id : undefined;
+  const ledSourceIds = new Set(
+    elements
+      .filter((element) => element.type === "source_component" && "ftype" in element && element.ftype === "simple_led")
+      .map((element) => element.type === "source_component" ? element.source_component_id : ""),
+  );
   return elements.map((element) => {
-    if (element.type === "source_component" && element.name === partId && "display_resistance" in element) {
+    if (element.type === "source_component" && element.name === photoPartId && "display_resistance" in element) {
       return { ...element, display_resistance: "light sensor" };
     }
-    if (element.type === "schematic_component" && sourceId && element.source_component_id === sourceId) {
+    if (element.type === "schematic_component" && photoSourceId && element.source_component_id === photoSourceId) {
       return { ...element, symbol_display_value: "light sensor" };
+    }
+    if (element.type === "schematic_component" && element.source_component_id && ledSourceIds.has(element.source_component_id)) {
+      return { ...element, symbol_display_value: "" };
     }
     return element;
   });
+}
+function addManualLabels(circuit: Circuit, positions: Map<string, Point>, board: Board): void {
+  board.add(new SchematicText({ text: `ARDUINO ${boardDisplayName(circuit)}`, schX: 0, schY: 2.5, fontSize: 0.32, color: "#a7f3d0" }));
+  for (const part of circuit.parts) {
+    const position = positions.get(part.id);
+    if (!position) continue;
+    if (part.module === "led") {
+      const color = isLedColor(part.params.color) ? part.params.color : "LED";
+      board.add(new SchematicText({ text: color, schX: position.x, schY: position.y - 1.2, fontSize: 0.32, color: "#fde68a" }));
+    } else if (part.module === "buzzer-active" || part.module === "buzzer-passive") {
+      board.add(new SchematicText({ text: part.id, schX: position.x, schY: position.y + 1.5, fontSize: 0.32, color: "#f8fafc" }));
+    }
+  }
 }
 
 function postProcessSvg(svg: string): string {
@@ -417,10 +460,10 @@ function cropSvg(svg: string): string {
   if (values.length < 4) return svg;
   const xValues = values.filter((_, index) => index % 2 === 0);
   const yValues = values.filter((_, index) => index % 2 === 1);
-  const minX = Math.max(0, Math.min(...xValues) - 28);
-  const minY = Math.max(0, Math.min(...yValues) - 28);
-  const maxX = Math.min(SVG_WIDTH, Math.max(...xValues) + 28);
-  const maxY = Math.min(SVG_HEIGHT, Math.max(...yValues) + 28);
+  const minX = Math.min(...xValues) - 52;
+  const minY = Math.min(...yValues) - 52;
+  const maxX = Math.max(...xValues) + 52;
+  const maxY = Math.max(...yValues) + 52;
   const viewBox = `${minX} ${minY} ${Math.max(1, maxX - minX)} ${Math.max(1, maxY - minY)}`;
   const withViewBox = svg.replace(/<svg ([^>]+)>/, `<svg $1 viewBox="${viewBox}">`);
   const croppedHeight = Math.max(1, Math.round((maxY - minY) * SVG_WIDTH / Math.max(1, maxX - minX)));
@@ -442,10 +485,11 @@ async function renderCircuit(circuit: Circuit): Promise<string> {
     components.set(part.id, component);
     partsById.set(part.id, part);
   }
+  addManualLabels(circuit, positions, tscircuitBoard);
   addNetConnections(circuit, board, components, partsById, tscircuitBoard, positions);
   addSyntheticPowerLabels(circuit, board, tscircuitBoard);
   tscircuit.add(tscircuitBoard);
-  const circuitJson = hidePhotoresistorValue(tscircuit.getCircuitJson(), "LDR1");
+  const circuitJson = massageCircuitJson(tscircuit.getCircuitJson(), "LDR1");
   const svg = convertCircuitJsonToSchematicSvg(circuitJson, { width: SVG_WIDTH, height: SVG_HEIGHT, includeVersion: true, colorOverrides: { schematic: SCHEMATIC_COLORS }, css: "text { font-size: 24px !important; }" });
   return cropSvg(postProcessSvg(svg));
 }

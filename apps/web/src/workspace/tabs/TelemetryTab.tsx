@@ -60,7 +60,7 @@ function RunCard({ run }: { run: BenchRunResult }) {
           <strong>{ATTRIBUTION[run.diagnosis.attribution]}.</strong> {run.diagnosis.summary}
         </Alert>
       )}
-      {run.diagnosis.candidates.length > 0 && (
+      {run.verdict !== "pass" && run.diagnosis.candidates.length > 0 && (
         <Box sx={{ mb: 1 }}>
           <Typography variant="overline" sx={{ color: "text.secondary" }}>
             Most likely causes
@@ -94,7 +94,7 @@ function RunCard({ run }: { run: BenchRunResult }) {
       </List>
       {run.calibration.length > 0 && (
         <Typography variant="body2" sx={{ mt: 1, color: "text.secondary" }}>
-          Light sensor calibrated: {run.calibration.map((c) => `${c.part} switches at ${c.threshold} (room ${c.ambient}, covered ${c.covered})`).join("; ")}
+          Light sensor calibrated: {run.calibration.map((c) => `${c.part} switches at ${Math.round(c.threshold)} (room ${Math.round(c.ambient)}, covered ${Math.round(c.covered)}, on a 0–1023 scale)`).join("; ")}
         </Typography>
       )}
     </Paper>

@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   integer,
   primaryKey,
@@ -71,7 +72,9 @@ export const approvals = sqliteTable(
     consumedAt: timestamp("consumedAt"),
   },
   (table) => ({
-    actionIdx: uniqueIndex("approvals_mission_revision_action_uidx").on(table.missionId, table.revisionHash, table.actionHash),
+    actionIdx: uniqueIndex("approvals_mission_revision_action_uidx")
+      .on(table.missionId, table.revisionHash, table.actionHash)
+      .where(sql`"status" = 'pending'`),
   }),
 );
 export const approvalGrants = sqliteTable(
@@ -137,6 +140,14 @@ export const imessageLinks = sqliteTable("imessage_links", {
   expiresAt: timestamp("expiresAt").notNull(),
   redeemedAt: timestamp("redeemedAt"),
 });
+export const capcomSpaces = sqliteTable("capcom_spaces", {
+  spaceId: text("spaceId").primaryKey(),
+  handle: text("handle").notNull(),
+  userId: text("userId").notNull(),
+  missionId: text("missionId"),
+  updatedAt: timestamp("updatedAt").notNull(),
+});
+
 
 /** PLAN item 16: a ViBread user's connected Claude account (credential lives in the oh-my-pi auth broker's own store). */
 export const claudeAccounts = sqliteTable("claude_accounts", {
@@ -338,7 +349,7 @@ export const dbSchema = {
   events,
   apiTokens,
   imessageLinks,
-  claudeAccounts,
+  capcomSpaces,
   user,
   session,
   account,
