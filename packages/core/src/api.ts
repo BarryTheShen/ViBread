@@ -76,7 +76,12 @@ export interface ModuleSummary {
 
 export interface CreateMissionRequest {
   brief: string;
-  inventory: InventoryItem[];
+  /**
+   * Explicit parts (older clients, MCP/A2A callers). When omitted, the server copies the owner's ready inventory
+   * entries into the mission (all of them, or only `inventoryEntryIds`) through each part type's mapping.
+   */
+  inventory?: InventoryItem[];
+  inventoryEntryIds?: string[];
   mode?: PermissionMode;
   title?: string;
 }

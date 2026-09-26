@@ -1,7 +1,7 @@
 import type { Circuit } from "./circuit.js";
 import type { ConsoleReport } from "./consoles.js";
 import type { Layout } from "./layout.js";
-import type { ModuleKey } from "./modules.js";
+import type { ModuleKey, ModulePin } from "./modules.js";
 import type { BenchRunResult, CompileResult, PhotoCheckResult, SimRunResult } from "./results.js";
 import type { TestSuite } from "./scenario.js";
 import type { SelfTestPlan } from "./selftest.js";
@@ -36,6 +36,10 @@ export interface InventoryItem {
   count: number;
   params?: Record<string, unknown>;
   note?: string;
+  /** The user's name for the part when it isn't the module's own ("Thermistor (modelled as light sensor)"). */
+  label?: string;
+  /** Generic parts copied from a user part type: the pins the design must use. */
+  pinout?: ModulePin[];
 }
 
 export interface Mission {
@@ -46,6 +50,8 @@ export interface Mission {
   mode: PermissionMode;
   phase: MissionPhase;
   inventory: InventoryItem[];
+  /** Parts the owner has that ViBread can't design with (list-only types), passed to the design agent as text. */
+  inventoryNotes?: string[];
   /** Latest revision number (1-based), if any. */
   currentRevision?: number;
   /** Revision released as the build target (Go/No-Go passed and approved). */

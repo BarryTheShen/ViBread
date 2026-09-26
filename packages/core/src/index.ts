@@ -1,5 +1,6 @@
 export * from "./api.js";
 export * from "./boards.js";
+export * from "./catalog.js";
 export * from "./breadboards.js";
 export * from "./circuit.js";
 export * from "./consoles.js";
