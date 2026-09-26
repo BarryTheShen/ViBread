@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import http from "node:http";
 import express, { type ErrorRequestHandler, type Express, type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import rateLimit from "express-rate-limit";
@@ -189,19 +188,3 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   return { app, server, context, close };
 }
 
-// Run directly (`tsx src/main.ts`); compared as URLs so Windows paths and paths with spaces match too.
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  const config = loadConfig();
-  const running = await startServer(config);
-  const fatal = (error: unknown, message: string): void => {
-    running.context.ctx.debug.event(null, "error", message, { error: error instanceof Error ? error.stack ?? error.message : String(error) }, "error");
-    void running.close().finally(() => process.exit(1));
-  };
-  process.once("unhandledRejection", (error) => fatal(error, "unhandledRejection"));
-  process.once("uncaughtException", (error) => fatal(error, "uncaughtException"));
-  const shutdown = (): void => {
-    void running.close().finally(() => process.exit(0));
-  };
-  process.once("SIGINT", shutdown);
-  process.once("SIGTERM", shutdown);
-}

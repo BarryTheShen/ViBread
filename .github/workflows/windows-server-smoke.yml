@@ -3,10 +3,14 @@ name: Windows server smoke
 on:
   push:
     branches: [main]
+    # Only what the Claude connect flow and server start-up depend on, so unrelated pushes don't re-run it.
     paths:
-      - "apps/server/**"
-      - "packages/**"
-      - "package-lock.json"
+      - "apps/server/src/claude/**"
+      - "apps/server/src/start.ts"
+      - "apps/server/src/main.ts"
+      - "apps/server/src/config.ts"
+      - "apps/server/package.json"
+      - "scripts/ci/claude-connect-smoke.mjs"
       - ".github/workflows/windows-server-smoke.yml"
   workflow_dispatch:
 
@@ -85,7 +89,7 @@ jobs:
             }
             if (-not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) {
               Write-Host "Server process exited before becoming ready."
-              foreach ($log in @($stdout, $stderr)) {
+              foreach ($log in @($stdout, $stderr, (Join-Path $env:DATA_DIR "logs\server.jsonl"))) {
                 if (Test-Path $log) {
                   Write-Host "--- $log ---"
                   Get-Content -Path $log -Tail 100
@@ -95,7 +99,7 @@ jobs:
             }
             Start-Sleep -Seconds 1
           }
-          foreach ($log in @($stdout, $stderr)) {
+          foreach ($log in @($stdout, $stderr, (Join-Path $env:DATA_DIR "logs\server.jsonl"))) {
             if (Test-Path $log) {
               Write-Host "--- $log ---"
               Get-Content -Path $log -Tail 100
@@ -116,7 +120,8 @@ jobs:
         run: |
           foreach ($log in @(
             (Join-Path $env:RUNNER_TEMP "vibread-server.stdout.log"),
-            (Join-Path $env:RUNNER_TEMP "vibread-server.stderr.log")
+            (Join-Path $env:RUNNER_TEMP "vibread-server.stderr.log"),
+            (Join-Path $env:DATA_DIR "logs\server.jsonl")
           )) {
             if (Test-Path $log) {
               Write-Host "--- $log (tail) ---"

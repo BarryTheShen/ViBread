@@ -4,8 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch --env-file-if-exists=../../.env src/main.ts",
-    "start": "tsx --env-file-if-exists=../../.env src/main.ts",
+    "dev": "tsx watch --env-file-if-exists=../../.env src/start.ts",
+    "start": "tsx --env-file-if-exists=../../.env src/start.ts",
     "db:generate": "drizzle-kit generate"
   },
   "dependencies": {

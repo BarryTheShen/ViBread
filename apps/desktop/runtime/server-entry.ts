@@ -1,6 +1,6 @@
 // Server entry used by the desktop app (staged as resources/runtime/server-entry.ts, run with the bundled Node + tsx).
-// apps/server/src/main.ts self-starts only when argv[1] equals its own file:// URL, which never holds on Windows (drive
-// letters, backslashes) or for install paths that need URL escaping, so this entry calls startServer() explicitly.
+// apps/server/src/main.ts only exports startServer (npm start uses apps/server/src/start.ts); this entry calls it and adds
+// the desktop protocol (a ready line with the port, shutdown on stdin close).
 // The desktop app keeps stdin open; when it closes (app quit or crash) the server shuts down and its exit hooks stop the
 // schematic/PNG workers, so no orphan processes outlive the app on any OS.
 import type { AddressInfo } from "node:net";
