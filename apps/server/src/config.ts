@@ -16,6 +16,8 @@ export interface ServerConfig {
   github?: { clientId: string; clientSecret: string };
   authSecret: string;
   anthropicApiKey?: string;
+  /** Anthropic Messages API base (AI SDK convention, ends in /v1): ANTHROPIC_BASE_URL, e.g. a proxy or a local bridge. */
+  anthropicBaseUrl: string;
   model: string;
   fastModel: string;
   approvalSecret: string;
@@ -51,6 +53,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     github,
     authSecret: env.BETTER_AUTH_SECRET?.trim() || readOrCreateSecret(dataDir, "better-auth-secret"),
     anthropicApiKey: env.ANTHROPIC_API_KEY?.trim() || undefined,
+    anthropicBaseUrl: trimUrl(env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com/v1"),
     model: env.VIBREAD_MODEL?.trim() || "claude-opus-5-5",
     fastModel: env.VIBREAD_FAST_MODEL?.trim() || "claude-sonnet-5",
     approvalSecret: env.VIBREAD_APPROVAL_SECRET?.trim() || readOrCreateSecret(dataDir, "approval-secret"),

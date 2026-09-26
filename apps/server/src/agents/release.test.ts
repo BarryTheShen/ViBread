@@ -4,7 +4,7 @@ import type { Pipeline } from "@vibread/tools";
 import { describe, expect, it } from "vitest";
 import { createAgentRuntime } from "./index.js";
 import { anthropicModels, type AgentModels } from "./models.js";
-import { jsonModel, mockModels, scriptedModel, testDeps } from "./testing.js";
+import { jsonModel, mockModels, scriptedDesign, testDeps } from "./testing.js";
 
 const golden = GOLDEN.find((g) => g.key === "moon-phase-lamp")!;
 const FLIGHT: Actor = { kind: "human", id: "operator", name: "Operator", channel: "web" };
@@ -34,7 +34,7 @@ async function setup(input: { models?: AgentModels; fao?: Verdict; vote?: object
   const pipeline = fixedPipeline(deps.store, input.fao);
   // The fast model answers as RETRO or as the independent test author, depending on the system prompt.
   const fast = jsonModel((call) => (JSON.stringify(call.prompt).includes("You are RETRO") ? (input.vote ?? GO_VOTE) : golden.suite));
-  const models = input.models ?? mockModels(scriptedModel([]), fast);
+  const models = input.models ?? mockModels(scriptedDesign([]), fast);
   const runtime = createAgentRuntime({ ...deps, models, pipeline });
   const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: FLIGHT });
   // A pre-warmed revision (like scripts/seed-golden.ts): pipeline only, no RETRO vote yet.

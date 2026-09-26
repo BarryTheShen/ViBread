@@ -1,9 +1,11 @@
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { AssistantMessageEventStream, Message, Usage } from "@earendil-works/pi-ai";
 import type { LanguageModelV4CallOptions, LanguageModelV4Content, LanguageModelV4FinishReason, LanguageModelV4Middleware, LanguageModelV4StreamPart, LanguageModelV4Usage } from "@ai-sdk/provider";
 import type { Actor } from "@vibread/core";
 import { errorMessage, type ToolTraceEvent } from "@vibread/tools";
 import { wrapLanguageModel } from "ai";
 import type { DebugLog } from "../services/debug-log.js";
-import type { AgentModels, ModelCredential, ModelTrace } from "./models.js";
+import type { AgentModels, DesignModel, ModelCredential, ModelTrace } from "./models.js";
 
 /**
  * Agent-run tracing into the server's per-mission debug log (`ctx.debug`, services/debug-log.ts). Kept at the model /
@@ -126,20 +128,90 @@ function modelMiddleware(debug: DebugLog, trace: ModelTrace, modelId: string, cr
   };
 }
 
-/** Every model call made through these models is traced to `debug` under the caller's mission and purpose. */
-export function tracedModels(models: AgentModels, debug: DebugLog): AgentModels {
-  const wrap = (role: "design" | "fast") => async (ownerId: string, trace: ModelTrace) => {
+/** pi usage → log keys (never "token", which the debug log's secret filter redacts). */
+function piUsageForLog(usage: Usage): Record<string, number> {
+  return {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    ...(usage.reasoning !== undefined ? { reasoning: usage.reasoning } : {}),
+    ...(usage.cost.total ? { costUsd: usage.cost.total } : {}),
+  };
+}
+
+/** A pi request transcript for VIBREAD_DEBUG=1 logs: photos by size, never bytes. */
+function transcriptForLog(messages: Message[]): unknown {
+  return messages.map((message) =>
+    typeof message.content === "string" || message.role === "assistant"
+      ? message
+      : { ...message, content: message.content.map((part) => (part.type === "image" ? { type: "image", mimeType: part.mimeType, bytes: Math.floor((part.data.length * 3) / 4) } : part)) },
+  );
+}
+
+/** Every design-agent turn (one pi model request) → the debug log: model, stop reason, usage, duration, errors. */
+function tracedStreamFn(debug: DebugLog, trace: ModelTrace, resolved: DesignModel): StreamFn {
+  const base = { purpose: trace.purpose, model: resolved.modelId, credential: resolved.credential.kind, harness: "pi" };
+  return async (model, context, options) => {
+    const started = Date.now();
+    let stream: AssistantMessageEventStream;
     try {
-      const resolved = await models[role](ownerId, trace);
-      // The AI SDK accepts a model id string too; only provider models (the only kind models.ts builds) can be wrapped.
-      if (typeof resolved.model === "string") return resolved;
-      return { ...resolved, model: wrapLanguageModel({ model: resolved.model, middleware: modelMiddleware(debug, trace, resolved.modelId, resolved.credential) }) };
+      stream = await resolved.streamFn(model, context, options);
     } catch (error) {
-      debug.event(trace.missionId, "model", `${trace.purpose}: no model available`, { purpose: trace.purpose, role, error: errorMessage(error) }, "warn");
+      debug.event(trace.missionId, "model", `${trace.purpose}: ${resolved.modelId} failed`, { ...base, ms: Date.now() - started, error: errorMessage(error) }, "error");
       throw error;
     }
+    void stream.result().then((message) => {
+      const toolCalls = message.content.flatMap((part) => (part.type === "toolCall" ? [part.name] : []));
+      const failed = message.stopReason === "error";
+      debug.event(
+        trace.missionId,
+        "model",
+        `${trace.purpose}: ${resolved.modelId} ${failed ? "failed" : message.stopReason}`,
+        {
+          ...base,
+          stream: true,
+          ms: Date.now() - started,
+          stop: message.stopReason,
+          ...(message.rawStopReason ? { stopRaw: message.rawStopReason } : {}),
+          usage: piUsageForLog(message.usage),
+          ...(toolCalls.length ? { toolCalls } : {}),
+          ...(message.errorMessage ? { error: message.errorMessage } : {}),
+          ...(traceVerbose() ? { prompt: transcriptForLog(context.messages), output: message.content } : {}),
+        },
+        failed ? "error" : message.stopReason === "aborted" ? "warn" : "info",
+      );
+    });
+    return stream;
   };
-  return { design: wrap("design"), fast: wrap("fast") };
+}
+
+/** Every model call made through these models is traced to `debug` under the caller's mission and purpose. */
+export function tracedModels(models: AgentModels, debug: DebugLog): AgentModels {
+  const unavailable = (trace: ModelTrace, role: "design" | "fast", error: unknown) =>
+    debug.event(trace.missionId, "model", `${trace.purpose}: no model available`, { purpose: trace.purpose, role, error: errorMessage(error) }, "warn");
+  return {
+    async design(ownerId, trace) {
+      try {
+        const resolved = await models.design(ownerId, trace);
+        return { ...resolved, streamFn: tracedStreamFn(debug, trace, resolved) };
+      } catch (error) {
+        unavailable(trace, "design", error);
+        throw error;
+      }
+    },
+    async fast(ownerId, trace) {
+      try {
+        const resolved = await models.fast(ownerId, trace);
+        // The AI SDK accepts a model id string too; only provider models (the only kind models.ts builds) can be wrapped.
+        if (typeof resolved.model === "string") return resolved;
+        return { ...resolved, model: wrapLanguageModel({ model: resolved.model, middleware: modelMiddleware(debug, trace, resolved.modelId, resolved.credential) }) };
+      } catch (error) {
+        unavailable(trace, "fast", error);
+        throw error;
+      }
+    },
+  };
 }
 
 /** Tool calls (agent, MCP, A2A, CAPCOM all run through the registry) → the mission's debug log. */

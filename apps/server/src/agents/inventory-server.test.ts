@@ -40,7 +40,7 @@ async function claudeStub(): Promise<{ baseURL: string; seen: Seen[]; server: Se
     req.on("end", () => {
       const body = JSON.parse(raw || "{}") as { stream?: boolean; model?: string; system?: { text: string }[] | string };
       const system = typeof body.system === "string" ? body.system : (body.system ?? []).map((s) => s.text).join("\n");
-      seen.push({ path: req.url ?? "", system, stream: Boolean(body.stream) });
+      seen.push({ path: new URL(req.url ?? "", "http://stub").pathname, system, stream: Boolean(body.stream) });
       const usage = { input_tokens: 3, output_tokens: 4 };
       const text = system.includes("You identify electronics parts") ? JSON.stringify(SCAN_GROUPS) : "Got it — what should the light do when it's bright?";
       if (body.stream) {

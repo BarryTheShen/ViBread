@@ -4,6 +4,7 @@ import { pipeUIMessageStreamToResponse, type UIMessage } from "ai";
 import type { Express, Request, Response } from "express";
 import type { Logger } from "pino";
 import type { MessageStore } from "../store/messages.js";
+import { imageOf } from "./pi-ui.js";
 import { mountRecorded } from "./recorded.js";
 import type { RunManager } from "./runs.js";
 
@@ -19,14 +20,17 @@ function statusOf(error: unknown): { status: number; code: string } {
   };
 }
 
-/** Only a new user message with text/file parts is accepted: history (assistant and tool parts) is server-held. */
+/**
+ * Only a new user message with text and photo (`data:image/…;base64,…`) parts is accepted: history (assistant and tool
+ * parts) is server-held.
+ */
 function userMessage(body: unknown, actor: Actor): UIMessage | null {
   const message = (body as { message?: unknown } | undefined)?.message as Partial<UIMessage> | undefined;
   if (!message || message.role !== "user" || !Array.isArray(message.parts) || !message.parts.length) return null;
   const parts: UIMessage["parts"] = [];
   for (const part of message.parts) {
     if (part.type === "text" && typeof part.text === "string" && part.text.trim()) parts.push({ type: "text", text: part.text });
-    else if (part.type === "file" && typeof part.url === "string" && typeof part.mediaType === "string") {
+    else if (part.type === "file" && typeof part.url === "string" && typeof part.mediaType === "string" && imageOf(part.url)) {
       parts.push({ type: "file", url: part.url, mediaType: part.mediaType, ...(part.filename ? { filename: part.filename } : {}) });
     } else return null;
   }

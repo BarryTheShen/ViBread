@@ -16,9 +16,11 @@ import {
   type Revision,
   type TimelineEvent,
 } from "@vibread/core";
-import type { LanguageModelV4, LanguageModelV4CallOptions, LanguageModelV4StreamPart } from "@ai-sdk/provider";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { createModels, fauxAssistantMessage, fauxProvider, fauxText, fauxToolCall, type Api, type FauxResponseFactory, type JsonObject, type Model, type TranscriptContext } from "@earendil-works/pi-ai";
+import type { LanguageModelV4, LanguageModelV4CallOptions } from "@ai-sdk/provider";
 import type { UIMessage } from "ai";
-import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
+import { MockLanguageModelV4 } from "ai/test";
 import pino from "pino";
 import type { ClaudeAccountService, ClaudeEndpoint } from "../claude/accounts.js";
 import { loadConfig } from "../config.js";
@@ -26,8 +28,8 @@ import type { AgentDeps, InventoryReader, MissionEvent, MissionMachine } from ".
 import type { AgentModels } from "./models.js";
 
 /**
- * SQLite-free implementations of the server contracts plus AI SDK mock models, for agent tests and the scratch server
- * (apps/server/src/agents/scratch-server.ts). Semantics mirror ServerCore's SQL store and broker.
+ * SQLite-free implementations of the server contracts plus scripted models, for agent tests. Semantics mirror
+ * ServerCore's SQL store and broker.
  */
 export function memoryStore(): MissionStore {
   const listeners = new Set<(event: TimelineEvent) => void>();
@@ -219,50 +221,46 @@ export function recordingMachine(store: MissionStore): RecordingMachine {
   };
 }
 
-// ---------- scripted AI SDK mock models ----------
+// ---------- scripted models: the design agent on pi's faux provider, single-shot calls on AI SDK mocks ----------
 
 const USAGE = {
   inputTokens: { total: 10, noCache: 10, cacheRead: undefined, cacheWrite: undefined },
   outputTokens: { total: 10, text: 10, reasoning: undefined },
 };
 
-/** One model step: text and/or tool calls. */
-export type ScriptStep = { text?: string; toolCalls?: { name: string; input: unknown; id?: string }[] };
+/** One design-agent turn: text and/or tool calls. */
+export type ScriptStep = { text?: string; toolCalls?: { name: string; input: Record<string, unknown>; id?: string }[] };
 
-/** Stream parts for one scripted step (what Claude would stream through @ai-sdk/anthropic). */
-export function streamParts(step: ScriptStep): LanguageModelV4StreamPart[] {
-  const parts: LanguageModelV4StreamPart[] = [{ type: "stream-start", warnings: [] }];
-  if (step.text) {
-    parts.push({ type: "text-start", id: "t1" }, { type: "text-delta", id: "t1", delta: step.text }, { type: "text-end", id: "t1" });
-  }
-  for (const call of step.toolCalls ?? []) {
-    const id = call.id ?? `call-${randomUUID().slice(0, 8)}`;
-    const input = JSON.stringify(call.input);
-    parts.push(
-      { type: "tool-input-start", id, toolName: call.name },
-      { type: "tool-input-delta", id, delta: input },
-      { type: "tool-input-end", id },
-      { type: "tool-call", toolCallId: id, toolName: call.name, input },
-    );
-  }
-  parts.push({ type: "finish", finishReason: { unified: step.toolCalls?.length ? "tool-calls" : "stop", raw: undefined }, usage: USAGE });
-  return parts;
+/** A scripted design agent: pi model + stream function for mockModels, and every request pi made (its transcript). */
+export interface ScriptedDesign {
+  model: Model<Api>;
+  streamFn: StreamFn;
+  requests: TranscriptContext[];
 }
 
+/** Turns a scripted design agent can take before the faux queue runs dry (more than MAX_STEPS per run). */
+const SCRIPT_CAPACITY = 64;
+
 /**
- * Design-agent mock: each doStream call takes the next scripted step (a function sees the call options, e.g. to react to
- * tool results). When the script runs out it answers with a short text.
+ * Design-agent mock on pi's faux provider: each model request takes the next scripted turn (a function sees the request
+ * transcript, e.g. to react to tool results). When the script runs out it answers with a short text.
  */
-export function scriptedModel(script: (ScriptStep | ((options: LanguageModelV4CallOptions) => ScriptStep))[]): MockLanguageModelV4 {
+export function scriptedDesign(script: (ScriptStep | ((context: TranscriptContext) => ScriptStep))[]): ScriptedDesign {
+  const faux = fauxProvider({ provider: "faux-design", models: [{ id: "mock-design", input: ["text", "image"] }] });
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const requests: TranscriptContext[] = [];
   let index = 0;
-  return new MockLanguageModelV4({
-    modelId: "mock-design",
-    doStream: async (options) => {
-      const entry = script[index++];
-      const step = typeof entry === "function" ? entry(options) : (entry ?? { text: "Done." });
-      return { stream: simulateReadableStream({ chunks: streamParts(step), chunkDelayInMs: 1 }) };
-    },
-  });
+  const next: FauxResponseFactory = (context) => {
+    requests.push(context);
+    const entry = script[index++];
+    const step = typeof entry === "function" ? entry(context) : (entry ?? { text: "Done." });
+    // Scripted inputs are JSON test fixtures (golden circuits etc.).
+    const calls = (step.toolCalls ?? []).map((call) => fauxToolCall(call.name, call.input as JsonObject, call.id ? { id: call.id } : undefined));
+    return fauxAssistantMessage([...(step.text ? [fauxText(step.text)] : []), ...calls], { stopReason: calls.length ? "toolUse" : "stop" });
+  };
+  faux.setResponses(Array.from({ length: SCRIPT_CAPACITY }, () => next));
+  return { model: faux.getModel(), streamFn: (model, context, options) => models.streamSimple(model, context, options), requests };
 }
 
 /** Structured-output mock: returns the next JSON value per doGenerate call (test author, RETRO, photo). */
@@ -277,9 +275,9 @@ export function jsonModel(values: unknown[] | ((options: LanguageModelV4CallOpti
   });
 }
 
-export function mockModels(design: LanguageModelV4, fast: LanguageModelV4): AgentModels {
+export function mockModels(design: ScriptedDesign, fast: LanguageModelV4): AgentModels {
   return {
-    design: async () => ({ model: design, modelId: "mock-design", credential: { kind: "server-key" } }),
+    design: async () => ({ model: design.model, streamFn: design.streamFn, modelId: "mock-design", credential: { kind: "server-key" } }),
     fast: async () => ({ model: fast, modelId: "mock-fast", credential: { kind: "server-key" } }),
   };
 }

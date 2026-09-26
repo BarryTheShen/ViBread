@@ -3,6 +3,7 @@ import { createServer, type IncomingHttpHeaders, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { GOLDEN } from "@vibread/fixtures";
 import type { Actor } from "@vibread/core";
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { generateText } from "ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentRuntime } from "./index.js";
@@ -31,7 +32,7 @@ async function gatewayStub(reply: string): Promise<{ baseURL: string; seen: Seen
     req.on("data", (chunk) => (raw += chunk));
     req.on("end", () => {
       const body = JSON.parse(raw || "{}") as Seen["body"];
-      seen.push({ path: req.url ?? "", headers: req.headers, body });
+      seen.push({ path: new URL(req.url ?? "", "http://stub").pathname, headers: req.headers, body });
       const usage = { input_tokens: 3, output_tokens: 4 };
       if (body.stream) {
         res.writeHead(200, { "content-type": "text/event-stream" });
@@ -74,8 +75,9 @@ describe("per-mission Claude credential", () => {
 
     const resolved = await models.design("operator", { missionId: null, purpose: "design" });
     expect(resolved.credential).toEqual({ kind: "claude-account", email: "flight@example.com" });
-    const { text } = await generateText({ model: resolved.model, prompt: "hi" });
-    expect(text).toBe("from your account");
+    const stream = await resolved.streamFn(resolved.model, normalizeContext({ messages: [{ role: "user", content: "hi", timestamp: Date.now() }] }));
+    const reply = await stream.result();
+    expect(reply.content).toEqual([{ type: "text", text: "from your account" }]);
     expect(gateway.seen).toHaveLength(1);
     expect(gateway.seen[0]!.path).toBe("/v1/messages");
     expect(gateway.seen[0]!.headers.authorization).toBe("Bearer gw-token");

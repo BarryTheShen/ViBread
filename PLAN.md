@@ -198,7 +198,7 @@ flowchart LR
     API["Express 5<br/>UI message stream (SSE) · REST · static web"]
     AUTH["Better Auth<br/>Google sign-in · sessions (OAuth AS in stretch)"]
     ORCH["Mission machine (XState)<br/>+ ApprovalBroker"]
-    AG["Agents (Vercel AI SDK)<br/>design · test author · RETRO · vision"]
+    AG["Agents (pi agent-core + Vercel AI SDK)<br/>design · test author · RETRO · vision"]
     TOOLS["Tool registry<br/>circuit · checks · firmware · sim · assembly · bench"]
     MCP["MCP server /mcp<br/>(MCP SDK 1.30.1, bearer)"]
     A2A["A2A server /a2a<br/>(@a2a-js/sdk, bearer)"]
@@ -230,7 +230,7 @@ flowchart LR
 - In iMessage, CAPCOM sends a plain URL only after the user's first reply (Photon deliverability guidance).
 - The browser owns the USB device; the server never touches the laptop's serial port.
 
-### 5.2 Agent harness — Vercel AI SDK over the Claude API (research/audit/A9, A1)
+### 5.2 Agent harness — pi (`@earendil-works/pi-agent-core`) over the Claude API (research/audit/A9, A1)
 
 - **Why not the Claude Agent SDK:** it runs the Claude Code binary, and Anthropic's terms for products that run Claude Code say
   the company "may not pay for, resell, or intermediate Claude usage on their end users' behalf" — each end user would need their
@@ -238,10 +238,12 @@ flowchart LR
   Customer makes available to its own customers and end users", billed to our account. So by default ViBread calls the Messages
   API with its own server-side key and users bring nothing. **Item 16, built last**, adds *Connect your Claude account* (§5.11):
   the agent code stays the same; only the credential each call uses changes.
-- **Library:** `ai` 7.0.116 + `@ai-sdk/anthropic` 4.0.65 (Apache-2.0). `streamText`/`ToolLoopAgent` with
-  `stopWhen: isStepCount(20)`; per-call `toolApproval` callbacks implement the permission modes (§5.10); output streams to the
-  browser with `pipeUIMessageStreamToResponse` on Express. The Claude-Code-style modes are our own implementation of the idea —
-  no Claude Code code is reused; only the Agent SDK *library* was replaced.
+- **Library:** the design agent runs on **pi** in-process: `@earendil-works/pi-agent-core` 0.87.1 (`Agent`, sequential tool
+  execution, `beforeToolCall` caps design attempts at 4 per turn, `finishTurn` ends the turn after `ask_user` or 20 model turns)
+  + `@earendil-works/pi-ai` 0.87.1 (Anthropic Messages provider built per run for the owner's credential). Each run rebuilds
+  the pi transcript from the server-held UI history (`agents/pi-ui.ts`) and translates pi events into AI SDK UI message chunks
+  (`createUIMessageStream` from `ai` 7.0.116), streamed with `pipeUIMessageStreamToResponse` on Express, so the web chat
+  contract is unchanged. The single-shot calls (test author, RETRO, photo check, scan) stay on `ai` + `@ai-sdk/anthropic` 4.0.65.
 - **Approvals are server-authored:** the chat history lives on the server (`messages` table). The browser sends only
   `{approvalId, decision}`; the ApprovalBroker validates it and writes the approval response into the stored history with the
   signature from `experimental_toolApprovalSecret` before the agent resumes. Spike 14 proves a signed approval resumes and executes
@@ -250,8 +252,8 @@ flowchart LR
   interface, never the sketch), *RETRO reviewer* (sees everything, can only vote and explain). Test author, RETRO, and photo
   checks are benchmarked on `claude-sonnet-5` at Checkpoint B to meet the latency budget.
 - **Tools are defined once** in `packages/tools` (zod schema + handler, tagged `read-only` or `state-changing`) and registered by
-  thin adapters as AI SDK tools for our agents and as MCP tools on `/mcp`. No internal MCP hop (avoids MCP protocol-version skew
-  between the AI SDK's MCP client and the server, research/audit/A9).
+  thin adapters as pi `AgentTool`s for the design agent (`agents/pi-tools.ts`: zod → JSON Schema, arguments validated by pi,
+  refusals returned to the model as tool errors) and as MCP tools on `/mcp`. No internal MCP hop.
 
 | Tool group | Tools (abridged) | Libraries behind it |
 |---|---|---|
