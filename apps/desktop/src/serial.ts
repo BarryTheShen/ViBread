@@ -62,11 +62,19 @@ export function installSerial(
     });
   });
 
-  // 'serial' and everything else the web app asks for (camera for photos, clipboard) is granted to the app origin only.
-  session.setPermissionCheckHandler((_webContents, _permission, requestingOrigin) => trusted(requestingOrigin));
+  // Keep the existing own-origin permissions (including serial), but never grant audio: parts scans only need video.
+  const allow = (permission: string, origin: string | undefined, mediaType?: string, mediaTypes?: readonly string[]) => {
+    if (!trusted(origin)) return false;
+    if (permission !== "media") return true;
+    if (mediaType !== undefined) return mediaType === "video";
+    return mediaTypes?.length === 1 && mediaTypes[0] === "video";
+  };
+  session.setPermissionCheckHandler((_webContents, permission, requestingOrigin, details) => allow(permission, requestingOrigin, details.mediaType));
   session.setDevicePermissionHandler((details) => details.deviceType === "serial" && trusted(details.origin));
-  session.setPermissionRequestHandler((webContents, _permission, callback, details) => {
-    callback(trusted(details.requestingUrl ?? webContents?.getURL()));
+  session.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const origin = ("securityOrigin" in details ? details.securityOrigin : undefined) ?? ("requestingUrl" in details ? details.requestingUrl : webContents.getURL());
+    const mediaTypes = "mediaTypes" in details ? details.mediaTypes : undefined;
+    callback(allow(permission, origin, undefined, mediaTypes));
   });
   return state;
 }

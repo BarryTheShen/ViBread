@@ -45,8 +45,10 @@ USB bench works the same on every OS). How it works inside: [HOW-IT-WORKS.md](HO
 | macOS (Apple silicon / Intel) | [`ViBread-0.1.0-mac-arm64.dmg`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-mac-arm64.dmg) / [`-mac-x64.dmg`](https://github.com/BarryTheShen/ViBread/releases/download/desktop-v0.1.0/ViBread-0.1.0-mac-x64.dmg) | Drag to Applications, open once, then **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine /Applications/ViBread.app`) |
 
 - **First launch** shows a setup window: it downloads the Arduino toolchain (arduino-cli 1.5.1 + AVR core 1.8.8 +
-  ArduinoJson 7.4.2, SHA-256 checked, ~150 MB) and builds the example missions — about 2–3 minutes, internet needed
-  once. Later launches start in ~10 s. The download is ~160–200 MB; installed size ~600 MB plus the toolchain.
+  ArduinoJson 7.4.2, SHA-256 checked, ~150 MB), then the official oh-my-pi `omp` 18.3.2 binary (SHA-256 checked
+  against its published `SHA256SUMS.txt`) into `<userData>/omp`, and builds the example missions. The Claude account
+  helper is optional: if its download fails, setup continues and **Set Anthropic API key…** remains available. Internet
+  is needed once; later launches start in ~10 s. The download is ~450–500 MB; installed size ~900 MB plus the toolchain.
 - **Chromium sandbox on Linux:** Ubuntu 23.10+ blocks unprivileged user namespaces (AppArmor), which Electron's
   sandbox normally uses. The `.deb` installs the setuid `chrome-sandbox` helper, so the sandbox keeps working there. The
   AppImage can't ship a setuid helper: its launcher tests `unshare -Ur true` and, when namespaces are blocked, starts
@@ -57,11 +59,13 @@ USB bench works the same on every OS). How it works inside: [HOW-IT-WORKS.md](HO
 - **Phones:** menu **ViBread → Show phone link / QR** (same Wi-Fi). Phones pair by scanning the QR code; other devices
   on the Wi-Fi can't open your ViBread. Allow ViBread through the firewall when your OS asks (Windows/macOS prompt on
   first phone connection; private networks only).
-- **AI agents:** menu **ViBread → Set Anthropic API key…**, or connect a Claude account in Settings. The key is
-  encrypted with the OS keychain (macOS Keychain, Windows DPAPI, GNOME Keyring/KWallet on Linux); on a Linux desktop
-  without a keyring it is stored obfuscated, not encrypted, in `settings.json` (readable only by your user), and the
-  key window says so. *Connect your Claude account* finds `omp` on your login-shell `PATH` (plus `~/.bun/bin`,
-  `~/.npm-global/bin`, `~/.local/bin`), or set `VIBREAD_OMP_BIN`.
+- **AI agents:** the primary route is **Settings → Connect your Claude account** (the desktop app provides the official
+  oh-my-pi `omp` helper). It runs `omp login anthropic` and keeps the grant in the app's private broker directory. The
+  secondary route is menu **ViBread → Set Anthropic API key…**; that key is encrypted with the OS keychain (macOS Keychain,
+  Windows DPAPI, GNOME Keyring/KWallet on Linux). On a Linux desktop without a keyring it is stored obfuscated, not
+  encrypted, in `settings.json` (readable only by your user), and the key window says so. If the download is unavailable,
+  an `omp` on your login-shell `PATH` (plus `~/.bun/bin`, `~/.npm-global/bin`, `~/.local/bin`) can still be used; an
+  explicit `VIBREAD_OMP_BIN` always overrides the downloaded helper.
 - **Your data** lives in `~/.config/ViBread` (Linux), `%APPDATA%\ViBread` (Windows), `~/Library/Application Support/ViBread`
   (macOS): `data/` (missions), `toolchain/`, `logs/server.log`, `logs/setup.log`. Menu: *Open data folder*, *Open logs*,
   *Reset example missions*.
@@ -162,13 +166,14 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 
 ### Connect your Claude account
 
-Settings → **Connect your Claude account** lets your own Claude account power your missions instead of ViBread's key. It
-runs oh-my-pi's Claude sign-in (`omp login anthropic`, needs the `omp` CLI on the server): open the claude.ai link, approve,
-then paste the code Claude shows — or the address of the page that fails to load (`localhost:54545/…`) — into ViBread. If
-your browser runs on the server machine, the sign-in finishes by itself. The grant is kept by an oh-my-pi auth broker under
-`DATA_DIR/claude-accounts` (never your own `~/.omp`), and your agent calls go through an oh-my-pi auth gateway restricted to
-your account. Disconnect removes it. When your account can't serve the model, ViBread falls back to its server key. Note:
-Anthropic's terms restrict using Claude.ai login in third-party apps — see PLAN.md §9.
+Settings → **Connect your Claude account** is the primary way to let your own Claude account power missions instead of
+ViBread's key. The desktop app provides the pinned official oh-my-pi helper and runs its Claude sign-in
+(`omp login anthropic`): open the claude.ai link, approve, then paste the code Claude shows — or the address of the page
+that fails to load (`localhost:54545/…`) — into ViBread. If your browser runs on the server machine, the sign-in finishes
+by itself. The grant is kept by an oh-my-pi auth broker under `DATA_DIR/claude-accounts` (never your own `~/.omp`), and
+your agent calls go through an oh-my-pi auth gateway restricted to your account. Disconnect removes it. When your account
+can't serve the model, ViBread falls back to its server key; menu **Set Anthropic API key…** remains the secondary
+option. Note: Anthropic's terms restrict using Claude.ai login in third-party apps — see PLAN.md §9.
 
 ### Claude Code (MCP) and other agents (A2A)
 
