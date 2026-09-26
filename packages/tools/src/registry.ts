@@ -17,6 +17,8 @@ import {
 } from "@vibread/core";
 import { z } from "zod";
 import {
+  BENCH_ACTIONS,
+  BENCH_ACTION_TEXT,
   ToolInputError,
   allGo,
   artifactUrl,
@@ -51,13 +53,6 @@ export interface RegistryHooks {
 }
 
 const revisionArg = z.number().int().positive().optional().describe("Revision number; the latest revision when omitted.");
-const BENCH_ACTIONS = ["flash-bench", "rail-checkpoint", "run-selftest", "flash-app"] as const;
-const BENCH_ACTION_TEXT: Record<(typeof BENCH_ACTIONS)[number], string> = {
-  "flash-bench": "Put ViBread's safe self-test firmware on the board",
-  "rail-checkpoint": "Run the power-rail checkpoint",
-  "run-selftest": "Run the full self-test of the breadboard",
-  "flash-app": "Flash your project's sketch to the board",
-};
 
 function brief(findings: Finding[]): { console: string; ruleId: string; severity: string; title: string; fix?: string; refs?: Finding["refs"] }[] {
   return findings
@@ -494,11 +489,19 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
         "Request a physical action (flash firmware, rail checkpoint, self-test). It never runs from here: it waits for the person " +
         "to click Start in the bench browser that holds the USB port.",
       actionClass: "physical",
-      input: z.object({ action: z.enum(BENCH_ACTIONS), revision: revisionArg, note: z.string().max(200).optional() }),
+      input: z.object({
+        action: z.enum(BENCH_ACTIONS),
+        revision: revisionArg.describe("Must be the mission's current revision (the one the bench runs); defaults to it."),
+        note: z.string().max(200).optional(),
+      }),
       handler: async (ctx, input) => {
         const mission = await requireMission(store, ctx.missionId);
-        const n = input.revision ?? mission.releasedRevision ?? (await store.getRevision(ctx.missionId))?.n;
+        // The bench runs the mission's current revision; a request is bound to it (gate.ts) and listed only for it.
+        const n = mission.currentRevision;
         if (n === undefined) throw new ToolInputError("There is no revision to use at the bench yet.");
+        if (input.revision !== undefined && input.revision !== n) {
+          throw new ToolInputError(`The bench runs the mission's current revision (${n}), not revision ${input.revision}.`);
+        }
         return {
           summary: `${BENCH_ACTION_TEXT[input.action]} — waiting for a click at the bench`,
           action: input.action,

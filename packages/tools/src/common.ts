@@ -11,6 +11,16 @@ import {
   type ToolDef,
 } from "@vibread/core";
 
+/** Physical actions the bench browser runs after a human click (the broker's `action` for request_bench_action). */
+export const BENCH_ACTIONS = ["flash-bench", "rail-checkpoint", "run-selftest", "flash-app"] as const;
+export type BenchAction = (typeof BENCH_ACTIONS)[number];
+export const BENCH_ACTION_TEXT: Record<BenchAction, string> = {
+  "flash-bench": "Put ViBread's safe self-test firmware on the board",
+  "rail-checkpoint": "Run the power-rail checkpoint",
+  "run-selftest": "Run the full self-test of the breadboard",
+  "flash-app": "Flash your project's sketch to the board",
+};
+
 export const SYSTEM_ACTOR: Actor = { kind: "system", id: "pipeline", name: "ViBread checks", channel: "system" };
 
 /** Thrown when an agent call needs Claude and no ANTHROPIC_API_KEY is configured. Shown to the user verbatim. */
