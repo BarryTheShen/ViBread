@@ -12,6 +12,11 @@ on:
       - "package-lock.json"
       - ".github/workflows/desktop.yml"
   workflow_dispatch:
+    inputs:
+      macos:
+        description: "Also build the macOS apps (macOS runners cost ~10× the minutes; pushes build Linux + Windows only)"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -25,17 +30,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  plan:
+    name: Plan platforms
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      labels: ${{ steps.plan.outputs.labels }}
+    steps:
+      - id: plan
+        env:
+          WANT_MACOS: ${{ github.event_name == 'workflow_dispatch' && inputs.macos }}
+        run: |
+          platforms='[{"os":"ubuntu-latest","label":"linux-x64","builder":"--linux AppImage deb","optional":false},{"os":"windows-latest","label":"windows-x64","builder":"--win nsis","optional":false}]'
+          if [ "$WANT_MACOS" = "true" ]; then
+            platforms=$(jq -c '. + [{"os":"macos-14","label":"macos-arm64","builder":"--mac dmg zip","optional":true},{"os":"macos-15-intel","label":"macos-x64","builder":"--mac dmg zip","optional":true}]' <<<"$platforms")
+          fi
+          echo "matrix={\"include\":$platforms}" >> "$GITHUB_OUTPUT"
+          echo "labels=$(jq -r 'map(.label) | join(" ")' <<<"$platforms")" >> "$GITHUB_OUTPUT"
+          echo "Building: $(jq -r 'map(.label) | join(", ")' <<<"$platforms")"
+
   package:
     name: ${{ matrix.label }}
+    needs: plan
     strategy:
       fail-fast: false
-      matrix:
-        # Linux and Windows gate the release. macOS legs are best effort: a failure there never blocks publishing.
-        include:
-          - { os: ubuntu-latest, label: linux-x64, builder: --linux AppImage deb, optional: false }
-          - { os: windows-latest, label: windows-x64, builder: --win nsis, optional: false }
-          - { os: macos-14, label: macos-arm64, builder: --mac dmg zip, optional: true }
-          - { os: macos-15-intel, label: macos-x64, builder: --mac dmg zip, optional: true }
+      # Linux and Windows gate the release. macOS legs (only on request) are best effort: a failure never blocks publishing.
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     continue-on-error: ${{ matrix.optional }}
     timeout-minutes: 60
@@ -102,7 +122,7 @@ jobs:
 
   release:
     name: Publish desktop release
-    needs: package
+    needs: [plan, package]
     # Runs on main (push or workflow_dispatch) once Linux and Windows passed; optional macOS legs may have failed.
     if: github.ref == 'refs/heads/main' && needs.package.result == 'success'
     runs-on: ubuntu-latest
@@ -115,6 +135,7 @@ jobs:
       - name: Publish desktop-v${{ env.APP_VERSION }}
         env:
           GH_TOKEN: ${{ github.token }}
+          PLANNED_LABELS: ${{ needs.plan.outputs.labels }}
         run: |
           set -euo pipefail
           mkdir upload
@@ -128,14 +149,23 @@ jobs:
               missing="$missing $label"
             fi
           done
-          for label in macos-arm64 macos-x64; do
+          # Platforms planned for this run that left no artifact at all (the job died before uploading).
+          for label in $PLANNED_LABELS; do
             [ -d "artifacts/vibread-$label" ] || missing="$missing $label"
           done
           (cd upload && sha256sum * > SHA256SUMS.txt)
           ls -la upload
+          mac_note=""
+          if ! ls upload/*.dmg >/dev/null 2>&1; then
+            last_mac=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" \
+              --jq '[.[] | select(.tag_name | startswith("desktop-v")) | select(any(.assets[]; .name | endswith(".dmg")))] | sort_by(.created_at) | reverse | .[0].html_url // ""')
+            mac_note="macOS apps are built on request (Actions → Desktop app → Run workflow → macOS)."
+            if [ -n "$last_mac" ]; then mac_note="$mac_note Newest macOS build: $last_mac"; fi
+          fi
           {
             printf 'ViBread desktop %s, built from %s on %s\n\n' "$APP_VERSION" "${GITHUB_SHA::7}" "$(date -u '+%Y-%m-%d %H:%M UTC')"
             printf 'Unsigned preview builds of the ViBread desktop app. See the README "Desktop app" section for first-run steps.\n'
+            if [ -n "$mac_note" ]; then printf '\n%s\n' "$mac_note"; fi
             if [ -n "$missing" ]; then
               printf '\nNot in this build (packaging or smoke test failed, see %s/%s/actions/runs/%s):%s\n' \
                 "$GITHUB_SERVER_URL" "$GITHUB_REPOSITORY" "$GITHUB_RUN_ID" "$missing"
@@ -150,7 +180,10 @@ jobs:
           # Every successful build is a new release with its own version; the newest is marked Latest.
           gh release create "$tag" upload/* --verify-tag --latest --repo "$GITHUB_REPOSITORY" \
             --title "ViBread desktop $APP_VERSION" --notes-file notes.md
-          # Keep the five newest desktop builds (best effort: a cleanup hiccup must not fail a published release).
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,createdAt \
-            --jq '[.[] | select(.tagName | startswith("desktop-v"))] | sort_by(.createdAt) | reverse | .[5:] | .[].tagName' |
+          # Keep the five newest desktop builds plus the newest one with macOS apps (best effort: a cleanup hiccup must
+          # not fail a published release).
+          gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '
+            [.[] | select(.tag_name | startswith("desktop-v"))] | sort_by(.created_at) | reverse
+            | ([.[] | select(any(.assets[]; .name | endswith(".dmg")))] | .[0].tag_name // "") as $mac
+            | .[5:] | map(select(.tag_name != $mac)) | .[].tag_name' |
             while read -r old; do gh release delete "$old" --yes --cleanup-tag --repo "$GITHUB_REPOSITORY" || echo "couldn't remove $old"; done

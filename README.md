@@ -39,13 +39,15 @@ Download, double-click, done: no Node.js, npm or terminal, and no browser choice
 USB bench works the same on every OS). How it works inside: [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
 
 Every successful build of `main` is published as a new, numbered release (**ViBread desktop 0.1.N**); download the
-newest from **[Releases → Latest](https://github.com/BarryTheShen/ViBread/releases/latest)**.
+newest from **[Releases → Latest](https://github.com/BarryTheShen/ViBread/releases/latest)**. Pushes build Linux and
+Windows; the macOS apps are built on request (Actions → *Desktop app* → *Run workflow* → tick *macOS*), and every
+release's notes link the newest macOS build.
 
 | OS | File in the latest release | First launch if unsigned-app warnings appear |
 |---|---|---|
 | Linux x64 | `ViBread-<version>-linux-amd64.deb` (recommended on Ubuntu/Debian, required for the full sandbox on Ubuntu 24.04+) or `ViBread-<version>-linux-x86_64.AppImage` (any distro) | Deb: `sudo apt install ./ViBread-*.deb`, then *ViBread* in the app menu. AppImage: `chmod +x ViBread-*.AppImage` then run it (needs FUSE's `fusermount3`, present on desktop distros; without FUSE run it with `APPIMAGE_EXTRACT_AND_RUN=1`) |
 | Windows 10/11 x64 | `ViBread-<version>-win-x64.exe` (installer) | SmartScreen: **More info → Run anyway** |
-| macOS (Apple silicon / Intel) | `ViBread-<version>-mac-arm64.dmg` / `ViBread-<version>-mac-x64.dmg` | Drag to Applications, open once, then **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine /Applications/ViBread.app`) |
+| macOS (Apple silicon / Intel) | `ViBread-<version>-mac-arm64.dmg` / `ViBread-<version>-mac-x64.dmg` (in the newest release that has them — see the release notes) | Drag to Applications, open once, then **System Settings → Privacy & Security → Open Anyway** (or `xattr -dr com.apple.quarantine /Applications/ViBread.app`) |
 
 - **First launch** shows a setup window: it downloads the Arduino toolchain (arduino-cli 1.5.1 + AVR core 1.8.8 +
   ArduinoJson 7.4.2, SHA-256 checked, ~150 MB) and builds the example missions — about 2–3 minutes, internet needed
