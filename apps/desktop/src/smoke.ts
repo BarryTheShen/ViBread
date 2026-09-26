@@ -24,6 +24,9 @@ interface Check {
   detail: string;
 }
 
+// arduino-cli may report Windows paths with other separators or drive-letter case.
+const normalize = (path: string) => path.replaceAll("\\", "/").toLowerCase();
+
 const GOLDEN_TITLES = ["Moon-Phase Lamp", "Knob Night-Light", "Launch Control"];
 
 function outputDir(paths: DesktopPaths): string {
@@ -86,7 +89,7 @@ export async function runSmoke(input: { window: BrowserWindow; info: ServerInfo;
         fqbn: compile?.fqbn,
         flashBytes: compile?.sizes?.flashBytes,
         // Core warnings point into the AVR core, proving arduino-cli ran from <userData>/toolchain.
-        toolchainPath: (compile?.diagnostics ?? []).some((d) => d.file?.startsWith(paths.toolchain)),
+        toolchainPath: (compile?.diagnostics ?? []).some((d) => d.file !== undefined && normalize(d.file).startsWith(normalize(paths.toolchain))),
       });
     }
     check("seeded firmware compiled", compiled.length === 3 && compiled.every((c) => c.ok), JSON.stringify(compiled));

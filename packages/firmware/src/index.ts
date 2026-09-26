@@ -62,7 +62,7 @@ function enqueueCompile(run: () => Promise<CompileResult>): Promise<CompileResul
 export function defaultToolchain(): ToolchainPaths {
   const root = resolve(fileURLToPath(new URL("../../../", import.meta.url)));
   return {
-    cli: process.env.VIBREAD_ARDUINO_CLI ?? join(root, ".toolchain", "bin", "arduino-cli"),
+    cli: process.env.VIBREAD_ARDUINO_CLI ?? join(root, ".toolchain", "bin", process.platform === "win32" ? "arduino-cli.exe" : "arduino-cli"),
     config: process.env.VIBREAD_ARDUINO_CONFIG ?? join(root, ".toolchain", "arduino", "arduino-cli.yaml"),
   };
 }
