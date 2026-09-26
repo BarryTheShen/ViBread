@@ -98,7 +98,7 @@ describe("firmware compiler", () => {
       const result = await compileSketch({ source, board });
       expect(result.ok).toBe(false);
       expect(result.diagnostics).toHaveLength(1);
-      expect(result.diagnostics[0]?.message).toContain("Assembler directives");
+      expect(result.diagnostics[0]?.message).toContain("Inline assembly isn't allowed");
     }
     const securityPrefix = `vibread-firmware-security-${process.pid}-`;
     const previousPrefix = process.env.VIBREAD_JOB_PREFIX;
@@ -112,6 +112,23 @@ describe("firmware compiler", () => {
       if (previousPrefix === undefined) delete process.env.VIBREAD_JOB_PREFIX;
       else process.env.VIBREAD_JOB_PREFIX = previousPrefix;
     }
+  }, 30_000);
+
+  it("keeps preprocessor and linker failures actionable", async () => {
+    const missing = await compileSketch({ source: "void setup(){}\n#include <ArduinoJsn.h>\nvoid loop(){}\n", board });
+    expect(missing.ok).toBe(false);
+    expect(missing.diagnostics).toHaveLength(1);
+    expect(missing.diagnostics[0]?.line).toBe(2);
+    expect(missing.diagnostics[0]?.message).toContain("ArduinoJsn.h isn't installed");
+    const preprocessor = await compileSketch({ source: "void setup(){}\n#error BAD_CAL\nvoid loop(){}\n", board });
+    expect(preprocessor.ok).toBe(false);
+    expect(preprocessor.diagnostics).toHaveLength(1);
+    expect(preprocessor.diagnostics[0]?.line).toBe(2);
+    expect(preprocessor.diagnostics[0]?.message).toBe("BAD_CAL");
+    const linker = await compileSketch({ source: "void missing();\nvoid setup(){ missing(); }\nvoid loop(){}\n", board });
+    expect(linker.ok).toBe(false);
+    expect(linker.diagnostics.some((diagnostic) => diagnostic.message.includes("undefined reference to 'missing()'"))).toBe(true);
+    expect(linker.log).toContain("undefined reference to 'missing()'");
   }, 30_000);
 
   it("rejects LED safety-limit violations before compiling", () => {
