@@ -1,6 +1,6 @@
 import {
-  BOARD_PROFILES,
   BREADBOARD_PROFILES,
+  VCC_PASS_MV,
   contactGroup,
   parseHole,
   type BenchRunResult,
@@ -99,10 +99,6 @@ function testResult(test: BenchTestResult["test"], subjects: SubjectResult[], su
   return { test, status: aggregate(subjects.map((subject) => subject.status)), subjects, summary };
 }
 
-function mvRange(board: SelfTestPlan["board"]): { min: number; max: number; nominal: number } {
-  const nominal = (BOARD_PROFILES[board]?.vcc ?? 5) * 1000;
-  return { nominal, min: nominal * 0.9, max: nominal * 1.1 };
-}
 
 function ratio(line: Extract<DeviceLine, { t: "read" }>): number | undefined {
   if (line.n <= 0 || line.ones < 0 || line.ones > line.n) return undefined;
@@ -129,29 +125,36 @@ function evaluateRails(context: EvaluationContext): BenchTestResult {
   const lines = context.lines;
   const hello = lines.find((line): line is Extract<DeviceLine, { t: "hello" }> => line.t === "hello");
   const vcc = lines.find((line): line is Extract<DeviceLine, { t: "vcc" }> => line.t === "vcc");
-  const range = mvRange(context.plan.board);
-  let status: TestStatus = "unknown";
-  let observed = "no VCC reading";
-  if (vcc !== undefined) {
-    observed = `${vcc.mv} mV`;
-    status = vcc.mv >= range.min && vcc.mv <= range.max ? "pass" : "fail";
-  }
+  let status: TestStatus = vcc === undefined
+    ? "unknown"
+    : vcc.mv >= VCC_PASS_MV.min && vcc.mv <= VCC_PASS_MV.max
+      ? "pass"
+      : "fail";
+  let observed = vcc === undefined ? "no board VCC reading" : `${vcc.mv} mV`;
+  const designMismatch = hello !== undefined && (hello.design !== context.plan.design || hello.board !== context.plan.board);
   if (hello === undefined) {
-    status = status === "fail" ? "fail" : "unknown";
-    observed = vcc === undefined ? "no hello banner or VCC reading" : `${vcc.mv} mV, but no hello banner`;
-  } else if (hello.design !== context.plan.design || hello.board !== context.plan.board) {
+    observed = vcc === undefined ? "no hello banner or board VCC reading" : `${vcc.mv} mV, but no hello banner`;
+  } else if (designMismatch) {
     context.signatures.designMismatch = true;
     status = "fail";
-    observed = `hello design ${hello.design}, board ${hello.board}`;
+    observed = vcc === undefined
+      ? `hello design ${hello.design}, board ${hello.board}; no board VCC reading`
+      : `${vcc.mv} mV; hello design ${hello.design}, board ${hello.board}`;
   }
   const subject: SubjectResult = {
-    part: "board",
+    part: "board power",
     pin: "VCC",
     status,
     observed,
-    expected: `${Math.round(range.nominal)} mV ± 10% and design ${context.plan.design}`,
+    expected: `VCC ≈ 5 V (${VCC_PASS_MV.min}–${VCC_PASS_MV.max} mV) and design ${context.plan.design}`,
   };
-  const summary = status === "pass" ? "USB power and the design banner look healthy." : status === "fail" ? "VCC or the design banner is outside the expected signature." : "Waiting for the board banner and VCC reading.";
+  const summary = status === "pass"
+    ? "Board power check passed (VCC ≈ 5 V). The part tests that follow exercise the breadboard rails."
+    : designMismatch
+      ? "Board identity or power check failed. The part tests that follow exercise the breadboard rails."
+      : status === "fail"
+        ? "Board power check failed (VCC must be ≈ 5 V). The part tests that follow exercise the breadboard rails."
+        : "Board power check needs a VCC reading. The part tests that follow exercise the breadboard rails.";
   return testResult("rails.vcc", [subject], summary);
 }
 

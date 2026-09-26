@@ -27,7 +27,7 @@ import { z } from "zod";
  *
  * Per-test line sequence (exact ask ids and obs keys; <i> = 0-based index among subjects of that kind in plan order,
  * <k> = the LED subject's `order`; every `ask` carries `part` = the subject's part id, except where noted):
- *  - rails.vcc:          vcc{mv} → end (pass when 4500 ≤ mv ≤ 5500)
+ *  - rails.vcc:          board power check (MCU VCC ≈ 5 V; part tests that follow exercise the breadboard rails): vcc{mv} → end (pass when VCC_PASS_MV.min ≤ mv ≤ VCC_PASS_MV.max, fail otherwise)
  *  - pins.readonly:      per subject pin: read{pull:0}, read{pull:1}; then per output subject (led, buzzer) not stuck:
  *                        probe{drive: active level}; mismatch → stuck{pin, level: readback} → end
  *  - button.interactive: per button: ask `btn<i>-press` (press-hold, choices ["done"]) → obs{key:"pressed", v} →
@@ -43,6 +43,9 @@ import { z } from "zod";
  *  - buzzer.confirm:     per buzzer: short beeps repeat while waiting on ask `buzzer<i>` (heard-beep, ["yes","no"]) → end
  *  - Answer "timeout" (or no answer within timeoutMs) makes that subject `unknown`, never `fail`.
  */
+/** Board VCC power-check pass window, in millivolts. */
+export const VCC_PASS_MV = { min: 4500, max: 5500 } as const;
+
 
 export const TEST_IDS = [
   "rails.vcc",
