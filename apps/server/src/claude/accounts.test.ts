@@ -117,4 +117,12 @@ describe("ompEnvironment", () => {
       SYSTEMROOT: "C:\\Windows",
     });
   });
+
+  it("points the Windows profile directories into the isolated home, so omp never writes to the real profile", () => {
+    const env = ompEnvironment({ PATH: "C:\\Windows", USERPROFILE: "C:\\Users\\op", APPDATA: "C:\\Users\\op\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\op\\AppData\\Local" }, "/data/claude");
+    expect(env.HOME).toBe("/data/claude");
+    expect(env.USERPROFILE).toBe("/data/claude");
+    expect(env.APPDATA).toBe(join("/data/claude", "AppData", "Roaming"));
+    expect(env.LOCALAPPDATA).toBe(join("/data/claude", "AppData", "Local"));
+  });
 });

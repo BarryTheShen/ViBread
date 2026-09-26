@@ -574,6 +574,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const missions = await ctx.store.listMissions("operator");
     const result: { id: string; title: string; currentStep: number }[] = [];
     for (const mission of missions) {
+      if (mission.releasedRevision === undefined) continue;
       try {
         const build = await ctx.missions.build(mission.id);
         result.push({ id: mission.id, title: mission.title, currentStep: build.current });

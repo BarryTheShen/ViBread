@@ -157,7 +157,9 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   ctx.runtime.mountChat(app);
   mountMcp(app, ctx, auth);
   mountA2a(app, ctx, auth);
-
+  app.use("/api", (req, res) => {
+    res.status(404).json({ error: { code: "NOT_FOUND", message: `Unknown API route: ${req.method} ${req.path}` } });
+  });
   const candidateWebDirs = [resolve(process.cwd(), "apps/web/dist"), resolve(process.cwd(), "../../apps/web/dist")];
   const webDist = candidateWebDirs.find((directory) => existsSync(resolve(directory, "index.html")));
   if (process.env.VIBREAD_NO_STATIC !== "1" && webDist) {

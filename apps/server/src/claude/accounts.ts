@@ -103,8 +103,22 @@ export function ompEnvironment(base: NodeJS.ProcessEnv, home: string, extra: Rec
   for (const [key, value] of Object.entries(base)) {
     if (OMP_ENVIRONMENT_KEYS[key] && value !== undefined) env[key] = value;
   }
-  return { ...env, HOME: home, ...extra };
+  // Windows resolves the home directory from USERPROFILE (not HOME) and app data from APPDATA/LOCALAPPDATA, so those
+  // must point into the isolated home too — otherwise omp writes its broker token and credentials to the real profile.
+  const windows = env.USERPROFILE === undefined ? {} : { USERPROFILE: home, APPDATA: join(home, "AppData", "Roaming"), LOCALAPPDATA: join(home, "AppData", "Local") };
+  return { ...env, HOME: home, ...windows, ...extra };
 }
+
+/** Command line of a running process ("" when it isn't running or can't be read). */
+function commandLineOf(pid: number): string {
+  const result =
+    process.platform === "win32"
+      ? spawnSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Get-CimInstance Win32_Process -Filter "ProcessId=${pid}").CommandLine`], { encoding: "utf8", timeout: 15_000 })
+      : spawnSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
+  return result.status === 0 ? result.stdout.trim() : "";
+}
+
+const programName = (token: string) => basename(token.replace(/^"|"$/g, "")).toLowerCase().replace(/\.exe$/, "");
 
 /** Picks the broker credential a finished login produced: a new row, else the account this user already had. */
 export function pickLoginCredential(
@@ -163,6 +177,10 @@ export function createClaudeAccountService(deps: { config: ServerConfig; db: DB;
   const children = new Set<ChildProcessWithoutNullStreams>();
 
   mkdirSync(home, { recursive: true });
+  if (process.platform === "win32") {
+    mkdirSync(join(home, "AppData", "Roaming"), { recursive: true });
+    mkdirSync(join(home, "AppData", "Local"), { recursive: true });
+  }
   let oldBrokerPid = 0;
   try {
     oldBrokerPid = Number(readFileSync(brokerPidFile, "utf8").trim() || 0);
@@ -170,10 +188,9 @@ export function createClaudeAccountService(deps: { config: ServerConfig; db: DB;
     // No prior ViBread broker was recorded.
   }
   if (Number.isInteger(oldBrokerPid) && oldBrokerPid > 0) {
-    const command = spawnSync("ps", ["-p", String(oldBrokerPid), "-o", "command="], { encoding: "utf8" });
-    const commandLine = command.status === 0 ? command.stdout.trim() : "";
-    const executable = basename(ompBin);
-    const isOmp = commandLine.split(/\s+/).some((token) => basename(token) === "omp" || basename(token) === executable);
+    const commandLine = commandLineOf(oldBrokerPid);
+    const executable = programName(ompBin);
+    const isOmp = commandLine.split(/\s+/).some((token) => programName(token) === "omp" || programName(token) === executable);
     if (isOmp && commandLine.includes("auth-broker")) {
       try {
         process.kill(oldBrokerPid, "SIGTERM");

@@ -658,9 +658,10 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
         onClick={handleStepDone}
         disabled={stepMutation.isPending}
         aria-busy={stepMutation.isPending}
+        startIcon={stepMutation.isPending ? <CircularProgress color="inherit" size={20} /> : undefined}
         sx={{ minHeight: 52, borderRadius: 2.5, fontWeight: 800 }}
       >
-        {stepMutation.isPending ? <CircularProgress color="inherit" size={22} /> : "I did this"}
+        {stepMutation.isPending ? "Saving…" : "I did this"}
       </Button>
       {stepMutation.error && (
         <Alert severity="error" icon={<CloudOffOutlined />}>
@@ -890,7 +891,7 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
 
   const build = query.data;
   const stale = Boolean(build && query.dataUpdatedAt > 0 && now - query.dataUpdatedAt > STALE_AFTER_MS);
-  const headline = build?.headline?.trim() || "Build checklist ready";
+  const headline = build?.headline?.trim() || (build && build.steps.length > 0 ? "Build checklist ready" : undefined);
 
   return (
     <Box
@@ -946,10 +947,12 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
             </Alert>
           )}
 
-          <Alert severity={stale ? "warning" : "info"} icon={stale ? <WifiOff /> : <FactCheckOutlined />} role="status">
-            <AlertTitle>{headline}</AlertTitle>
-            {stale ? "The last successful update is old. Showing the last known checklist." : "Follow one step at a time."}
-          </Alert>
+          {headline && (
+            <Alert severity={stale ? "warning" : "info"} icon={stale ? <WifiOff /> : <FactCheckOutlined />} role="status">
+              <AlertTitle>{headline}</AlertTitle>
+              {stale ? "The last successful update is old. Showing the last known checklist." : "Follow one step at a time."}
+            </Alert>
+          )}
 
           {query.error && build && (
             <Alert severity="warning" icon={<CloudOffOutlined />}>
