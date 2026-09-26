@@ -29,31 +29,75 @@ Claude-Code-style permission modes: **Plan / Ask every time / Review (default) /
 self-test, rewiring) only ever run from a click at the bench browser; iMessage can pre-approve them, remote agents can
 only request them.
 
-## Quick start (laptop or the dev container)
+## Install
 
-Requirements: Node ≥ 22.12, npm ≥ 10, Linux x64 (arduino-cli binary), Chrome or Edge for Web Serial. ngspice is optional
-(`apt install ngspice`) for the SPICE cross-check.
+Tested from a clean clone of this repository (install → toolchain → build → seed → 99 tests → app) on Linux x86_64.
+
+### 1. What you need
+
+| | Version | Check with | Notes |
+|---|---|---|---|
+| OS | macOS (Intel or Apple silicon), Linux x86_64/arm64, or Windows **inside WSL2** | — | The Arduino compiler is downloaded for your platform |
+| Node.js | **22.12 or newer** | `node -v` | https://nodejs.org or `nvm install 22` |
+| npm | **10 or newer** | `npm -v` | Upgrade with `npm install -g npm@11` |
+| git, curl, tar | any | — | Preinstalled on macOS/Linux |
+| Browser | Chrome or Edge | — | Needed for the bench (Web Serial talks to the Arduino). Other screens work in any modern browser |
+| Disk / network | ~1.5 GB, internet for the first install | — | node_modules + Arduino toolchain |
+
+Optional: **ngspice** for the SPICE cross-check (`brew install ngspice` / `sudo apt install ngspice`), the **oh-my-pi**
+`omp` CLI on the server for "Connect your Claude account", **Claude Code** to drive ViBread over MCP.
+
+### 2. Install and run
 
 ```bash
-npm install                  # also installs the isolated tscircuit runtime (packages/assembly/schematic-runtime)
-npm run setup:toolchain      # arduino-cli 1.5.1 (checksum-pinned) + arduino:avr@1.8.8 + ArduinoJson 7.4.2 → .toolchain/
-npm run build                # builds the web app (apps/web/dist), served by the server
-npm run seed                 # optional: pre-warmed golden missions (Moon-Phase Lamp, Knob Night-Light, Launch Control)
-npm start                    # http://localhost:8787
+git clone https://github.com/BarryTheShen/ViBread.git
+cd ViBread
+npm install               # ~1 min; also installs the isolated schematic renderer (packages/assembly/schematic-runtime)
+npm run setup:toolchain   # ~1 min; arduino-cli 1.5.1 (checksum-pinned) + Arduino AVR core 1.8.8 + ArduinoJson 7.4.2 → .toolchain/
+npm run build             # builds the web app into apps/web/dist (the server serves it)
+npm run seed              # optional: three ready-made demo missions (Moon-Phase Lamp, Knob Night-Light, Launch Control)
+cp .env.example .env      # optional: add ANTHROPIC_API_KEY etc. (see Configuration)
+npm start                 # → http://localhost:8787
 ```
 
-Development: `npm run dev:server` (port 8787) and `npm run dev:web` (Vite on 5173, proxies `/api`, `/mcp`, `/a2a`).
-Tests: `npm test` (vitest; compiles firmware and runs the simulator, ~30 s). Typecheck: `npm run typecheck`.
+Open **http://localhost:8787**. Without a Claude credential everything works except the AI agents (the chat says Claude
+isn't connected): add `ANTHROPIC_API_KEY` to `.env`, or use Settings → *Connect your Claude account*.
+
+Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the checks and the server tests) and
+`npm run typecheck`.
+
+### 3. Other devices and the bench
+
+- **Phone (Build Mode):** the server listens on all interfaces, so on the same Wi-Fi open `http://<laptop-ip>:8787`, or scan
+  the QR code in the workspace's Steps tab (set `PUBLIC_URL=http://<laptop-ip>:8787` so the QR code points there).
+- **Bench (Arduino over USB):** open the bench on the laptop the board is plugged into, at `http://localhost:8787` (Web
+  Serial needs localhost or HTTPS). On a remote server, forward the port: `ssh -L 8787:<server>:8787 <host>`.
+- **Development mode** (hot reload): `npm run dev:server` (port 8787) and `npm run dev:web` (http://localhost:5173, proxies
+  the API to 8787).
+
+### 4. Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| `npm install` complains about the engine or lockfile | Upgrade Node to 22.12+ and npm to 10+ |
+| Port 8787 is busy | `PORT=8788 npm start` |
+| "Claude is not connected" in the chat | Expected without a credential — set `ANTHROPIC_API_KEY` or connect a Claude account in Settings |
+| Schematic tab says the drawing isn't ready | Re-run `npm install` (it installs `packages/assembly/schematic-runtime`) |
+| Compile errors mentioning `arduino-cli` / missing core | Re-run `npm run setup:toolchain` |
+| Bench can't see the board | Use Chrome/Edge on `localhost`; try another USB cable (charge-only cables have no data); close the Arduino IDE serial monitor; on Linux add yourself to the `dialout` group |
+| Flashing from the browser fails | Use the fallback shown on the bench page: `.toolchain/bin/arduino-cli upload --input-file <hex> -p <port> -b arduino:avr:uno` |
+| Start over with fresh demo data | Stop the server, `rm -rf data`, `npm run seed`, `npm start` |
 
 ### Configuration (`.env` in the repo root, all optional)
 
 | Variable | Meaning |
 |---|---|
-| `PORT`, `HOST`, `PUBLIC_URL` | Listen address (default `0.0.0.0:8787`) and the public origin used in links, OAuth metadata and the `claude mcp add` command |
+| `PORT`, `HOST`, `PUBLIC_URL` | Listen address (default `0.0.0.0:8787`) and the public origin used in links, QR codes, OAuth metadata and the `claude mcp add` command |
 | `DATA_DIR` | SQLite database, artifacts and generated secrets (default `./data`, relative to the repo root) |
 | `ANTHROPIC_API_KEY` | ViBread's server key for the agents (design, test author, RETRO, photo check). Users can instead connect their own Claude account (below). Without either, everything except the agents works and the chat says Claude is not connected |
 | `VIBREAD_MODEL`, `VIBREAD_FAST_MODEL` | Default `claude-opus-5-5`, `claude-sonnet-5` |
-| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub sign-in; when configured, single-operator mode is disabled and the login page offers GitHub alongside Google |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in (callback `${PUBLIC_URL}/api/auth/callback/google`) |
+| `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub sign-in (callback `${PUBLIC_URL}/api/auth/callback/github`). With Google or GitHub configured, single-operator mode (no sign-in) is turned off |
 | `BETTER_AUTH_SECRET`, `VIBREAD_APPROVAL_SECRET` | Generated and stored in `DATA_DIR` when unset |
 | `CAPCOM_PROVIDER` | `off` (default), `terminal` (local test chat), or `cloud` (iMessage) with `PHOTON_PROJECT_ID`, `PHOTON_PROJECT_SECRET`, `CAPCOM_NUMBER`; `CAPCOM_ALLOW_OFF_HOURS=1` disables the quiet-hours guard |
 | `VIBREAD_ARDUINO_CLI`, `VIBREAD_ARDUINO_CONFIG`, `VIBREAD_COMPILE_TIMEOUT_MS` | Override the toolchain location / compile timeout |
