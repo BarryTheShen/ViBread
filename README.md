@@ -134,6 +134,7 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 | `PORT`, `HOST`, `PUBLIC_URL` | Listen address (default `0.0.0.0:8787`) and the public origin used in links, QR codes, OAuth metadata and the `claude mcp add` command |
 | `VIBREAD_PHONE_URL` | Phone/QR origin override; when unset, an HTTP localhost `PUBLIC_URL` uses the first non-internal LAN IPv4 address |
 | `VIBREAD_LAN_PAIRING=off` | Disable the single-operator LAN pairing guard (only on a trusted network) |
+| Tunnels (cloudflared/ngrok) | Treated as remote devices; `ssh -R`-style raw forwarding looks like the laptop itself, so use multi-user sign-in for any public tunnel |
 | `DATA_DIR` | SQLite database, artifacts and generated secrets (default `./data`, relative to the repo root) |
 | `ANTHROPIC_API_KEY` | ViBread's server key for the agents (design, test author, RETRO, photo check). Users can instead connect their own Claude account (below). Without either, everything except the agents works and the chat says Claude is not connected |
 | `VIBREAD_MODEL`, `VIBREAD_FAST_MODEL` | Default `claude-opus-5-5`, `claude-sonnet-5` |

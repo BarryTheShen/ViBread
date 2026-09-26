@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CreateMissionRequest, PermissionMode } from "@vibread/core";
-import { api, getJson, getText } from "./client.js";
+import { api, getJson, getText, HttpError, sendJson } from "./client.js";
 
 export const queryKeys = {
   me: ["me"] as const,
@@ -174,7 +174,8 @@ export function usePhoneOrigin(): string {
 }
 
 /**
- * Build Mode link for a phone: phone origin + `/b/<id>`, plus the laptop's one-time LAN pairing query
+ * Build Mode link for a phone: phone origin + `/b/<id>`, plus the laptop's LAN pairing query (reusable until the
+ * operator unpairs all phones in Settings, which rotates it)
  * (`phonePairQuery`, e.g. "pair=<token>") when the server hands one out. Works without the field.
  */
 export function usePhoneBuildLink(missionId: string): string {
@@ -185,4 +186,45 @@ export function usePhoneBuildLink(missionId: string): string {
   const pair = typeof data === "object" && data !== null && "phonePairQuery" in data && typeof data.phonePairQuery === "string" ? data.phonePairQuery : "";
   const query = pair.replace(/^\?/, "");
   return `${origin}/b/${encodeURIComponent(missionId)}${query ? `?${query}` : ""}`;
+}
+
+/** A phone paired over the LAN (GET /api/lan/devices; answered only on the laptop itself). */
+export interface LanDevice {
+  id: string;
+  createdAt: string;
+  lastSeenAt?: string;
+  userAgent?: string;
+}
+
+/**
+ * Paired phones, or `null` when this browser isn't the laptop (the loopback-only endpoint refuses or doesn't exist):
+ * the Phones card only renders on the machine running ViBread.
+ */
+export function useLanDevices() {
+  return useQuery({
+    queryKey: ["lan-devices"],
+    queryFn: async ({ signal }): Promise<LanDevice[] | null> => {
+      try {
+        const body = await getJson<LanDevice[] | { devices: LanDevice[] }>("/api/lan/devices", signal);
+        return Array.isArray(body) ? body : body.devices;
+      } catch (error) {
+        if (error instanceof HttpError && [401, 403, 404].includes(error.status)) return null;
+        throw error;
+      }
+    },
+    retry: false,
+    refetchInterval: 15_000,
+  });
+}
+
+/** Unpair every phone: the server rotates the QR token, so every phone link/QR must be rebuilt from fresh connections. */
+export function useUnpairAllPhones() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => sendJson<unknown>("POST", "/api/lan/unpair-all", {}),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["lan-devices"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.connections });
+    },
+  });
 }

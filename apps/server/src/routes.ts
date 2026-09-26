@@ -405,6 +405,15 @@ export function mountApi(app: Express, ctx: AppContext): void {
     await ctx.store.appendEvent({ missionId, channel: "web", actor: actorFor(res, ctx), kind: "photo.checked", text: `Photo check for step ${step}`, revision: revision.n, data: photo });
     res.json(photo);
   });
+  router.get("/lan/devices", async (req, res) => {
+    if (!ctx.lanGuard.isLoopback(req)) throw httpError(403, "lan_loopback_required", "This endpoint is available on the ViBread laptop only");
+    res.json({ devices: ctx.lanGuard.listDevices() });
+  });
+  router.post("/lan/unpair-all", async (req, res) => {
+    if (!ctx.lanGuard.isLoopback(req)) throw httpError(403, "lan_loopback_required", "This endpoint is available on the ViBread laptop only");
+    ctx.lanGuard.unpairAll();
+    res.json({ ok: true });
+  });
   router.get("/connections", async (req, res) => {
     const user = actorUser(res, ctx);
     res.json({

@@ -4,7 +4,7 @@ import { defineConfig, loadEnv } from "vite";
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), "VITE_");
   const target = env.VITE_API_TARGET || process.env.VITE_API_TARGET || "http://localhost:8787";
-  const proxied = { target, changeOrigin: false, ws: false };
+  const proxied = { target, changeOrigin: false, ws: false, xfwd: true };
   return {
     plugins: [react()],
     server: {

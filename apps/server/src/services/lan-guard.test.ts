@@ -1,15 +1,16 @@
 import { rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Request, Response } from "express";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { LanGuard } from "./lan-guard.js";
 
-function request(path: string, remoteAddress: string, options: { accept?: string; query?: Record<string, string>; cookie?: string } = {}): Request {
+function request(path: string, remoteAddress: string, options: { method?: string; accept?: string; query?: Record<string, string>; cookie?: string; headers?: Record<string, string> } = {}): Request {
   return {
+    method: options.method ?? "GET",
     path,
     originalUrl: options.query ? `${path}?${new URLSearchParams(options.query).toString()}` : path,
     query: options.query ?? {},
-    headers: { accept: options.accept, cookie: options.cookie },
+    headers: { accept: options.accept, cookie: options.cookie, ...options.headers },
     socket: { remoteAddress } as Request["socket"],
   } as unknown as Request;
 }
@@ -66,6 +67,67 @@ describe("LAN pairing guard", () => {
       const forged = response();
       guard.middleware()(request("/b/mission", "192.168.1.20", { cookie: "vb_pair=forged" }), forged.value, () => { forged.next = true; });
       expect(forged.status).toBe(403);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses per-device cookies, respects expiry and proxy headers, and rotates on unpair-all", () => {
+    vi.useFakeTimers();
+    const dir = `/tmp/vb-lan-${randomUUID()}`;
+    const guard = new LanGuard({ dataDir: dir, singleOperator: true });
+    try {
+      const first = response();
+      guard.middleware()(request("/", "192.168.1.20", { query: { pair: guard.pairToken() } }), first.value, () => { first.next = true; });
+      const firstCookie = first.headers["set-cookie"].split(";")[0]!;
+      const second = response();
+      guard.middleware()(request("/", "192.168.1.20", { query: { pair: guard.pairToken() } }), second.value, () => { second.next = true; });
+      const secondCookie = second.headers["set-cookie"].split(";")[0]!;
+      expect(secondCookie).not.toBe(firstCookie);
+      expect(guard.listDevices()).toHaveLength(2);
+      const spoofed = response();
+      guard.middleware()(request("/", "127.0.0.1", { headers: { "x-forwarded-for": "192.168.1.20" } }), spoofed.value, () => { spoofed.next = true; });
+      expect(spoofed.status).toBe(403);
+      const forwardedLoopback = response();
+      guard.middleware()(request("/", "127.0.0.1", { headers: { "x-forwarded-for": "127.0.0.1" } }), forwardedLoopback.value, () => { forwardedLoopback.next = true; });
+      expect(forwardedLoopback.next).toBe(true);
+      vi.advanceTimersByTime(30 * 24 * 60 * 60 * 1000 + 1);
+      const expired = response();
+      guard.middleware()(request("/", "192.168.1.20", { cookie: firstCookie }), expired.value, () => { expired.next = true; });
+      expect(expired.status).toBe(403);
+      expect(guard.listDevices()).toHaveLength(0);
+      vi.useRealTimers();
+      const oldPair = guard.pairToken();
+      guard.unpairAll();
+      expect(guard.pairToken()).not.toBe(oldPair);
+      expect(guard.listDevices()).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("restricts paired LAN devices to the Build Mode phone scope", () => {
+    const dir = `/tmp/vb-lan-${randomUUID()}`;
+    const guard = new LanGuard({ dataDir: dir, singleOperator: true });
+    try {
+      const paired = response();
+      guard.middleware()(request("/b/mission", "192.168.1.20", { query: { pair: guard.pairToken() } }), paired.value, () => { paired.next = true; });
+      const cookie = paired.headers["set-cookie"].split(";")[0]!;
+      for (const [method, path] of [["GET", "/api/missions/m/build"], ["POST", "/api/missions/m/build/step"], ["POST", "/api/missions/m/photo"], ["GET", "/api/missions/m/revisions/1/artifacts/step-1.png"], ["GET", "/api/recorded/example.png"], ["GET", "/api/me"], ["GET", "/api/oauth/providers"]] as const) {
+        const allowed = response();
+        guard.middleware()(request(path, "192.168.1.20", { method, cookie }), allowed.value, () => { allowed.next = true; });
+        expect(allowed.next, `${method} ${path}`).toBe(true);
+      }
+      for (const path of ["/api/connections", "/api/missions/m", "/api/missions/m/chat", "/api/missions/m/bench/requests", "/api/lan/devices"]) {
+        const denied = response();
+        guard.middleware()(request(path, "192.168.1.20", { cookie }), denied.value, () => { denied.next = true; });
+        expect(denied.status).toBe(403);
+        expect(denied.body).toMatchObject({ error: { code: "phone_scope_only" } });
+      }
+      const html = response();
+      guard.middleware()(request("/settings", "192.168.1.20", { accept: "text/html", cookie }), html.value, () => { html.next = true; });
+      expect(html.status).toBe(403);
+      expect(String(html.body)).toContain("Build Mode");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

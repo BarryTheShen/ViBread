@@ -55,7 +55,7 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
   const links = createLinkService({ db: opened.db, sqlite: opened.sqlite });
   const capcomSpaces = createCapcomSpaceStore({ db: opened.db, sqlite: opened.sqlite });
   const benchAsks = createBenchAskStore({ store });
-  const lanGuard = createLanGuard({ dataDir: config.dataDir, singleOperator: config.singleOperator, pairing: process.env.VIBREAD_LAN_PAIRING });
+  const lanGuard = createLanGuard({ dataDir: config.dataDir, singleOperator: config.singleOperator, pairing: process.env.VIBREAD_LAN_PAIRING, sqlite: opened.sqlite });
   const messages = createMessageStore({ db: opened.db, sqlite: opened.sqlite });
   const claudeAccounts = createClaudeAccountService({ config, db: opened.db, log });
   const runtime = createAgentRuntime({ config, log, store, broker, machine, messages, claudeAccounts });
