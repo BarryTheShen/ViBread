@@ -22,6 +22,13 @@
       "when": 1790409775531,
       "tag": "0002_amused_praxagora",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1790412294040,
+      "tag": "0003_big_genesis",
+      "breakpoints": true
     }
   ]
 }

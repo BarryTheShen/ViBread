@@ -1,5 +1,6 @@
 import type { ApprovalBroker, MissionStore } from "@vibread/core";
 import type { Logger } from "pino";
+import type { ClaudeAccountService } from "../claude/accounts.js";
 import type { ServerConfig } from "../config.js";
 import type { MissionMachine } from "../services/machine.js";
 import type { MessageStore } from "../store/messages.js";
@@ -15,4 +16,6 @@ export interface AgentDeps {
   broker: ApprovalBroker;
   machine: MissionMachine;
   messages: MessageStore;
+  /** Per-user Claude accounts (PLAN §5.11 item 16); models.ts prefers the mission owner's account over the server key. */
+  claudeAccounts: ClaudeAccountService;
 }

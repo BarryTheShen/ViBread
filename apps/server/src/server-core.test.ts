@@ -111,6 +111,24 @@ describe("server core persistence", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  it("starts verification from a partially assembled mission", async () => {
+    const { dir, opened } = makeDatabase();
+    try {
+      const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
+      const mission = await store.createMission({ title: "Partial build", brief: "Partial build", ownerId: "operator", inventory: [], mode: "review" });
+      const machine = createMissionMachine({ db: opened.db, sqlite: opened.sqlite, store });
+      await machine.send(mission.id, { type: "BRIEF_RECEIVED" });
+      await machine.send(mission.id, { type: "DESIGN_STARTED" });
+      await machine.send(mission.id, { type: "DESIGN_READY", revision: 1 });
+      await machine.send(mission.id, { type: "RELEASED", revision: 1 });
+      await machine.send(mission.id, { type: "VERIFY_STARTED" });
+      expect(await machine.send(mission.id, { type: "VERIFY_PASSED" })).toBe("LAUNCH");
+    } finally {
+      opened.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 
   it("mints, verifies, revokes, expires tokens and redeems links once", async () => {
     const { dir, opened } = makeDatabase();

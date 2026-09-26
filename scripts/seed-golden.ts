@@ -31,10 +31,17 @@ try {
     await ctx.store.updateMission(mission.id, { currentRevision: revision.n });
     const started = performance.now();
     const results = await ctx.runtime.pipeline.evaluate(mission.id, revision.n);
+    // With a key, pre-warmed missions carry a real RETRO vote (the golden suites stay; the test author isn't re-run).
+    const retro = ctx.config.anthropicApiKey ? await ctx.runtime.review(mission.id, revision.n) : undefined;
+    const reports = retro ? [...results.reports.filter((r) => r.console !== "RETRO"), retro] : results.reports;
     await ctx.machine.send(mission.id, { type: "DESIGN_READY", revision: revision.n });
-    const verdicts = results.reports.map((r) => `${r.console} ${r.verdict}`).join(" · ");
+    const verdicts = reports.map((r) => `${r.console} ${r.verdict}`).join(" · ");
     console.log(`${golden.key}: mission ${mission.id} r${revision.n} in ${Math.round(performance.now() - started)} ms — ${verdicts}`);
   }
+  // Fault dictionaries (faults.json) build in the background; wait so they're saved before the database closes.
+  const waiting = performance.now();
+  await ctx.runtime.pipeline.idle();
+  console.log(`fault dictionaries ready in ${Math.round(performance.now() - waiting)} ms`);
 } finally {
   await close();
 }

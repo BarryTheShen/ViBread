@@ -38,6 +38,7 @@ import type { DeviceLine } from "./telemetry.js";
  *   GET    /api/missions/:id/chat/stream                        → resume the active stream (204 if none)
  *   POST   /api/missions/:id/chat/stop                          → { ok: true }
  *   POST   /api/approvals/:approvalId     { decision }          → ApprovalView
+ *   POST   /api/missions/:id/release      ReleaseRequest        → MissionDetail (human "GO for build"; 409 not_all_go | retro_missing | retro_no_go)
  *   GET    /api/missions/:id/build                              → BuildState   (phone Build Mode polls every 1–2 s)
  *   POST   /api/missions/:id/build/step   { n }                 → BuildState   ("I did this")
  *   POST   /api/missions/:id/bench/firmware { kind }            → { hex, design, plan? }  kind: "bench" | "app"
@@ -47,6 +48,10 @@ import type { DeviceLine } from "./telemetry.js";
  *   POST   /api/connections/tokens        { scopes, ttlMinutes } → TokenMintResponse
  *   DELETE /api/connections/tokens/:id                          → { ok: true }
  *   POST   /api/connections/imessage/code                       → ImessageLinkCode
+ *   POST   /api/connections/claude/start                        → ClaudeLoginStart   (PLAN item 16: connect your Claude account)
+ *   POST   /api/connections/claude/complete { loginId, code }   → ClaudeAccountView  (code = pasted code or final redirect URL)
+ *   POST   /api/connections/claude/cancel { loginId }           → ClaudeAccountView
+ *   DELETE /api/connections/claude                              → ClaudeAccountView
  *   /api/auth/*                                                 → Better Auth
  *   /mcp                                                        → MCP Streamable HTTP (bearer)
  *   /a2a, /.well-known/agent-card.json                          → A2A (bearer)
@@ -133,6 +138,15 @@ export interface RevisionDetail {
   artifactUrls: Record<string, string>;
 }
 
+/**
+ * Human release of a revision as the build target (the Flight Director's GO). Every deterministic console must be GO;
+ * RETRO must be GO unless it could not run (Claude not connected), in which case `acknowledgeMissingReview` must be true.
+ */
+export interface ReleaseRequest {
+  revision: number;
+  acknowledgeMissingReview?: boolean;
+}
+
 export interface BuildState {
   missionId: string;
   revision?: number;
@@ -162,6 +176,27 @@ export interface ConnectionsView {
   claudeCode: { tokens: { id: string; scopes: string[]; createdAt: string; expiresAt: string; lastUsedAt?: string }[] };
   /** MCP endpoint to paste into `claude mcp add`. */
   mcpUrl: string;
+  claude: ClaudeAccountView;
+}
+
+/** PLAN item 16: the user's own Claude account powering their missions (through oh-my-pi's auth broker + gateway). */
+export interface ClaudeAccountView {
+  /** oh-my-pi is installed on this server, so a Claude account can be connected. */
+  available: boolean;
+  connected: boolean;
+  email?: string;
+  orgName?: string;
+  connectedAt?: string;
+  /** A sign-in this user started that is waiting for the pasted code (or the local callback). */
+  pending?: { loginId: string; url: string; startedAt: string };
+  /** What powers this user's agents: their Claude account, ViBread's server key, or nothing yet. */
+  using: "claude-account" | "server-key" | "none";
+}
+
+export interface ClaudeLoginStart {
+  loginId: string;
+  /** claude.ai sign-in page to open in a new tab. */
+  url: string;
 }
 
 export interface TokenMintResponse {

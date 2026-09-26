@@ -139,9 +139,10 @@ export function createRunManager(
 
   async function setup(run: TrackedRun, input: { message?: UIMessage; actor: Actor }): Promise<PreparedRun> {
     const { missionId } = run;
-    const model = deps.models.design();
     const mission = await store.getMission(missionId);
     if (!mission) throw new ToolInputError(`Mission ${missionId} does not exist.`, 404);
+    // Resolved per run: the owner may connect or disconnect their Claude account at any time.
+    const { model, credential } = await deps.models.design(mission.ownerId);
 
     let history = await links.hydrate(missionId);
     if (input.message) {
@@ -151,6 +152,16 @@ export function createRunManager(
       await store.appendEvent({ missionId, channel: input.actor.channel, actor: input.actor, kind: "message", text: text.slice(0, 2000) });
     }
     if (mission.phase === "BRIEF" || mission.phase === "CLARIFY") await deps.sendMachine(missionId, { type: "DESIGN_STARTED" });
+    if (credential.kind === "claude-account") {
+      await store.appendEvent({
+        missionId,
+        channel: "system",
+        actor: { kind: "system", id: "claude-account", name: "Claude account", channel: "system" },
+        kind: "agent.credential",
+        text: `Using your Claude account${credential.email ? ` (${credential.email})` : ""}`,
+        data: credential,
+      });
+    }
 
     // Broker requests behind approvals already in this history (resume after a decision, possibly after a restart).
     const approvals = new Map<string, ApprovalRequest>();

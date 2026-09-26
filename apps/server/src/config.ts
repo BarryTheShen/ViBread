@@ -18,6 +18,8 @@ export interface ServerConfig {
   fastModel: string;
   approvalSecret: string;
   capcom: { provider: "cloud" | "terminal" | "off"; projectId?: string; projectSecret?: string; number?: string };
+  /** PLAN item 16 — "Connect your Claude account" through oh-my-pi's auth broker + gateway. */
+  claudeAccounts: { ompBin: string; home: string; brokerPort: number };
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
@@ -48,12 +50,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       projectSecret: env.PHOTON_PROJECT_SECRET?.trim() || undefined,
       number: env.CAPCOM_NUMBER?.trim() || undefined,
     },
+    claudeAccounts: {
+      ompBin: env.VIBREAD_OMP_BIN?.trim() || "omp",
+      home: resolve(dataDir, "claude-accounts"),
+      brokerPort: parseBrokerPort(env.VIBREAD_CLAUDE_BROKER_PORT),
+    },
   };
 }
 
 function parsePort(raw: string | undefined): number {
   const port = raw === undefined ? 8787 : Number(raw);
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`invalid PORT: ${raw ?? ""}`);
+  return port;
+}
+
+function parseBrokerPort(raw: string | undefined): number {
+  const port = raw === undefined ? 18765 : Number(raw);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error(`invalid VIBREAD_CLAUDE_BROKER_PORT: ${raw ?? ""}`);
   return port;
 }
 

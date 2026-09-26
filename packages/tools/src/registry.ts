@@ -84,6 +84,46 @@ async function appHex(store: MissionStore, revision: Revision): Promise<string> 
 }
 
 /**
+ * RETRO for one revision (PLAN §5.4): PENDING until EECOM/GUIDO/FIDO/FAO are GO; SKIPPED when no reviewer or Claude isn't
+ * connected; a reviewer crash is NO-GO. Replaces the revision's RETRO report and records a timeline event.
+ */
+export async function reviewRevision(input: {
+  store: MissionStore;
+  mission: Mission;
+  n: number;
+  review?: RegistryHooks["review"];
+  signal?: AbortSignal;
+}): Promise<Revision> {
+  const { store, mission, n, review, signal } = input;
+  const revision = await requireRevision(store, mission.id, n);
+  let retro: ConsoleReport;
+  if (!deterministicGo(revision.results.reports)) {
+    retro = statusReport("RETRO", "PENDING", "The independent review runs once every other console is GO.", revision.hash);
+  } else if (!review) {
+    retro = statusReport("RETRO", "SKIPPED", "No independent reviewer is configured.", revision.hash);
+  } else {
+    try {
+      retro = await review({ mission, revision, ...(signal ? { signal } : {}) });
+    } catch (error) {
+      retro = isClaudeNotConnected(error)
+        ? statusReport("RETRO", "SKIPPED", errorMessage(error), revision.hash)
+        : { ...statusReport("RETRO", "PENDING", "The independent review failed.", revision.hash), verdict: "NO-GO", findings: [crashFinding("RETRO", "independent review", error)] };
+    }
+  }
+  const saved = await store.saveResults(mission.id, n, { reports: [...revision.results.reports.filter((r) => r.console !== "RETRO"), retro] });
+  await store.appendEvent({
+    missionId: mission.id,
+    channel: "system",
+    actor: { kind: "agent", id: "retro", name: "RETRO reviewer", channel: "system" },
+    kind: "console.report",
+    text: `${CONSOLE_LABELS.RETRO} (RETRO): ${retro.verdict} — ${retro.summary}`,
+    revision: n,
+    data: { console: "RETRO", verdict: retro.verdict, reasons: retro.evidence?.reasons },
+  });
+  return saved;
+}
+
+/**
  * The ViBread tool surface (PLAN §5.2). Defined once; adapted to AI SDK tools (ai-sdk.ts) and to MCP by Channels from
  * `list()`. Engines are imported inside handlers so one broken engine only breaks the tools that need it.
  */
@@ -92,31 +132,7 @@ export function createToolRegistry(deps: { store: MissionStore; pipeline: Pipeli
 
   async function evaluateWithReview(mission: Mission, n: number, signal?: AbortSignal): Promise<Revision> {
     await pipeline.evaluate(mission.id, n);
-    let revision = await requireRevision(store, mission.id, n);
-    let retro: ConsoleReport;
-    if (!deterministicGo(revision.results.reports)) {
-      retro = statusReport("RETRO", "PENDING", "The independent review runs once every other console is GO.", revision.hash);
-    } else if (!hooks.review) {
-      retro = statusReport("RETRO", "SKIPPED", "No independent reviewer is configured.", revision.hash);
-    } else {
-      try {
-        retro = await hooks.review({ mission, revision, ...(signal ? { signal } : {}) });
-      } catch (error) {
-        retro = isClaudeNotConnected(error)
-          ? statusReport("RETRO", "SKIPPED", errorMessage(error), revision.hash)
-          : { ...statusReport("RETRO", "PENDING", "The independent review failed.", revision.hash), verdict: "NO-GO", findings: [crashFinding("RETRO", "independent review", error)] };
-      }
-    }
-    revision = await store.saveResults(mission.id, n, { reports: [...revision.results.reports.filter((r) => r.console !== "RETRO"), retro] });
-    await store.appendEvent({
-      missionId: mission.id,
-      channel: "system",
-      actor: { kind: "agent", id: "retro", name: "RETRO reviewer", channel: "system" },
-      kind: "console.report",
-      text: `${CONSOLE_LABELS.RETRO} (RETRO): ${retro.verdict} — ${retro.summary}`,
-      revision: n,
-      data: { console: "RETRO", verdict: retro.verdict, reasons: retro.evidence?.reasons },
-    });
+    const revision = await reviewRevision({ store, mission, n, ...(hooks.review ? { review: hooks.review } : {}), ...(signal ? { signal } : {}) });
     await hooks.onEvaluated?.(mission.id, revision);
     return revision;
   }

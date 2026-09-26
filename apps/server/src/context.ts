@@ -5,6 +5,7 @@ import type { ServerAuth } from "./auth.js";
 import { createAgentRuntime } from "./agents/index.js";
 import { createServerAuth } from "./auth.js";
 import { loadConfig, type ServerConfig } from "./config.js";
+import { createClaudeAccountService, type ClaudeAccountService } from "./claude/accounts.js";
 import { openDatabase, type DB, type OpenDatabase } from "./db/index.js";
 import { createMissionMachine, type MissionMachine, type MissionEvent } from "./services/machine.js";
 import { createApprovalBroker } from "./services/approvals.js";
@@ -29,6 +30,7 @@ export interface AppContext {
   tools: ToolRegistry;
   runtime: AgentRuntime;
   messages: MessageStore;
+  claudeAccounts: ClaudeAccountService;
   operator(): Promise<{ id: string; name: string }>;
 }
 
@@ -48,7 +50,8 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
   const tokens = createTokenService({ db: opened.db, sqlite: opened.sqlite });
   const links = createLinkService({ db: opened.db, sqlite: opened.sqlite });
   const messages = createMessageStore({ db: opened.db, sqlite: opened.sqlite });
-  const runtime = createAgentRuntime({ config, log, store, broker, machine, messages });
+  const claudeAccounts = createClaudeAccountService({ config, db: opened.db, log });
+  const runtime = createAgentRuntime({ config, log, store, broker, machine, messages, claudeAccounts });
   const ctx: AppContext = {
     config,
     log,
@@ -62,11 +65,19 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
     tools: runtime.tools,
     runtime,
     messages,
+    claudeAccounts,
     async operator() {
       ensureOperatorUser(opened.sqlite);
       return { id: "operator", name: "Operator" };
     },
   };
   const auth = createServerAuth(config, opened.db).auth;
-  return { ctx, auth, close: opened.close };
+  return {
+    ctx,
+    auth,
+    close() {
+      void claudeAccounts.stop();
+      opened.close();
+    },
+  };
 }

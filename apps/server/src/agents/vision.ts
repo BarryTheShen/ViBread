@@ -28,9 +28,9 @@ const MAX_EDGE = 1568;
 export function createPhotoChecker(deps: { models: AgentModels; store: MissionStore; log: Logger }) {
   return {
     async check(input: { missionId: string; step: number; jpeg: Uint8Array }): Promise<PhotoCheckResult> {
-      const model = deps.models.fast();
       const mission = await deps.store.getMission(input.missionId);
       if (!mission) throw new ToolInputError(`Mission ${input.missionId} does not exist.`, 404);
+      const { model, modelId } = await deps.models.fast(mission.ownerId);
       const n = mission.releasedRevision ?? mission.currentRevision;
       const revision = n === undefined ? null : await deps.store.getRevision(input.missionId, n);
       if (!revision) throw new ToolInputError("This mission has no design to compare the photo with.");
@@ -74,7 +74,7 @@ export function createPhotoChecker(deps: { models: AgentModels; store: MissionSt
       const known = new Set(expected.parts.map((p) => p.id));
       const answers = result.output.answers.filter((a) => known.has(a.part));
       for (const id of known) if (!answers.some((a) => a.part === id)) answers.push({ part: id, status: "unknown", note: "Not assessed in the photo." });
-      const check: PhotoCheckResult = { step: step.n, answers, summary: result.output.summary, advisory: true, model: deps.models.fastId };
+      const check: PhotoCheckResult = { step: step.n, answers, summary: result.output.summary, advisory: true, model: modelId };
       // Persisting (results.photos + "photo.checked" timeline event) is the photo route's job (ServerCore).
       deps.log.info({ missionId: input.missionId, step: step.n, revision: revision.n }, "photo checked");
       return check;

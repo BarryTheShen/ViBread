@@ -138,6 +138,16 @@ export const imessageLinks = sqliteTable("imessage_links", {
   redeemedAt: timestamp("redeemedAt"),
 });
 
+/** PLAN item 16: a ViBread user's connected Claude account (credential lives in the oh-my-pi auth broker's own store). */
+export const claudeAccounts = sqliteTable("claude_accounts", {
+  userId: text("userId").primaryKey(),
+  credentialId: integer("credentialId").notNull(),
+  identityKey: text("identityKey").notNull(),
+  email: text("email"),
+  orgName: text("orgName"),
+  connectedAt: timestamp("connectedAt").notNull(),
+});
+
 
 // Better Auth's Drizzle adapter requires these exact model keys.
 export const user = sqliteTable("user", {
@@ -328,6 +338,7 @@ export const dbSchema = {
   events,
   apiTokens,
   imessageLinks,
+  claudeAccounts,
   user,
   session,
   account,

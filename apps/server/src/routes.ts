@@ -8,6 +8,7 @@ import type {
   CompileResult,
   Mission,
   PermissionMode,
+  ReleaseRequest,
   Revision,
   RevisionResults,
 } from "@vibread/core";
@@ -96,6 +97,45 @@ export function mountApi(app: Express, ctx: AppContext): void {
     }
     const view = await ctx.missions.decide(String(req.params.approvalId), body.decision, { kind: "human", id: user.id, name: user.name, channel: "web" });
     res.json(view);
+  });
+  router.post("/missions/:id/confirm", async (req, res) => {
+    const missionId = String(req.params.id);
+    const mission = await ctx.store.getMission(missionId);
+    if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
+    const phase = await ctx.machine.phase(missionId);
+    if (phase !== "LAUNCH") throw httpError(409, "bad_phase", "mission can only be confirmed after launch");
+    const next = await ctx.machine.send(missionId, { type: "USER_CONFIRMED" });
+    if (next !== "DONE") throw httpError(409, "bad_phase", "mission could not be confirmed from its current phase");
+    const actor = actorFor(res, ctx);
+    await ctx.store.appendEvent({
+      missionId,
+      channel: actor.channel,
+      actor,
+      kind: "mission.confirmed",
+      text: "Mission complete confirmed",
+      revision: mission.currentRevision,
+      data: { phase: next },
+    });
+    res.json(await ctx.missions.detail(missionId));
+  });
+
+  router.post("/missions/:id/release", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const body = req.body as Partial<ReleaseRequest>;
+    const revision = parsePositiveInt(body.revision);
+    if (body.acknowledgeMissingReview !== undefined && typeof body.acknowledgeMissingReview !== "boolean") {
+      throw httpError(400, "INVALID_ACKNOWLEDGEMENT", "acknowledgeMissingReview must be a boolean");
+    }
+    const missionId = String(req.params.id);
+    const mission = await ctx.store.getMission(missionId);
+    if (!mission || mission.ownerId !== user.id) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
+    const detail = await ctx.runtime.release({
+      missionId,
+      revision,
+      actor: { kind: "human", id: user.id, name: user.name, channel: "web" },
+      ...(body.acknowledgeMissingReview ? { acknowledgeMissingReview: true } : {}),
+    });
+    res.json(detail);
   });
   router.get("/missions/:id/build", async (req, res) => {
     res.json(await ctx.missions.build(String(req.params.id)));
@@ -190,6 +230,10 @@ export function mountApi(app: Express, ctx: AppContext): void {
       revision: revision.n,
       data: result,
     });
+    const phase = await ctx.machine.phase(missionId);
+    if (body.kind === "selftest" && (phase === "ASSEMBLE" || phase === "DEBUG")) {
+      await ctx.machine.send(missionId, { type: "VERIFY_STARTED" });
+    }
     await ctx.machine.send(missionId, result.verdict === "pass" ? { type: "VERIFY_PASSED" } : { type: "VERIFY_FAILED" });
     res.json(result);
   });
@@ -217,6 +261,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
       imessage: { linked: Boolean(await ctx.links.handleForUser(user.id)), handle: await ctx.links.handleForUser(user.id), capcomNumber: ctx.config.capcom.number },
       claudeCode: { tokens: await ctx.tokens.list(user.id) },
       mcpUrl: `${ctx.config.publicUrl}/mcp`,
+      claude: await ctx.claudeAccounts.view(user.id),
     });
   });
   router.post("/connections/tokens", async (req, res) => {
@@ -240,6 +285,27 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const code = await ctx.links.createCode(user.id);
     const link = ctx.config.capcom.number ? `sms:${ctx.config.capcom.number}?body=${encodeURIComponent(code.code)}` : undefined;
     res.status(201).json({ ...code, capcomNumber: ctx.config.capcom.number, link });
+  });
+  // PLAN item 16 — connect your Claude account (oh-my-pi auth broker + gateway; see src/claude/accounts.ts).
+  router.post("/connections/claude/start", async (_req, res) => {
+    const user = actorUser(res, ctx);
+    res.status(201).json(await ctx.claudeAccounts.start(user.id));
+  });
+  router.post("/connections/claude/complete", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const body = req.body as { loginId?: unknown; code?: unknown };
+    if (typeof body.loginId !== "string" || typeof body.code !== "string") throw httpError(400, "INVALID_REQUEST", "loginId and code are required");
+    res.json(await ctx.claudeAccounts.complete(user.id, body.loginId, body.code));
+  });
+  router.post("/connections/claude/cancel", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const body = req.body as { loginId?: unknown };
+    if (typeof body.loginId === "string") await ctx.claudeAccounts.cancel(user.id, body.loginId);
+    res.json(await ctx.claudeAccounts.view(user.id));
+  });
+  router.delete("/connections/claude", async (_req, res) => {
+    const user = actorUser(res, ctx);
+    res.json(await ctx.claudeAccounts.disconnect(user.id));
   });
   app.use("/api", router);
 }
