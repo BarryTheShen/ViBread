@@ -2,7 +2,7 @@
 // preload: it needs nothing beyond standard web APIs (Web Serial included).
 import { contextBridge, ipcRenderer, type IpcRendererEvent } from "electron";
 
-const INVOKE = ["setup:retry", "setup:open-logs", "apikey:status", "apikey:save", "apikey:clear", "phone:info", "window:close", "shell:open"];
+const INVOKE = ["setup:retry", "setup:open-logs", "apikey:status", "apikey:save", "apikey:clear", "phone:info", "window:close"];
 const EVENTS = ["setup:progress", "setup:error"];
 
 contextBridge.exposeInMainWorld("vibread", {

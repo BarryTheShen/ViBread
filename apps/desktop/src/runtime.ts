@@ -1,7 +1,9 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, type WriteStream } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { app } from "electron";
+import { serverPath } from "./path-env.js";
 
 export interface DesktopPaths {
   /** Staged server tree (resources/runtime when packaged, apps/desktop/.stage/runtime in development). */
@@ -11,6 +13,8 @@ export interface DesktopPaths {
   data: string;
   toolchain: string;
   logs: string;
+  /** The user's login-shell PATH, resolved once at startup (see loginShellPath). */
+  userPath?: string;
 }
 
 export function desktopPaths(): DesktopPaths {
@@ -33,10 +37,9 @@ const DROP_ENV = /^(ELECTRON_|NODE_OPTIONS$|NODE_PATH$|NODE_ENV$|npm_|INIT_CWD$|
 export function childEnv(paths: DesktopPaths, extra: Record<string, string | undefined>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const [key, value] of Object.entries(process.env)) if (!DROP_ENV.test(key)) env[key] = value;
-  if (process.platform !== "win32") {
-    // Finder/desktop launches get a bare PATH; ngspice (optional, SPICE checks) usually lives in Homebrew or /usr/bin.
-    env.PATH = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"].join(":");
-  }
+  // VIBREAD_OMP_BIN passes through unchanged; otherwise `omp` resolves on this PATH (login shell + common dirs).
+  const pathKey = process.platform === "win32" ? (Object.keys(env).find((key) => key.toUpperCase() === "PATH") ?? "Path") : "PATH";
+  env[pathKey] = serverPath(paths.userPath ?? env[pathKey], homedir(), process.platform);
   const exe = process.platform === "win32" ? ".exe" : "";
   env.DATA_DIR = paths.data;
   env.VIBREAD_ARDUINO_CLI = join(paths.toolchain, "bin", `arduino-cli${exe}`);

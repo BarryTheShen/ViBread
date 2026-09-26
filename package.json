@@ -13,7 +13,7 @@
   "scripts": {
     "setup:toolchain": "node scripts/setup-toolchain.mjs",
     "test": "vitest run",
-    "typecheck": "tsc -p tsconfig.json && npm run typecheck -w @vibread/web",
+    "typecheck": "tsc -p tsconfig.json && npm run typecheck -w @vibread/web && npm run typecheck -w @vibread/desktop",
     "dev:server": "npm run dev -w @vibread/server",
     "dev:web": "npm run dev -w @vibread/web",
     "build": "npm run build -w @vibread/web",
