@@ -13,6 +13,7 @@ import { CHAT_MAX_WIDTH } from "../chat/MissionChat.js";
 import { ErrorOrSignIn } from "../components/SignIn.js";
 import { PartsChip } from "../inventory/PartsChip.js";
 import { useDefaultMode } from "../lib/prefs.js";
+import { LORA_FONT } from "../theme.js";
 
 const DRAFT_BRIEF = "vibread.draft.brief";
 
@@ -65,7 +66,7 @@ export default function NewMissionPage() {
     <Box sx={{ height: "100%", minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
       <Box component="main" sx={{ flex: 1, display: "flex", flexDirection: "column", justifyContent: "center", px: 3, py: 6 }}>
         <Box sx={{ width: "100%", maxWidth: CHAT_MAX_WIDTH, mx: "auto" }}>
-          <Typography variant="h1" component="h1" sx={{ textAlign: "center", mb: 3, typography: "reply", fontSize: { xs: "1.75rem", md: "2.25rem" } }}>
+          <Typography variant="h1" component="h1" sx={{ textAlign: "center", mb: 3, fontFamily: LORA_FONT, fontWeight: 500, letterSpacing: "-0.01em", fontSize: { xs: "1.75rem", md: "2.25rem" } }}>
             {greeting(new Date().getHours())} What are we building?
           </Typography>
           <Composer
