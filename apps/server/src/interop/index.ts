@@ -375,6 +375,15 @@ async function operatorPassword(auth: Auth<BetterAuthOptions>, ctx: AppContext):
 /** Mount JSON contracts consumed by the SPA OAuth pages. */
 function mountOAuthApi(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
   app.use("/api/oauth", express.json());
+  app.get("/api/oauth/providers", (_request, response) => {
+    response.json({
+      singleOperator: ctx.config.singleOperator,
+      providers: [
+        ...(ctx.config.google ? ["google" as const] : []),
+        ...(ctx.config.github ? ["github" as const] : []),
+      ],
+    });
+  });
   app.get("/api/oauth/client", async (request, response, next) => {
     try {
       const clientId = typeof request.query.client_id === "string" ? request.query.client_id : "";
@@ -685,7 +694,8 @@ function a2aUserBuilder(): UserBuilder {
 function a2aScopeMiddleware(request: Request, response: Response, next: () => void): void {
   const body = request.body && typeof request.body === "object" ? request.body as { method?: unknown; id?: unknown } : {};
   const method = typeof body.method === "string" ? body.method : "";
-  const required = method === "message/send" || method === "message/stream" || method === "SendMessage" || method === "SendMessageStream" || method === "tasks/cancel" || method === "CancelTask" ? "circuits:write" : "circuits:read";
+  const readMethods = new Set(["tasks/get", "GetTask", "tasks/list", "ListTasks", "tasks/pushNotificationConfig/get", "GetTaskPushNotificationConfig", "tasks/pushNotificationConfig/list", "ListTaskPushNotificationConfigs", "agent/getAuthenticatedExtendedCard", "GetExtendedAgentCard", "GetAgentCard"]);
+  const required = readMethods.has(method) ? "circuits:read" : "circuits:write";
   if (!requestedScopes(request).includes(required)) {
     response.setHeader("WWW-Authenticate", `Bearer error="insufficient_scope", scope="${required}"`);
     response.status(403).json({ jsonrpc: "2.0", id: body.id ?? null, error: { code: -32003, message: "insufficient_scope" } });
