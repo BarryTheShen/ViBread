@@ -151,6 +151,7 @@ export function MissionChat({
   adapter,
   brief,
   hasDesign,
+  canChat,
   designChannel,
   isNewMission,
   onApprovalIdsChange,
@@ -161,6 +162,8 @@ export function MissionChat({
   brief: string;
   /** Follow-up suggestions only make sense once a design exists. */
   hasDesign: boolean;
+  /** A Claude credential exists, so the agent can answer. */
+  canChat: boolean;
   /** Channel of the latest revision author (who designed it), for the empty-chat card. */
   designChannel?: Channel;
   /** Phase BRIEF/CLARIFY and no revision yet: the only case where the brief is auto-sent (history must also be empty). */
@@ -173,8 +176,8 @@ export function MissionChat({
       initialActiveConversationId={missionId}
       initialConversations={[{ id: missionId, title: "Mission chat" }]}
       partRenderers={partRenderers}
-      features={{ conversationList: false, conversationHeader: false, attachments: false, suggestions: hasDesign, scrollToBottom: true }}
-      suggestions={hasDesign ? SUGGESTIONS : []}
+      features={{ conversationList: false, conversationHeader: false, attachments: false, suggestions: hasDesign && canChat, scrollToBottom: true }}
+      suggestions={hasDesign && canChat ? SUGGESTIONS : []}
       slots={{ messageAvatar: null, messageInlineMeta: InlineMetaWithRecording, ...(hasDesign ? { emptyState: DesignOriginNotice } : {}) }}
       slotProps={{
         emptyState: { channel: designChannel },
