@@ -2,8 +2,8 @@
   "name": "ViBread",
   "short_name": "ViBread",
   "display": "standalone",
-  "background_color": "#0b1118",
-  "theme_color": "#0b1118",
+  "background_color": "#0E1719",
+  "theme_color": "#0E1719",
   "icons": [
     {
       "src": "/icon.svg",

@@ -219,8 +219,8 @@ function PhonesSection() {
   return (
     <Section title="Phones" id="phones-heading">
       <Typography sx={{ color: "text.secondary" }}>
-        Phones on your Wi-Fi open Build Mode by scanning the QR code in the Steps tab. A paired phone can only follow build steps and
-        send photo checks.
+        Phones on your Wi-Fi open Build Mode by scanning the QR code in the Build steps view. A paired phone can continue build steps,
+        scan parts, and send photo checks.
       </Typography>
       <Typography sx={{ fontWeight: 600 }}>
         {list.length === 0
@@ -511,7 +511,8 @@ export default function SettingsPage() {
   const providers = useProviders();
   const session = authClient.useSession();
   const signedOut = providers.data !== undefined && !providers.data.singleOperator && !session.isPending && !session.data?.user;
-  const close = () => (window.history.length > 1 ? navigate(-1) : navigate("/"));
+  const canGoBackInApp = typeof window.history.state?.idx === "number" && window.history.state.idx > 0;
+  const close = () => (canGoBackInApp ? navigate(-1) : navigate("/"));
   return (
     <Dialog open onClose={close} fullWidth maxWidth="md" scroll="paper" aria-labelledby="settings-title">
       <DialogTitle id="settings-title" sx={{ display: "flex", alignItems: "center", gap: 1 }}>

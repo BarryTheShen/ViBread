@@ -165,17 +165,19 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     };
   }, [missions.data]);
   const claudeReady = connections.data ? connections.data.claude.using !== "none" : undefined;
+  const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.platform);
+  const newMissionShortcut = isMac ? "⌘N" : "Ctrl+N";
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
+      if ((isMac ? event.metaKey : event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         navigate("/");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [navigate]);
+  }, [isMac, navigate]);
 
   return (
     <Box
@@ -209,7 +211,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <IconButton component={RouterLink} to="/" color="primary" aria-label="New mission" sx={{ width: "100%", border: 1, borderColor: "primary.main", borderRadius: 2 }}><AddIcon /></IconButton>
           </Tooltip>
         ) : (
-          <Button component={RouterLink} to="/" variant="contained" color="primary" startIcon={<AddIcon />} fullWidth sx={{ justifyContent: "flex-start", px: 1.75 }}>New mission <Typography component="span" sx={{ ml: "auto", opacity: 0.7, fontSize: "0.75rem", fontWeight: 500 }}>⌘N</Typography></Button>
+          <Button component={RouterLink} to="/" variant="contained" color="primary" startIcon={<AddIcon />} fullWidth sx={{ justifyContent: "flex-start", px: 1.75 }}>New mission <Typography component="span" sx={{ ml: "auto", opacity: 0.7, fontSize: "0.75rem", fontWeight: 500 }}>{newMissionShortcut}</Typography></Button>
         )}
       </Box>
 
@@ -254,7 +256,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           </Tooltip>
         )}
         <SidebarButton collapsed={collapsed} label="Settings" icon={<SettingsOutlinedIcon />} to="/settings" active={location.pathname === "/settings"} />
-        {!collapsed && <Typography variant="caption" sx={{ px: 1, color: "text.secondary" }}>⌘N new mission</Typography>}
+        {!collapsed && <Typography variant="caption" sx={{ px: 1, color: "text.secondary" }}>{newMissionShortcut} new mission</Typography>}
       </Box>
     </Box>
   );

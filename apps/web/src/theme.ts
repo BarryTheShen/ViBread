@@ -39,48 +39,48 @@ declare module "@mui/material/Typography" {
 }
 
 /**
- * Theme tokens from the redesign plan. Keep all UI colours here so feature slices can use MUI's palette rather than
- * copying a dark-console palette into their own components.
+ * Signal Teal tokens. Keep all UI colours here so feature slices use the shared palette instead of copying old warm
+ * colours into their own components.
  */
 export const THEME_TOKENS = {
   light: {
-    main: "#FAF9F5",
-    sidebar: "#F0EEE6",
+    main: "#F4F7F7",
+    sidebar: "#E8EFEE",
     cards: "#FFFFFF",
-    text: "#141413",
-    secondaryText: "#6B6A63",
-    primary: "#AD4F2D",
+    text: "#12201F",
+    secondaryText: "#4B605E",
+    primary: "#0F766E",
     primaryText: "#FFFFFF",
-    link: "#AD4F2D",
-    accent: "#D97757",
-    success: "#5E7046",
-    info: "#3B6A99",
-    warning: "#8A5A0B",
-    error: "#B3432F",
-    inputBorder: "#8F8D85",
-    divider: "#E8E6DC",
-    canvas: "#262624",
-    code: "#F0EEE6",
+    link: "#0B5F5A",
+    accent: "#0E7490",
+    success: "#166534",
+    info: "#1D4ED8",
+    warning: "#9A3412",
+    error: "#B91C1C",
+    inputBorder: "#6B8582",
+    divider: "#D3DFDD",
+    canvas: "#0B171A",
+    code: "#D9E9E6",
     qr: "#FFFFFF",
   },
   dark: {
-    main: "#262624",
-    sidebar: "#1F1E1D",
-    cards: "#30302E",
-    text: "#FAF9F5",
-    secondaryText: "#B0AEA5",
-    primary: "#D97757",
-    primaryText: "#141413",
-    link: "#E3896A",
-    accent: "#D97757",
-    success: "#9DB47F",
-    info: "#8DB6DD",
-    warning: "#E0B04A",
-    error: "#E4806A",
-    inputBorder: "#7A7973",
-    divider: "#3D3D3A",
-    canvas: "#1F1E1D",
-    code: "#1F1E1D",
+    main: "#0E1719",
+    sidebar: "#142124",
+    cards: "#192B2E",
+    text: "#F0FAF9",
+    secondaryText: "#B5CBC8",
+    primary: "#2DD4BF",
+    primaryText: "#062A28",
+    link: "#5EEAD4",
+    accent: "#22D3EE",
+    success: "#86EFAC",
+    info: "#93C5FD",
+    warning: "#FCD34D",
+    error: "#FDA4AF",
+    inputBorder: "#6B8582",
+    divider: "#2A3E41",
+    canvas: "#0B171A",
+    code: "#112629",
     qr: "#FFFFFF",
   },
 } as const;
@@ -91,7 +91,7 @@ export const INTER_FONT = '"Inter Variable", Inter, "Helvetica Neue", Arial, san
 export const LORA_FONT = 'Lora, Georgia, "Times New Roman", serif';
 
 const focusRing = {
-  outline: "3px solid var(--mui-palette-primary-main)",
+  outline: "3px solid var(--mui-palette-input-main)",
   outlineOffset: 2,
 } as const;
 
@@ -134,8 +134,8 @@ const darkPalette = {
 };
 
 /**
- * Warm, border-led ViBread theme. MUI's colorSchemes keeps the two palettes in one theme and ThemeProvider's default
- * system mode follows prefers-color-scheme until the user chooses Light or Dark in Settings.
+ * Signal Teal, border-led ViBread theme. MUI's colorSchemes keeps the two palettes in one theme and ThemeProvider's
+ * default system mode follows prefers-color-scheme until the user chooses Light or Dark in Settings.
  */
 export function createMissionTheme(reducedMotion: boolean): Theme {
   return createTheme({
@@ -174,7 +174,7 @@ export function createMissionTheme(reducedMotion: boolean): Theme {
             : {}),
         },
       },
-      // MUI resets ButtonBase's outline, so restore a visible primary-colour ring on every keyboard-focusable control.
+      // MUI resets ButtonBase's outline, so restore a visible input-token focus ring on every keyboard-focusable control.
       MuiButtonBase: { defaultProps: { disableRipple: reducedMotion }, styleOverrides: { root: { "&.Mui-focusVisible": focusRing } } },
       MuiButton: {
         styleOverrides: {
@@ -188,9 +188,9 @@ export function createMissionTheme(reducedMotion: boolean): Theme {
           root: {
             borderRadius: 8,
             "& .MuiOutlinedInput-notchedOutline": { borderColor: "var(--mui-palette-input-main)" },
-            "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "var(--mui-palette-primary-main)" },
+            "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "var(--mui-palette-input-main)" },
             "&.Mui-focused": { outline: focusRing.outline, outlineOffset: 2 },
-            "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "var(--mui-palette-primary-main)", borderWidth: 2 },
+            "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "var(--mui-palette-input-main)", borderWidth: 2 },
           },
         },
       },
