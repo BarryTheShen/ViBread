@@ -65,6 +65,11 @@ function firstRailHole(profile: BreadboardProfile, rail: "T+" | "T-"): HoleId {
   if (position === undefined) throw new Error(`Breadboard ${profile.id} has no rail positions`);
   return `${rail}${position}`;
 }
+function railHoleAtRow(profile: BreadboardProfile, rail: "T+" | "T-", row: number): HoleId {
+  const position = [...profile.railPositions].sort((a, b) => Math.abs(a - row) - Math.abs(b - row) || a - b)[0];
+  if (position === undefined) throw new Error(`Breadboard ${profile.id} has no rail positions`);
+  return `${rail}${position}`;
+}
 
 function endpointKey(endpoint: Endpoint): string {
   return "hole" in endpoint ? `hole:${endpoint.hole}` : `board:${endpoint.board}`;
@@ -182,9 +187,10 @@ function addJumper(ctx: AllocationContext, from: Endpoint, to: Endpoint, net: Ne
 }
 
 function addRailJumper(ctx: AllocationContext, strip: HoleId, net: NetId): void {
+  const row = Number.parseInt(strip.slice(1), 10);
   const kind = ctx.netKinds.get(net);
-  if (kind === "power") addJumper(ctx, { hole: firstRailHole(ctx.profile, "T+") }, { hole: strip }, net, 2);
-  else if (kind === "ground") addJumper(ctx, { hole: strip }, { hole: firstRailHole(ctx.profile, "T-") }, net, 2);
+  if (kind === "power") addJumper(ctx, { hole: railHoleAtRow(ctx.profile, "T+", row) }, { hole: strip }, net, 2);
+  else if (kind === "ground") addJumper(ctx, { hole: strip }, { hole: railHoleAtRow(ctx.profile, "T-", row) }, net, 2);
 }
 
 function boardPinsForNet(ctx: AllocationContext, net: NetId): string[] {

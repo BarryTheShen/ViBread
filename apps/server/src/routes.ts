@@ -102,17 +102,20 @@ export function mountApi(app: Express, ctx: AppContext): void {
   router.post("/missions/:id/build/step", async (req, res) => {
     const missionId = String(req.params.id);
     const n = parsePositiveInt((req.body as { n?: unknown }).n);
-    const revision = await ctx.store.getRevision(missionId);
+    const before = await ctx.missions.build(missionId);
     await ctx.store.appendEvent({
       missionId,
       channel: "web",
       actor: actorFor(res, ctx),
       kind: "build.step",
       text: `Step ${n} done`,
-      revision: revision?.n,
+      revision: before.revision,
       data: { n },
     });
     await ctx.machine.send(missionId, { type: "BUILD_STEP", n });
+    if (before.steps.length > 0 && n >= before.steps.length) {
+      await ctx.machine.send(missionId, { type: "BUILD_DONE" });
+    }
     res.json(await ctx.missions.build(missionId));
   });
   router.post("/missions/:id/bench/firmware", async (req, res) => {

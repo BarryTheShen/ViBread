@@ -53,6 +53,10 @@ describe("firmware compiler", () => {
 
   it("renders and compiles the launch self-test within Uno budgets", async () => {
     const source = renderBenchFirmware(launchPlan);
+    expect(source).toContain('PSTR("led1")');
+    expect(source).toContain('PSTR("btn0-press")');
+    expect(source).toContain('PSTR("btn1-release")');
+    expect(source).toContain('PSTR("pressed")');
     expect(source).toContain('"which-led"');
     const result = await compileBenchFirmware(launchPlan);
     expect(result.ok).toBe(true);

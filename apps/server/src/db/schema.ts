@@ -74,6 +74,20 @@ export const approvals = sqliteTable(
     actionIdx: uniqueIndex("approvals_mission_revision_action_uidx").on(table.missionId, table.revisionHash, table.actionHash),
   }),
 );
+export const approvalGrants = sqliteTable(
+  "approval_grants",
+  {
+    missionId: text("missionId").notNull(),
+    actionClass: text("actionClass").notNull(),
+    action: text("action").notNull(),
+    mode: text("mode").notNull(),
+    createdAt: timestamp("createdAt").notNull(),
+  },
+  (table) => ({
+    pk: primaryKey({ columns: [table.missionId, table.actionClass, table.action] }),
+  }),
+);
+
 
 export const runs = sqliteTable("runs", {
   id: text("id").primaryKey(),
@@ -177,7 +191,7 @@ export const dbSchema = {
   revisions,
   messages,
   approvals,
-  runs,
+  approvalGrants,
   artifacts,
   events,
   apiTokens,

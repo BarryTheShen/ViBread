@@ -120,9 +120,9 @@ export class PersistentMissionMachine implements MissionMachine {
         channel: "system",
         actor: { kind: "system", id: "machine", channel: "system" },
         kind: "phase.changed",
-        text: `${event.type}: ${before} → ${after}`,
-        revision: "revision" in event ? event.revision : undefined,
-        data: event,
+        text: machineEventText(event, before, after),
+        revision: "revision" in event ? event.revision : mission.currentRevision,
+        data: { event, from: before, to: after },
       });
     }
     return after;
@@ -151,6 +151,38 @@ export class PersistentMissionMachine implements MissionMachine {
   private phaseFor(value: unknown): MissionPhase {
     if (typeof value !== "string") throw new Error("invalid mission machine state");
     return value as MissionPhase;
+  }
+}
+
+function machineEventText(event: MissionEvent, before: MissionPhase, after: MissionPhase): string {
+  switch (event.type) {
+    case "BRIEF_RECEIVED":
+      return "Brief received — clarify the mission";
+    case "NEEDS_CLARIFICATION":
+      return "More details needed before design";
+    case "DESIGN_STARTED":
+      return "Design work started";
+    case "DESIGN_READY":
+      return `Design r${event.revision} is ready for the Go/No-Go poll`;
+    case "RELEASED":
+      return `Design r${event.revision} released — time to build`;
+    case "BUILD_STEP":
+      return `Build step ${event.n} complete — continue assembly`;
+    case "BUILD_DONE":
+      return "Build finished — ready to test on the real board";
+    case "VERIFY_STARTED":
+      return "Physical verification started";
+    case "VERIFY_PASSED":
+      return "Self-test passed — ready to launch";
+    case "VERIFY_FAILED":
+      return "Houston, we have a problem — debugging";
+    case "FIX_PROPOSED":
+      return `Fix proposed for revision r${event.revision} — back to design`;
+    case "LAUNCHED":
+    case "USER_CONFIRMED":
+      return "Mission launched — circuit is ready";
+    default:
+      return `${before} → ${after}`;
   }
 }
 

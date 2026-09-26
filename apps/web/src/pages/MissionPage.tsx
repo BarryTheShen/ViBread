@@ -194,6 +194,7 @@ export default function MissionPage() {
                 adapter={adapter}
                 brief={m.brief}
                 hasDesign={m.currentRevision !== undefined}
+                isNewMission={m.phase === "BRIEF" && m.currentRevision === undefined}
                 onApprovalIdsChange={setChatApprovalIds}
               />
             </Box>

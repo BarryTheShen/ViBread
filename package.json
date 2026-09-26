@@ -17,8 +17,9 @@
     "dev:server": "npm run dev -w @vibread/server",
     "dev:web": "npm run dev -w @vibread/web",
     "build": "npm run build -w @vibread/web",
-    "start": "npm run start -w @vibread/server",
-    "postinstall": "npm install --prefix packages/assembly/schematic-runtime --no-audit --no-fund --install-links=false"
+    "start": "npm start -w @vibread/server",
+    "postinstall": "npm install --prefix packages/assembly/schematic-runtime --no-audit --no-fund --install-links=false",
+    "seed": "tsx --env-file-if-exists=.env scripts/seed-golden.ts"
   },
   "devDependencies": {
     "@types/node": "22.20.4",

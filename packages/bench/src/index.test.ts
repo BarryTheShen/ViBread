@@ -69,21 +69,21 @@ describe("bench self-test", () => {
     const result = await run([
       ...pins(),
       { t: "begin", test: "button.interactive" },
-      { t: "ask", id: "bp", test: "button.interactive", kind: "press-hold", part: "BTN1", choices: ["done"], timeoutMs: 20_000 },
+      { t: "ask", id: "btn0-press", test: "button.interactive", kind: "press-hold", part: "BTN1", choices: ["done"], timeoutMs: 20_000 },
       { t: "obs", test: "button.interactive", part: "BTN1", key: "pressed", v: 0 },
-      { t: "ask", id: "br", test: "button.interactive", kind: "release", part: "BTN1", choices: ["done"], timeoutMs: 20_000 },
+      { t: "ask", id: "btn0-release", test: "button.interactive", kind: "release", part: "BTN1", choices: ["done"], timeoutMs: 20_000 },
       { t: "obs", test: "button.interactive", part: "BTN1", key: "released", v: 1 },
       { t: "end", test: "button.interactive", status: "pass" },
       { t: "begin", test: "light.relative" },
       { t: "adc", pin: "A0", phase: "ambient", med: 800, min: 790, max: 810, n: 32 },
-      { t: "ask", id: "cover", test: "light.relative", kind: "cover", part: "LDR1", choices: ["done"], timeoutMs: 20_000 },
+      { t: "ask", id: "light0-cover", test: "light.relative", kind: "cover", part: "LDR1", choices: ["done"], timeoutMs: 20_000 },
       { t: "adc", pin: "A0", phase: "covered", med: 200, min: 190, max: 210, n: 32 },
-      { t: "ask", id: "uncover", test: "light.relative", kind: "uncover", part: "LDR1", choices: ["done"], timeoutMs: 20_000 },
+      { t: "ask", id: "light0-uncover", test: "light.relative", kind: "uncover", part: "LDR1", choices: ["done"], timeoutMs: 20_000 },
       { t: "end", test: "light.relative", status: "pass" },
       { t: "begin", test: "led.sequence" },
       ...[1, 2, 3, 4].map((n) => ({ t: "ask" as const, id: `led${n}`, test: "led.sequence" as const, kind: "which-led" as const, part: `LED${n}`, choices: ["1", "2", "3", "4"], timeoutMs: 20_000 })),
       { t: "end", test: "led.sequence", status: "pass" },
-    ], { bp: "done", br: "done", cover: "done", uncover: "done", led1: "1", led2: "2", led3: "3", led4: "4" });
+    ], { "btn0-press": "done", "btn0-release": "done", "light0-cover": "done", "light0-uncover": "done", led1: "1", led2: "2", led3: "3", led4: "4" });
     expect(result.verdict).toBe("pass");
     expect(calibrationMacros(result.calibration)).toEqual({ VB_CAL_LDR1_DARK: 500, VB_CAL_LDR1_HYST: 60 });
   });
@@ -111,10 +111,12 @@ describe("bench self-test", () => {
     const swapped = await run([
       ...pins(),
       { t: "begin", test: "led.sequence" },
-      { t: "ask", id: "two", test: "led.sequence", kind: "which-led", part: "LED2", choices: ["1", "2", "3", "4"], timeoutMs: 20_000 },
-      { t: "ask", id: "three", test: "led.sequence", kind: "which-led", part: "LED3", choices: ["1", "2", "3", "4"], timeoutMs: 20_000 },
+      { t: "ask", id: "led1", test: "led.sequence", kind: "which-led", part: "LED1", choices: ["1", "2", "3", "4", "none"], timeoutMs: 20_000 },
+      { t: "ask", id: "led2", test: "led.sequence", kind: "which-led", part: "LED2", choices: ["1", "2", "3", "4", "none"], timeoutMs: 20_000 },
+      { t: "ask", id: "led3", test: "led.sequence", kind: "which-led", part: "LED3", choices: ["1", "2", "3", "4", "none"], timeoutMs: 20_000 },
+      { t: "ask", id: "led4", test: "led.sequence", kind: "which-led", part: "LED4", choices: ["1", "2", "3", "4", "none"], timeoutMs: 20_000 },
       { t: "end", test: "led.sequence", status: "fail" },
-    ], { two: "3", three: "2" });
+    ], { led1: "1", led2: "3", led3: "2", led4: "4" });
     expect(swapped.diagnosis.candidates[0]?.cause).toBe("led-jumpers-swapped");
 
     const stuck = await run([{ t: "begin", test: "pins.readonly" }, { t: "stuck", pin: "D3", level: 1 }, { t: "end", test: "pins.readonly", status: "fail" }], {});

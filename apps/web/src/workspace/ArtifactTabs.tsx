@@ -18,6 +18,7 @@ import { SchematicTab } from "./tabs/SchematicTab.js";
 import { StepsTab } from "./tabs/StepsTab.js";
 import { TelemetryTab } from "./tabs/TelemetryTab.js";
 import { TestsTab } from "./tabs/TestsTab.js";
+import { TryItTab } from "./tabs/TryItTab.js";
 
 const CodeTab = lazy(() => import("./tabs/CodeTab.js").then((m) => ({ default: m.CodeTab })));
 
@@ -26,6 +27,7 @@ const TABS = [
   { id: "steps", label: "Steps" },
   { id: "code", label: "Code" },
   { id: "tests", label: "Tests" },
+  { id: "tryit", label: "Try it" },
   { id: "replay", label: "Replay" },
   { id: "telemetry", label: "Telemetry" },
   { id: "photo", label: "Photo" },
@@ -107,6 +109,7 @@ export function ArtifactTabs({ missionId, detail }: { missionId: string; detail:
             {tab === "steps" && <StepsTab missionId={missionId} revision={revision.data} released={revision.data.n === released} />}
             {tab === "code" && <CodeTab revision={revision.data} />}
             {tab === "tests" && <TestsTab revision={revision.data} />}
+            {tab === "tryit" && <TryItTab revision={revision.data} />}
             {tab === "replay" && <ReplayTab revision={revision.data} />}
             {tab === "telemetry" && <TelemetryTab missionId={missionId} revision={revision.data} />}
             {tab === "photo" && <PhotoTab revision={revision.data} />}

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Actor, ApprovalRequest, ToolRegistry } from "@vibread/core";
-import { ToolInputError, createAiToolset, errorMessage, isClaudeNotConnected, missionInventory } from "@vibread/tools";
+import { ToolInputError, createAiToolset, errorMessage, isClaudeNotConnected } from "@vibread/tools";
 import {
   InvalidToolApprovalError,
   InvalidToolApprovalSignatureError,
@@ -165,7 +165,7 @@ export function createRunManager(
 
     const result = streamText({
       model,
-      system: designSystemPrompt({ mission, inventory: await missionInventory(store, mission), revision: await store.getRevision(missionId) }),
+      system: designSystemPrompt({ mission, revision: await store.getRevision(missionId) }),
       messages: await convertToModelMessages(history, { tools }),
       tools,
       toolApproval: toolset.toolApproval,

@@ -73,15 +73,16 @@ describe("avr8js golden simulation", () => {
     expect(session.pinLevel("D13")).toBe(1);
   }, 30_000);
 
-  it("supports a SimSession serial round trip", () => {
+  it("supports a SimSession serial round trip without RX overrun", () => {
     const session = new SimSession({ circuit: moon.circuit, hex: echoHex });
     let received = "";
     session.onSerial((text) => { received += text; });
     session.run(30);
-    session.serialWrite("abc");
-    session.run(30);
+    session.serialWrite("first\nsecond\n");
+    session.run(100);
     expect(received).toContain("ready");
-    expect(received).toContain("abc");
+    expect(received).toContain("first");
+    expect(received).toContain("second");
   }, 30_000);
 });
 

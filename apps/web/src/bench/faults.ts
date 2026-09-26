@@ -1,52 +1,66 @@
-import type { Circuit, Net, Part, PinRef } from "@vibread/core";
+import { asBuiltCircuit, layoutBoard } from "@vibread/assembly/layout";
+import type { Circuit, Endpoint, Layout, Part } from "@vibread/core";
 import type { VirtualFault } from "./virtual.js";
 
-function cloneCircuit(circuit: Circuit): Circuit {
-  return structuredClone(circuit);
+function cloneLayout(layout: Layout): Layout {
+  return structuredClone(layout);
 }
 
-function partRefs(net: Net, partId: string): PinRef[] {
-  return net.pins.filter((pin) => pin.part === partId);
+function holesIn(endpoint: Endpoint): string[] {
+  return "hole" in endpoint ? [endpoint.hole] : [];
 }
 
-/** Apply one deliberate wiring mutant without changing the revision contract. */
-export function circuitWithFault(circuit: Circuit, fault: VirtualFault): Circuit {
-  const result = cloneCircuit(circuit);
-  if (fault === "none") return result;
+function groundHole(layout: Layout): string | undefined {
+  const groundJumper = layout.jumpers.find((jumper) => jumper.net.toLowerCase().includes("gnd") || jumper.net.toLowerCase().includes("ground"));
+  return groundJumper === undefined ? undefined : [...holesIn(groundJumper.from), ...holesIn(groundJumper.to)][0];
+}
+
+function mutateLayout(circuit: Circuit, source: Layout, fault: VirtualFault): Layout {
+  const layout = cloneLayout(source);
+  if (fault === "none") return layout;
 
   if (fault === "button-gnd") {
-    const button = result.parts.find((part) => part.module === "button");
-    const ground = result.nets.find((net) => net.kind === "ground");
-    if (!button || !ground) return result;
-    const source = result.nets.find((net) => partRefs(net, button.id).length > 0 && net.id !== ground.id);
-    const moved = source?.pins.find((pin) => pin.part === button.id);
-    if (!source || !moved) return result;
-    source.pins = source.pins.filter((pin) => pin !== moved);
-    if (!ground.pins.some((pin) => pin.part === moved.part && pin.pin === moved.pin)) ground.pins.push(moved);
-    return result;
+    const button = circuit.parts.find((part) => part.module === "button");
+    const target = groundHole(layout);
+    const placement = button === undefined ? undefined : layout.placements.find((candidate) => candidate.part === button.id);
+    if (button !== undefined && placement !== undefined && target !== undefined) {
+      const buttonPin = Object.keys(placement.pins)[0];
+      if (buttonPin !== undefined) placement.pins[buttonPin] = target as typeof placement.pins[string];
+    }
+    return layout;
   }
 
   if (fault === "led-jumpers") {
-    const leds = result.parts.filter((part) => part.module === "led").slice(0, 2);
-    if (leds.length < 2) return result;
-    const [first, second] = leds;
-    for (const net of result.nets) {
-      net.pins = net.pins.map((pin) => {
-        if (pin.part === first.id) return { ...pin, part: second.id };
-        if (pin.part === second.id) return { ...pin, part: first.id };
-        return pin;
-      });
+    const ledIds = circuit.parts.filter((part) => part.module === "led").map((part) => part.id);
+    const signalJumpers = layout.jumpers.filter((jumper) => {
+      const net = circuit.nets.find((candidate) => candidate.id === jumper.net);
+      return net?.kind === "signal" && net.pins.some((pin) => ledIds.includes(pin.part));
+    });
+    const first = signalJumpers[0];
+    const second = signalJumpers[1];
+    if (first !== undefined && second !== undefined) {
+      const from = first.from;
+      const to = first.to;
+      first.from = second.from;
+      first.to = second.to;
+      second.from = from;
+      second.to = to;
     }
-    return result;
+    return layout;
   }
 
-  const resistor = result.parts.find((part) => part.module === "resistor");
-  if (!resistor) return result;
-  result.parts = result.parts.filter((part) => part.id !== resistor.id);
-  result.nets = result.nets
-    .map((net) => ({ ...net, pins: net.pins.filter((pin) => pin.part !== resistor.id) }))
-    .filter((net) => net.pins.length >= 2);
-  return result;
+  const resistor = circuit.parts.find((part) => part.module === "resistor");
+  if (resistor !== undefined) layout.placements = layout.placements.filter((placement) => placement.part !== resistor.id);
+  return layout;
+}
+
+/**
+ * Build a browser fault using the same physical layout → LVS → as-built netlist
+ * path as the server's mutant tests. No declared IR net is edited directly.
+ */
+export function circuitWithFault(circuit: Circuit, fault: VirtualFault, layout?: Layout): Circuit {
+  const source = layout === undefined ? layoutBoard(circuit) : layout;
+  return asBuiltCircuit(circuit, mutateLayout(circuit, source, fault));
 }
 
 export function partForFault(circuit: Circuit, fault: VirtualFault): Part | undefined {

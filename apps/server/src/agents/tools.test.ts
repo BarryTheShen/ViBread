@@ -81,4 +81,15 @@ describe("tool registry policy (MCP/A2A path)", () => {
     // No reports → not all GO → a human must approve even in Autopilot.
     expect(result.status).toBe("approval-required");
   });
+
+  it("add_part always needs a human and then extends the mission inventory", async () => {
+    const { call, broker, store, mission } = await setup("autopilot");
+    const args = { module: "buzzer-active", count: 1, note: "launch beep" };
+    const asked = await call("add_part", args);
+    expect(asked.status).toBe("approval-required");
+    const approval = asked.status === "approval-required" ? asked.approval : undefined;
+    await broker.decide(approval!.id, "approve-once", HUMAN);
+    expect(await call("add_part", args, approval!.id)).toMatchObject({ status: "executed" });
+    expect((await store.getMission(mission.id))!.inventory.at(-1)).toMatchObject({ module: "buzzer-active", count: 1 });
+  });
 });

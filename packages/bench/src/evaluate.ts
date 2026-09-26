@@ -475,24 +475,17 @@ function evaluateLeds(context: EvaluationContext): BenchTestResult {
 
 function evaluateBuzzer(context: EvaluationContext): BenchTestResult {
   const buzzers = context.subjects.filter((subject): subject is Extract<SelfTestSubject, { kind: "buzzer" }> => subject.kind === "buzzer");
-  const asks = asksFor(context.lines, "buzzer.confirm", "heard-beep");
   const subjects = buzzers.map((buzzer, index) => {
-    const ask = asks.find((candidate) => candidate.part === buzzer.part) ?? asks[index];
+    const ask = askForPart(context.lines, "buzzer.confirm", `buzzer${index}`, buzzer.part);
     const raw = ask === undefined ? undefined : context.answers[ask.id];
     const value = normalizedAnswer(raw);
     let status: TestStatus = "unknown";
-    let observed = "no hearing confirmation";
-    if (value === "yes" || value === "heard" || value === "beep") {
-      status = "pass";
-      observed = "heard a beep";
-    } else if (value === "no" || value === "silent") {
-      status = "fail";
-      observed = "no beep heard";
-    } else if (statusForEnd(context.lines, "buzzer.confirm") === "fail") {
-      status = "fail";
-      observed = "device reported a buzzer failure";
+    let observed = "buzzer answer timed out or its exact prompt is missing";
+    if (ask !== undefined && !answerMissing(raw)) {
+      status = value === "yes" ? "pass" : "fail";
+      observed = value === "yes" ? "heard a beep" : "no beep heard";
     }
-    return { part: buzzer.part, pin: buzzer.pin, status, observed, expected: "heard a beep" };
+    return { part: buzzer.part, pin: buzzer.pin, status, observed, expected: "heard a beep (yes)" };
   });
   return testResult("buzzer.confirm", subjects, aggregate(subjects.map((subject) => subject.status)) === "pass" ? "The buzzer was audible." : "The buzzer needs an audible confirmation.");
 }

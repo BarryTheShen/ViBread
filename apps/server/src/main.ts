@@ -66,7 +66,7 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   const candidateWebDirs = [resolve(process.cwd(), "apps/web/dist"), resolve(process.cwd(), "../../apps/web/dist")];
   const webDist = candidateWebDirs.find((directory) => existsSync(resolve(directory, "index.html")));
   const indexPath = webDist ? resolve(webDist, "index.html") : undefined;
-  if (process.env.NODE_ENV === "production" && indexPath && webDist) {
+  if (process.env.VIBREAD_NO_STATIC !== "1" && indexPath && webDist) {
     app.use(express.static(webDist, { index: false }));
     app.get("*splat", (_req, res) => res.sendFile(indexPath));
   }

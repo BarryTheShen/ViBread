@@ -44,7 +44,7 @@ const TRACE_PERIOD_MS = 20;
 const LED_LIT_THRESHOLD = 0.02;
 const PULLUP_OHMS = 35_000;
 const DRIVER_OHMS = 45;
-const MAX_STEPS = 100_000_000;
+const MAX_SCENARIO_STEPS = 1_000_000;
 
 type Logic = 0 | 1;
 type VoltageMap = Map<string, number>;
@@ -355,6 +355,7 @@ export class SimMachine {
   run(ms: number): void {
     if (!Number.isFinite(ms) || ms < 0) throw new RangeError("simulation duration must be a non-negative finite number");
     const target = this.cpu.cycles + Math.max(0, Math.round(ms * this.profile.clockHz / 1000));
+    const initialCycle = this.cpu.cycles;
     let guard = 0;
     while (this.cpu.cycles < target) {
       avrInstruction(this.cpu);
@@ -363,7 +364,7 @@ export class SimMachine {
       this.captureTraceIfDue();
       this.observeModesIfDue();
       guard += 1;
-      if (guard > MAX_STEPS) throw new Error("simulation instruction budget exceeded");
+      if (guard > target - initialCycle + 1) throw new Error("simulation instruction budget exceeded");
     }
     this.accountTo(this.cpu.cycles);
     this.captureTraceIfDue(true);
@@ -715,7 +716,13 @@ export class SimMachine {
   }
 
   private pumpRx(): void {
-    while (this.rxQueue.length > 0 && !this.usart.rxBusy && this.usart.rxEnable) {
+    const rxCompleteMask = 0x80;
+    while (
+      this.rxQueue.length > 0 &&
+      !this.usart.rxBusy &&
+      this.usart.rxEnable &&
+      (this.cpu.data[usart0Config.UCSRA] & rxCompleteMask) === 0
+    ) {
       const next = this.rxQueue.shift();
       if (next === undefined) break;
       this.usart.writeByte(next);
@@ -757,7 +764,7 @@ export function executeScenario(input: { circuit: Circuit; hex: string; scenario
   const stepResults: ScenarioResult["steps"] = [];
   let index = 0;
   for (const step of input.scenario.steps) {
-    if (index >= MAX_STEPS) throw new Error("scenario step budget exceeded");
+    if (index >= MAX_SCENARIO_STEPS) throw new Error("scenario step budget exceeded");
     const atMs = machine.timeMs;
     const outcome = executeStep(machine, step);
     stepResults.push({ index, step, ok: outcome.ok, message: outcome.message, atMs });

@@ -55,8 +55,15 @@ export class SqlApprovalBroker implements ApprovalBroker {
   }): Promise<{ outcome: "approved" | "denied" | "user-approval" | "bench-click"; request?: ApprovalRequest; reason?: string }> {
     const outcome = policyFor(input.mode, input.actionClass, { allGo: input.allGo });
     if (outcome === "approved") return { outcome };
-    const actionHash = hashJson({ revisionHash: input.revisionHash, action: input.action, input: input.input });
     if (outcome === "denied") return { outcome, reason: "permission mode denies state-changing actions" };
+    const grantable = input.actionClass === "state-changing" || input.actionClass === "release";
+    if (grantable) {
+      const grant = this.deps.sqlite
+        .prepare('SELECT "missionId" FROM "approval_grants" WHERE "missionId" = ? AND "actionClass" = ? AND "action" = ? AND "mode" = ?')
+        .get(input.missionId, input.actionClass, input.action, input.mode) as { missionId: string } | undefined;
+      if (grant) return { outcome: "approved" };
+    }
+    const actionHash = hashJson({ revisionHash: input.revisionHash, action: input.action, input: input.input });
     this.deps.sqlite
       .prepare('UPDATE "approvals" SET "status" = ? WHERE "missionId" = ? AND "status" = ? AND "expiresAt" <= ?')
       .run("expired", input.missionId, "pending", Date.now());
@@ -135,6 +142,14 @@ export class SqlApprovalBroker implements ApprovalBroker {
     const decidedBy = JSON.stringify(decider);
     const approved = decision !== "deny";
     const preApprovedBy = row.actionClass === "physical" && decider.channel === "imessage" && approved ? decidedBy : null;
+    if (decision === "approve-mission" && approved && (row.actionClass === "state-changing" || row.actionClass === "release")) {
+      const mission = this.deps.sqlite.prepare('SELECT "mode" FROM "missions" WHERE "id" = ?').get(row.missionId) as { mode: PermissionMode } | undefined;
+      if (mission) {
+        this.deps.sqlite
+          .prepare('INSERT INTO "approval_grants" ("missionId", "actionClass", "action", "mode", "createdAt") VALUES (?, ?, ?, ?, ?) ON CONFLICT("missionId", "actionClass", "action") DO UPDATE SET "mode" = excluded."mode", "createdAt" = excluded."createdAt"')
+          .run(row.missionId, row.actionClass, row.action, mission.mode, Date.now());
+      }
+    }
     this.deps.sqlite
       .prepare('UPDATE "approvals" SET "status" = ?, "decision" = ?, "decidedBy" = ?, "preApprovedBy" = ? WHERE "id" = ? AND "status" = ?')
       .run(approved ? "approved" : "denied", decision, decidedBy, preApprovedBy, approvalId, "pending");
