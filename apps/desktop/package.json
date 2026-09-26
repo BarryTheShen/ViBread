@@ -10,6 +10,7 @@
   "homepage": "https://github.com/BarryTheShen/ViBread",
   "license": "MIT",
   "main": "dist/main.cjs",
+  "desktopName": "vibread.desktop",
   "scripts": {
     "build": "node scripts/build.mjs",
     "stage": "node scripts/stage-runtime.mjs",
