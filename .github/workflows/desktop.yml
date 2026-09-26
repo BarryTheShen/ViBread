@@ -69,6 +69,35 @@ jobs:
           node-version: 22.22.1
           cache: npm
 
+      # Windows Defender scans every file npm, electron-builder and the toolchain unpack; the runner is throwaway.
+      - name: Windows — pause real-time scanning (speed)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        shell: pwsh
+        run: Set-MpPreference -DisableRealtimeMonitoring $true
+
+      # Electron + electron-builder tool downloads (NSIS, AppImage, Electron zips) and the bundled Node download.
+      - name: Cache Electron and runtime downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            apps/desktop/.cache
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/package.json', 'apps/desktop/scripts/stage-runtime.mjs') }}
+
+      # Arduino core archives for the first-run smoke (VIBREAD_TOOLCHAIN_CACHE, see scripts/setup-toolchain.mjs).
+      - name: Cache Arduino core downloads
+        id: toolchain-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/toolchain-cache
+          key: toolchain-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/setup-toolchain.mjs') }}
+
       - name: Linux display + packaging deps
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y xvfb
@@ -99,7 +128,16 @@ jobs:
         env:
           VIBREAD_USER_DATA: ${{ runner.temp }}/vibread-smoke
           VIBREAD_SMOKE_DIR: ${{ github.workspace }}/smoke
+          VIBREAD_TOOLCHAIN_CACHE: ${{ runner.temp }}/toolchain-cache
         run: node apps/desktop/scripts/smoke-packaged.mjs
+
+      - name: Save Arduino core downloads for the next run
+        if: success() && steps.toolchain-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          mkdir -p "${{ runner.temp }}/toolchain-cache/packages"
+          cp -r "${{ runner.temp }}/vibread-smoke/toolchain/arduino/downloads/packages/." "${{ runner.temp }}/toolchain-cache/packages/" || true
+          ls -la "${{ runner.temp }}/toolchain-cache/packages"
 
       - name: Collect logs
         if: always()
@@ -173,8 +211,14 @@ jobs:
           } > notes.md
           cat notes.md
           tag="desktop-v$APP_VERSION"
-          # The tag is pushed with git: the Releases API refuses to create a tag (--target) with the Actions token once
-          # main has moved on with workflow-file changes ("Resource not accessible by integration").
+          # GitHub refuses to let the Actions token create a tag (by API or git push) at a commit whose workflow files
+          # differ from the default branch ("... without `workflows` permission"). That only happens when main has moved
+          # on with a workflow change after this build started — the newer run publishes, so this one steps aside.
+          git fetch --quiet origin "${{ github.event.repository.default_branch }}"
+          if ! git diff --quiet "$GITHUB_SHA" FETCH_HEAD -- .github/workflows; then
+            echo "::notice::Not publishing $tag: main's workflow files changed after this build started; the newer desktop build publishes instead."
+            exit 0
+          fi
           git tag "$tag" "$GITHUB_SHA"
           git push origin "refs/tags/$tag"
           # Every successful build is a new release with its own version; the newest is marked Latest.
