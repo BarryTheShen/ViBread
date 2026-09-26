@@ -12,7 +12,8 @@ import ListItemText from "@mui/material/ListItemText";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import Tooltip from "@mui/material/Tooltip";
-import type { RevisionDetail, ScenarioCategory } from "@vibread/core";
+import type { MissionRecording, RevisionDetail, ScenarioCategory } from "@vibread/core";
+import { RecordedChip } from "../../components/RecordedChip.js";
 
 const CATEGORY_LABELS: Record<ScenarioCategory, string> = {
   normal: "everyday use",
@@ -25,7 +26,15 @@ const CATEGORY_LABELS: Record<ScenarioCategory, string> = {
 };
 
 /** Simulation tests in plain language: what each checks, whether it passed, and what isn't covered yet. */
-export function TestsTab({ revision }: { revision: RevisionDetail }) {
+/** Recorded missions (MissionDetail.recording) replay a real run: say who wrote the tests and when, never "live". */
+function recordedTestsLine(recording: MissionRecording | undefined): string | undefined {
+  if (!recording) return undefined;
+  const author = recording.models.testAuthor ?? "Claude";
+  const on = new Date(`${recording.recordedOn}T12:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  return `Recorded: written by ${author} on ${on}`;
+}
+
+export function TestsTab({ revision, recording }: { revision: RevisionDetail; recording?: MissionRecording }) {
   const scenarios = revision.suite?.scenarios ?? [];
   const sim = revision.results.sim;
   const resultById = new Map((sim?.scenarios ?? []).map((s) => [s.id, s]));
@@ -46,6 +55,12 @@ export function TestsTab({ revision }: { revision: RevisionDetail }) {
             ? `${passed} of ${sim.scenarios.length} tests pass in the simulator. A separate agent wrote these from your description, without seeing the code.`
             : "These tests haven't been run yet."}
         </Typography>
+        {recording && (
+          <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap", mt: 1 }}>
+            <RecordedChip label="Recorded run" title={recording.label} />
+            <Typography variant="body2">{recordedTestsLine(recording)}</Typography>
+          </Stack>
+        )}
       </Box>
       <List disablePadding>
         {scenarios.map((scenario) => {

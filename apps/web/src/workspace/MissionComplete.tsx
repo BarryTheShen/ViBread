@@ -20,6 +20,9 @@ const rise = keyframes`
   100% { transform: translateY(-70vh) rotate(540deg); opacity: 0; }
 `;
 
+/** /confirm 409 codes that mean "the bench must pass first" (ServerCore); their messages are already plain words. */
+const BENCH_BLOCKERS: Record<string, true> = { bench_run_required: true, bench_run_failed: true };
+
 const COLORS = ["#7dd3fc", "#fbbf24", "#4ade80", "#f87171", "#eef4fa"];
 
 /** Short confetti burst for DONE; replaced by a static badge when reduced motion is on. */
@@ -126,11 +129,25 @@ export function MissionComplete({
           Not quite — tell the agent
         </Button>
       </Stack>
-      {confirm.isError && (
-        <Alert severity="error" sx={{ mt: 1.5 }}>
-          Couldn't save that: {confirm.error.message}
-        </Alert>
-      )}
+      {confirm.isError &&
+        (confirm.error instanceof HttpError && BENCH_BLOCKERS[confirm.error.code] ? (
+          // The server wants a (passing) real bench run first: say so, with its own words, and point at the bench.
+          <Alert
+            severity={confirm.error.code === "bench_run_failed" ? "error" : "warning"}
+            sx={{ mt: 1.5 }}
+            action={
+              <Button component={RouterLink} to={`/m/${missionId}/bench`} size="small" sx={{ whiteSpace: "nowrap" }}>
+                Open the bench
+              </Button>
+            }
+          >
+            <strong>{confirm.error.message}</strong>
+          </Alert>
+        ) : (
+          <Alert severity="error" sx={{ mt: 1.5 }}>
+            Couldn't save that: {confirm.error.message}
+          </Alert>
+        ))}
     </Paper>
   );
 }

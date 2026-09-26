@@ -29,6 +29,7 @@ import { LED_COLORS, MODE_LABELS, formatOhms, type InventoryItem, type MissionPh
 import { useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router";
 import { useCreateMission, useMissions, useModules } from "../api/hooks.js";
+import { ErrorOrSignIn } from "../components/SignIn.js";
 import { agoLabel, useNow } from "../lib/time.js";
 import { useDefaultMode } from "../lib/prefs.js";
 import { MODE_HELP, ModeSelect } from "../workspace/ModeSelect.js";
@@ -208,7 +209,9 @@ export default function HomePage() {
             {modules.isPending ? (
               <Skeleton variant="rounded" height={80} />
             ) : modules.isError ? (
-              <Alert severity="error">Couldn't load the parts list: {modules.error.message}</Alert>
+              <ErrorOrSignIn error={modules.error}>
+                <Alert severity="error">Couldn't load the parts list: {modules.error.message}</Alert>
+              </ErrorOrSignIn>
             ) : (
               <PartsPicker modules={modules.data} rows={rows} setRows={setRows} />
             )}
@@ -234,7 +237,9 @@ export default function HomePage() {
           {missions.isPending ? (
             <Skeleton variant="rounded" height={120} />
           ) : missions.isError ? (
-            <Alert severity="error">Couldn't load your missions: {missions.error.message}</Alert>
+            <ErrorOrSignIn error={missions.error}>
+              <Alert severity="error">Couldn't load your missions: {missions.error.message}</Alert>
+            </ErrorOrSignIn>
           ) : missions.data.length === 0 ? (
             <Typography sx={{ color: "text.secondary" }}>No missions yet. Your first one will show up here.</Typography>
           ) : (

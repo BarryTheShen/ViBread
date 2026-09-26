@@ -33,10 +33,11 @@ import Typography from "@mui/material/Typography";
 import type { TokenMintResponse } from "@vibread/core";
 import { QRCodeSVG } from "qrcode.react";
 import { useState } from "react";
-import { Link as RouterLink, useNavigate } from "react-router";
+import { Link as RouterLink, useLocation, useNavigate } from "react-router";
 import { authClient } from "../api/auth.js";
 import { ClaudeAccountSection } from "./ClaudeAccountSection.js";
-import { useConnections, useImessageCode, useMe, useMintToken, useRevokeToken } from "../api/hooks.js";
+import { useConnections, useImessageCode, useMintToken, useRevokeToken } from "../api/hooks.js";
+import { ErrorOrSignIn, ProviderButtons, useProviders } from "../components/SignIn.js";
 import { useDefaultMode } from "../lib/prefs.js";
 import { agoLabel, expiryLabel, useNow } from "../lib/time.js";
 import { MONO_FONT } from "../theme.js";
@@ -165,7 +166,9 @@ function ClaudeCodeSection() {
         {connections.isPending ? (
           <Skeleton height={48} />
         ) : connections.isError ? (
-          <Alert severity="error">Couldn't load connections: {connections.error.message}</Alert>
+          <ErrorOrSignIn error={connections.error}>
+            <Alert severity="error">Couldn't load connections: {connections.error.message}</Alert>
+          </ErrorOrSignIn>
         ) : tokens.length === 0 ? (
           <Typography sx={{ color: "text.secondary" }}>No keys yet. Claude Code is not connected.</Typography>
         ) : (
@@ -262,31 +265,33 @@ function ImessageSection() {
   );
 }
 
+/** Who is signed in. Mode comes from GET /api/oauth/providers (works before sign-in, unlike /api/me which is 401). */
 function AccountSection() {
-  const me = useMe();
-  if (me.isPending) return <Skeleton variant="rounded" height={100} />;
-  if (me.isError) return <Alert severity="error">Couldn't reach the ViBread server: {me.error.message}</Alert>;
+  const providers = useProviders();
+  const session = authClient.useSession();
+  const location = useLocation();
+  if (providers.isPending || session.isPending) return <Skeleton variant="rounded" height={100} />;
+  if (providers.isError) return <Alert severity="error">Couldn't reach the ViBread server: {providers.error.message}</Alert>;
+  const user = session.data?.user;
   return (
     <Section title="Account" id="account-heading">
-      {me.data.auth === "single-operator" ? (
+      {providers.data.singleOperator ? (
         <Typography>
-          Single-operator mode: this server has no sign-in configured, so everyone who can open it acts as{" "}
-          <strong>{me.data.user?.name ?? "the operator"}</strong>.
+          Single-operator mode: this server has no sign-in configured, so everyone who can open it acts as <strong>the operator</strong>.
         </Typography>
-      ) : me.data.user ? (
+      ) : user ? (
         <Stack direction="row" sx={{ gap: 2, alignItems: "center" }}>
           <Typography sx={{ flex: 1 }}>
-            Signed in as <strong>{me.data.user.name}</strong>
-            {me.data.user.email ? ` (${me.data.user.email})` : ""}
+            Signed in as <strong>{user.name}</strong>
+            {user.email ? ` (${user.email})` : ""}
           </Typography>
-          <Button onClick={() => void authClient.signOut().then(() => me.refetch())}>Sign out</Button>
+          <Button onClick={() => void authClient.signOut().then(() => window.location.assign("/"))}>Sign out</Button>
         </Stack>
       ) : (
-        <Box>
-          <Button variant="contained" onClick={() => void authClient.signIn.social({ provider: "google", callbackURL: window.location.href })}>
-            Sign in with Google
-          </Button>
-        </Box>
+        <>
+          <Typography>Sign in to see your missions.</Typography>
+          <ProviderButtons callbackURL={`${location.pathname}${location.search}`} />
+        </>
       )}
     </Section>
   );
@@ -295,6 +300,9 @@ function AccountSection() {
 export default function SettingsPage() {
   const navigate = useNavigate();
   const [defaultMode, setDefaultMode] = useDefaultMode();
+  const providers = useProviders();
+  const session = authClient.useSession();
+  const signedOut = providers.data !== undefined && !providers.data.singleOperator && !session.isPending && !session.data?.user;
   return (
     <Box sx={{ minHeight: "100vh" }}>
       <AppBar position="static">
@@ -314,9 +322,14 @@ export default function SettingsPage() {
       </AppBar>
       <Container maxWidth="md" sx={{ py: 4, display: "flex", flexDirection: "column", gap: 3 }}>
         <AccountSection />
-        <ClaudeAccountSection />
-        <ClaudeCodeSection />
-        <ImessageSection />
+        {/* Signed out on a multi-user server: the account card's sign-in is the only thing that can work. */}
+        {!signedOut && (
+          <>
+            <ClaudeAccountSection />
+            <ClaudeCodeSection />
+            <ImessageSection />
+          </>
+        )}
         <Section title="Default permission mode" id="mode-heading">
           <Stack direction="row" sx={{ gap: 2, alignItems: "center", flexWrap: "wrap" }}>
             <ModeSelect id="default-mode" value={defaultMode} onChange={setDefaultMode} label="New missions start in" size="medium" />

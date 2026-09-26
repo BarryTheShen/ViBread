@@ -19,6 +19,7 @@ import type { ClaudeAccountView, ConnectionsView } from "@vibread/core";
 import { useState } from "react";
 import { api, HttpError } from "../api/client.js";
 import { queryKeys } from "../api/hooks.js";
+import { ErrorOrSignIn } from "../components/SignIn.js";
 
 const USING: Record<ClaudeAccountView["using"], string> = {
   "claude-account": "Your missions use your Claude account.",
@@ -90,7 +91,9 @@ export function ClaudeAccountSection() {
         {connections.isPending ? (
           <Skeleton variant="rounded" height={48} />
         ) : connections.isError ? (
-          <Alert severity="error">Couldn't load connections: {connections.error.message}</Alert>
+          <ErrorOrSignIn error={connections.error}>
+            <Alert severity="error">Couldn't load connections: {connections.error.message}</Alert>
+          </ErrorOrSignIn>
         ) : !claude ? (
           <Alert severity="warning">This server doesn't report Claude account status yet.</Alert>
         ) : !claude.available ? (

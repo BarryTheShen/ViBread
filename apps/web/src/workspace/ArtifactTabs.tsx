@@ -108,7 +108,7 @@ export function ArtifactTabs({ missionId, detail }: { missionId: string; detail:
             {tab === "schematic" && <SchematicTab revision={revision.data} />}
             {tab === "steps" && <StepsTab missionId={missionId} revision={revision.data} released={revision.data.n === released} />}
             {tab === "code" && <CodeTab revision={revision.data} />}
-            {tab === "tests" && <TestsTab revision={revision.data} />}
+            {tab === "tests" && <TestsTab revision={revision.data} recording={detail.recording} />}
             {tab === "tryit" && <TryItTab revision={revision.data} />}
             {tab === "replay" && <ReplayTab revision={revision.data} />}
             {tab === "telemetry" && <TelemetryTab missionId={missionId} revision={revision.data} />}

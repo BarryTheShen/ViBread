@@ -29,6 +29,7 @@ import { useMemo, useState } from "react";
 import { Link as RouterLink, useParams } from "react-router";
 import { queryKeys, useConnections, useMission, useRevision, useSetMode, useStopAgent, useTimeline } from "../api/hooks.js";
 import { ApprovalCard } from "../chat/ApprovalCard.js";
+import { isSignInRequired, SignInRequired } from "../components/SignIn.js";
 import { MissionChat, useMissionChatAdapter } from "../chat/MissionChat.js";
 import { ArtifactTabs } from "../workspace/ArtifactTabs.js";
 import { ConsoleLights } from "../workspace/ConsoleLights.js";
@@ -79,9 +80,13 @@ export default function MissionPage() {
   if (!detail) {
     return (
       <Box sx={{ p: 4 }}>
-        <Alert severity="error" action={<Button component={RouterLink} to="/">Home</Button>}>
-          Couldn't open this mission: {mission.error?.message ?? "not found"}
-        </Alert>
+        {isSignInRequired(mission.error) ? (
+          <SignInRequired />
+        ) : (
+          <Alert severity="error" action={<Button component={RouterLink} to="/">Home</Button>}>
+            Couldn't open this mission: {mission.error?.message ?? "not found"}
+          </Alert>
+        )}
       </Box>
     );
   }
