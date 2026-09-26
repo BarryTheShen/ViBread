@@ -43,7 +43,8 @@ export function applyFrame(root: ParentNode, frame: PartStates): void {
 
 /** Plain-language state of a traced part for the accessible readout next to the animation. */
 export function describePartState(part: string, value: number): string {
-  if (part.startsWith("LED")) return value >= 0.05 ? `${part} on (${Math.round(value * 100)}%)` : `${part} off`;
+  // LED value = fraction of time lit: steady on ≈ 1, blinking/PWM in between.
+  if (part.startsWith("LED")) return value >= 0.95 ? `${part} on` : value >= 0.05 ? `${part} on ${Math.round(value * 100)}% of the time` : `${part} off`;
   if (part.startsWith("BZ")) return value > 0 ? `${part} sounding` : `${part} quiet`;
   if (part.startsWith("BTN")) return value > 0 ? `${part} pressed` : `${part} released`;
   if (part.startsWith("LDR")) return `${part} light level ${Math.round(value * 100)}%`;

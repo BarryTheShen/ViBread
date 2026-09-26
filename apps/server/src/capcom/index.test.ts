@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { cloudSendDelayMs, faultAlertText, isFaultAlertEvent, isQuietHours, shouldSendCelebrationEffect } from "./index.js";
+import { benchAskOptionTitle, benchAskValueForOption, cloudSendDelayMs, faultAlertText, isFaultAlertEvent, isQuietHours, missionSelection, pendingApprovalIndex, pollTitleForApproval, shouldSendCelebrationEffect } from "./index.js";
 
 describe("CAPCOM timeline alerts", () => {
   it("does not duplicate the Houston prefix from bench diagnoses", () => {
@@ -39,5 +39,32 @@ describe("CAPCOM timeline alerts", () => {
     expect(cloudSendDelayMs(500)).toBe(250);
     expect(cloudSendDelayMs(750)).toBe(0);
     expect(cloudSendDelayMs(1_000)).toBe(0);
+  });
+
+  it("binds poll votes to the selected approval instead of FIFO", () => {
+    const first = { id: "approval-one", missionId: "mission", actionClass: "physical" as const, summary: "Flash", consequence: "Runs at bench" };
+    const second = { id: "approval-two", missionId: "mission", actionClass: "physical" as const, summary: "Self-test", consequence: "Runs at bench" };
+    const queue = [
+      { notice: first, pollTitle: pollTitleForApproval(first) },
+      { notice: second, pollTitle: pollTitleForApproval(second) },
+    ];
+
+    expect(pendingApprovalIndex(queue, pollTitleForApproval(second))).toBe(1);
+    expect(pendingApprovalIndex(queue)).toBe(0);
+  });
+
+  it("distinguishes mission listing and attachment commands from briefs", () => {
+    expect(missionSelection("mission")).toBeNull();
+    expect(missionSelection("mission 2")).toBe(2);
+    expect(missionSelection("mission: build a lamp")).toBeUndefined();
+  });
+
+  it("maps bench ask choices to poll labels and back", () => {
+    const ask = { choices: ["1", "2", "none"] };
+
+    expect(benchAskOptionTitle("none")).toBe("None of them");
+    expect(benchAskValueForOption(ask, "None of them")).toBe("none");
+    expect(benchAskValueForOption(ask, "2")).toBe("2");
+    expect(benchAskValueForOption(ask, "5")).toBeUndefined();
   });
 });

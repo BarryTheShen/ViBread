@@ -52,7 +52,18 @@ function Celebration() {
  * LAUNCH: the self-test passed and the real sketch runs — ask the person whether it does what they wanted.
  * DONE: mission complete, with a celebration.
  */
-export function MissionComplete({ missionId, phase, onTellAgent }: { missionId: string; phase: MissionPhase; onTellAgent(): void }) {
+export function MissionComplete({
+  missionId,
+  phase,
+  onTellAgent,
+  virtualBoard,
+}: {
+  missionId: string;
+  phase: MissionPhase;
+  onTellAgent(): void;
+  /** The last bench run used the virtual board (runId "virtual-…"), not a real Arduino. */
+  virtualBoard: boolean;
+}) {
   const confirm = useConfirmMission(missionId);
   if (phase === "DONE") {
     return (
@@ -70,14 +81,14 @@ export function MissionComplete({ missionId, phase, onTellAgent }: { missionId: 
       <Stack direction="row" sx={{ gap: 1, alignItems: "center", mb: 0.5 }}>
         <RocketLaunchIcon color="success" />
         <Typography variant="overline" sx={{ color: "success.main", lineHeight: 1.4 }}>
-          Launched · the self-test passed
+          {virtualBoard ? "Launched · the virtual self-test passed" : "Launched · the self-test passed"}
         </Typography>
       </Stack>
       <Typography variant="h3" component="p">
         Does it work the way you wanted?
       </Typography>
       <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
-        Try it for real: your sketch is running on the board now.
+        {virtualBoard ? "Your sketch is running on the virtual board now: try it on the bench page, then on your real Arduino." : "Try it for real: your sketch is running on the board now."}
       </Typography>
       <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
         <Button variant="contained" color="success" disabled={confirm.isPending} onClick={() => confirm.mutate()}>

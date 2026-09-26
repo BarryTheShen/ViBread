@@ -29,8 +29,11 @@ export function decorateBreadboardSvg(svg: string, highlight: SvgHighlight = { h
     ];
     for (const id of ids) document.getElementById(id)?.classList.add("vb-hl");
     for (const [part, value] of Object.entries(partStates)) {
+      const level = String(Math.max(0, Math.min(1, value)));
       const glow = document.getElementById(`glow-${part}`);
-      if (glow) glow.setAttribute("opacity", String(Math.max(0, Math.min(1, value))));
+      if (glow) glow.setAttribute("opacity", level);
+      const sound = document.getElementById(`sound-${part}`);
+      if (sound) sound.setAttribute("opacity", level);
     }
     return new XMLSerializer().serializeToString(root);
   }

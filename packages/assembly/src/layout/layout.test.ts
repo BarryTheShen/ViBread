@@ -52,9 +52,16 @@ describe("deterministic breadboard layout", () => {
     expect(steps.steps.slice(0, 6).map((step) => step.kind)).toEqual(["inventory", "orientation", "unplug", "rails", "checkpoint", "unplug"]);
     expect(steps.steps[4].plug).toBe("plugged");
     expect(steps.steps[4].checkpoint?.tests).toEqual(["rails.vcc"]);
+    expect(steps.steps[4].text).toContain("ViBread checks that the red + rail has 5 V");
+    expect(steps.steps[4].text).not.toContain("rails.vcc");
     expect(steps.steps.at(-1)?.kind).toBe("power-up");
     expect(steps.steps.at(-1)?.plug).toBe("plugged");
 
+    expect(steps.steps[1].text).toContain("Rows run left to right");
+    const resistorStep = steps.steps.find((step) => step.title.startsWith("Insert R1"))!;
+    expect(resistorStep.text).toMatch(/220 Ω resistor R1 \(red-red-brown-gold\) from hole e\d+ to hole e\d+/);
+    const jumperStep = steps.steps.find((step) => step.kind === "jumper" && step.title.includes("W2"))!;
+    expect(jumperStep.text).toContain("Connect a yellow wire from Arduino A0 header pin to hole f3");
     const half = { ...moon, breadboard: { profile: "bb-400" as const } };
     const halfLayout = layoutBoard(half);
     expect(lvs(half, halfLayout).ok).toBe(true);
@@ -78,5 +85,12 @@ describe("deterministic breadboard layout", () => {
       expect(py).toBeGreaterThanOrEqual(y);
       expect(py).toBeLessThanOrEqual(y + height);
     }
+  });
+  it("scopes breadboard CSS to the drawing root", () => {
+    const moon = GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit;
+    const svg = renderBreadboardSvg({ circuit: moon, layout: layoutBoard(moon) });
+    const style = svg.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? "";
+    expect(style).not.toMatch(/(?:^|[},])\s*(?:svg|g|circle|text)\s*\{/m);
+    expect(style).toContain('svg[data-vibread="breadboard"]');
   });
 });

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { GOLDEN } from "@vibread/fixtures";
 import { layoutBoard } from "@vibread/assembly/layout";
-import { revisionHash, type BenchRunResult } from "@vibread/core";
-import { FAULT_IDS, applyFault, planSelfTest, rankFaults } from "./index.js";
+import { revisionHash, type BenchRunResult, type DeviceLine } from "@vibread/core";
+import { FAULT_IDS, applyFault, evaluateRun, planSelfTest, rankFaults } from "./index.js";
 
 const moon = GOLDEN.find((entry) => entry.key === "moon-phase-lamp");
 if (moon === undefined) throw new Error("moon-phase-lamp fixture is required");
@@ -71,5 +71,52 @@ describe("shared fault catalog", () => {
     const ranked = rankFaults({ circuit: moon.circuit, layout, plan, observed: observedRun, lines: [], dictionary });
     expect(ranked[0]?.cause).toBe("led-jumpers-swapped");
     expect(ranked[0]?.likelihood).toBeGreaterThan(ranked[1]?.likelihood ?? 0);
+  });
+  it("puts an output rail short first and highlights its jumper without a drive fix", async () => {
+    const layout = layoutBoard(moon.circuit);
+    const plan = planSelfTest(moon.circuit, revisionHash(moon.circuit));
+    const result = await evaluateRun({
+      circuit: moon.circuit,
+      layout,
+      plan,
+      lines: [
+        { t: "hello", fw: "vibread-bench", proto: 1, design: plan.design, board: plan.board },
+        { t: "vcc", mv: 5000 },
+        { t: "begin", test: "pins.readonly" },
+        { t: "read", pin: "D2", pull: 1, ones: 32, n: 32 },
+        { t: "stuck", pin: "D3", level: 1 },
+        { t: "end", test: "pins.readonly", status: "fail" },
+      ],
+      answers: {},
+      kind: "selftest",
+      revision: 1,
+      runId: "output-rail",
+    });
+    expect(result.diagnosis.candidates[0]?.cause).toBe("output-jumper-in-rail-row");
+    expect(result.diagnosis.candidates[0]?.highlight.holes.length).toBeGreaterThan(0);
+    expect(result.diagnosis.candidates[0]?.fix.toLowerCase()).not.toContain("drive");
+  });
+  it("treats a real person's none answer as a missing LED", async () => {
+    const layout = layoutBoard(moon.circuit);
+    const plan = planSelfTest(moon.circuit, revisionHash(moon.circuit));
+    const lines: DeviceLine[] = [
+      { t: "hello", fw: "vibread-bench", proto: 1, design: plan.design, board: plan.board },
+      { t: "vcc", mv: 5000 },
+      { t: "begin", test: "led.sequence" },
+      ...[1, 2, 3, 4].map((order) => ({ t: "ask" as const, id: `led${order}`, test: "led.sequence" as const, kind: "which-led" as const, part: `LED${order}`, choices: ["1", "2", "3", "4", "none"], timeoutMs: 20_000 })),
+      { t: "end", test: "led.sequence", status: "fail" as const },
+    ];
+    const result = await evaluateRun({
+      circuit: moon.circuit,
+      layout,
+      plan,
+      lines,
+      answers: { led1: "none", led2: "2", led3: "3", led4: "4" },
+      kind: "selftest",
+      revision: 1,
+      runId: "missing-led",
+    });
+    expect(result.diagnosis.candidates[0]?.cause).toBe("led-missing");
+    expect(result.diagnosis.candidates[0]?.highlight.holes.length).toBeGreaterThan(0);
   });
 });

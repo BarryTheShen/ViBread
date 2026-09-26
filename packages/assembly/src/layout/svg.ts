@@ -211,21 +211,39 @@ function isHighlighted(kind: "part" | "jumper", id: string, highlight: RenderInp
 function renderHoles(layout: Layout, highlight: RenderInput["highlight"]): string {
   const profile = BREADBOARD_PROFILES[layout.breadboard];
   const selected = new Set(highlight?.holes ?? []);
+  const highlightedRows = new Map<number, string[]>();
   const chunks: string[] = [];
   for (let row = 1; row <= profile.rows; row++) {
     for (const column of COLUMNS) {
       const hole = `${column}${row}`;
       const point = holePoint(layout, hole);
       if (!point) continue;
-      chunks.push(`<circle id="hole-${escapeSvg(hole)}" cx="${point.x.toFixed(1)}" cy="${point.y}" r="5" class="hole${selected.has(hole) ? " vb-hl" : ""}" aria-label="hole ${escapeSvg(hole)}"><title>${escapeSvg(hole)}</title></circle>`);
+      const highlighted = selected.has(hole);
+      chunks.push(`<circle id="hole-${escapeSvg(hole)}" cx="${point.x.toFixed(1)}" cy="${point.y}" r="5" class="hole${highlighted ? " vb-hl" : ""}" aria-label="hole ${escapeSvg(hole)}"><title>${escapeSvg(hole)}</title></circle>`);
+      if (highlighted) chunks.push(`<circle cx="${point.x.toFixed(1)}" cy="${point.y}" r="12" class="hole-ring vb-hl" aria-hidden="true"/>`);
+      if (highlighted) {
+        const columns = highlightedRows.get(row) ?? [];
+        columns.push(column);
+        highlightedRows.set(row, columns);
+      }
     }
+  }
+  for (const [row, columns] of highlightedRows) {
+    const points = columns.map((column) => holePoint(layout, `${column}${row}`)).filter((point): point is Point => point !== undefined);
+    if (points.length === 0) continue;
+    const x = points.reduce((sum, point) => sum + point.x, 0) / points.length;
+    const y = points[0].y;
+    const labelY = y < CHANNEL_Y ? y - 14 : y + 22;
+    chunks.push(`<text x="${x}" y="${labelY}" text-anchor="middle" class="hole-callout">row ${row}: ${columns.sort().join(", ")}</text>`);
   }
   for (const rail of ["T-", "T+", "B+", "B-"] as const) {
     for (const position of profile.railPositions) {
       const hole = `${rail}${position}`;
       const point = holePoint(layout, hole);
       if (!point) continue;
-      chunks.push(`<circle id="hole-${escapeSvg(hole)}" cx="${point.x.toFixed(1)}" cy="${point.y}" r="4.3" class="rail-hole${selected.has(hole) ? " vb-hl" : ""}" aria-label="rail hole ${escapeSvg(hole)}"><title>${escapeSvg(hole)}</title></circle>`);
+      const highlighted = selected.has(hole);
+      chunks.push(`<circle id="hole-${escapeSvg(hole)}" cx="${point.x.toFixed(1)}" cy="${point.y}" r="4.3" class="rail-hole${highlighted ? " vb-hl" : ""}" aria-label="rail hole ${escapeSvg(hole)}"><title>${escapeSvg(hole)}</title></circle>`);
+      if (highlighted) chunks.push(`<circle cx="${point.x.toFixed(1)}" cy="${point.y}" r="11" class="hole-ring vb-hl" aria-hidden="true"/>`);
     }
   }
   return chunks.join("");
@@ -276,7 +294,11 @@ function renderLed(part: Part, geometry: ReturnType<typeof partGeometry>, state:
   const a = geometry.pins.get("A") ?? geometry.center;
   const k = geometry.pins.get("K") ?? geometry.center;
   const ledColor = typeof part.params.color === "string" ? part.params.color : "red";
-  return `<line x1="${a.x}" y1="${a.y}" x2="${k.x}" y2="${k.y}" class="lead"/><circle id="glow-${escapeSvg(part.id)}" cx="${geometry.center.x}" cy="${geometry.center.y}" r="18" fill="${cssColor(ledColor)}" opacity="${Math.max(0, Math.min(1, state)) * 0.72}" class="led-glow"/><circle cx="${geometry.center.x}" cy="${geometry.center.y}" r="12" fill="${cssColor(ledColor)}" class="led-dome"/><text x="${a.x}" y="${a.y - 10}" class="pin-cue">A +</text><text x="${k.x}" y="${k.y + 17}" class="pin-cue">K −</text>`;
+  const brightness = Math.max(0, Math.min(1, state));
+  const gradientId = `led-gradient-${escapeSvg(part.id)}`;
+  const bodyFill = brightness > 0.02 ? cssColor(ledColor) : "#68747c";
+  const bodyOpacity = brightness > 0.02 ? 1 : 0.55;
+  return `<defs><radialGradient id="${gradientId}" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="${cssColor(ledColor)}" stop-opacity="0.95"/><stop offset="45%" stop-color="${cssColor(ledColor)}" stop-opacity="0.55"/><stop offset="100%" stop-color="${cssColor(ledColor)}" stop-opacity="0"/></radialGradient></defs><line x1="${a.x}" y1="${a.y}" x2="${k.x}" y2="${k.y}" class="lead"/><circle id="glow-${escapeSvg(part.id)}" cx="${geometry.center.x}" cy="${geometry.center.y}" r="42" fill="url(#${gradientId})" opacity="${brightness}" class="led-glow"/><circle cx="${geometry.center.x}" cy="${geometry.center.y}" r="12" fill="${bodyFill}" opacity="${bodyOpacity}" class="led-dome"/><text x="${a.x}" y="${a.y - 10}" class="pin-cue">A +</text><text x="${k.x}" y="${k.y + 17}" class="pin-cue">K −</text>`;
 }
 
 function renderResistor(part: Part, geometry: ReturnType<typeof partGeometry>): string {
@@ -290,7 +312,7 @@ function renderResistor(part: Part, geometry: ReturnType<typeof partGeometry>): 
 }
 
 function renderButton(geometry: ReturnType<typeof partGeometry>): string {
-  return `<rect x="${geometry.center.x - 28}" y="${CHANNEL_Y - 23}" width="56" height="46" rx="8" class="button-body"/><circle cx="${geometry.center.x}" cy="${CHANNEL_Y}" r="11" class="button-cap"/><text x="${geometry.center.x}" y="${CHANNEL_Y + 4}" text-anchor="middle" class="pin-cue">PRESS</text>`;
+  return `<rect x="${geometry.center.x - 28}" y="${CHANNEL_Y - 23}" width="56" height="46" rx="8" class="button-body"/><circle cx="${geometry.center.x}" cy="${CHANNEL_Y}" r="11" class="button-cap"/><text x="${geometry.center.x}" y="${CHANNEL_Y + 4}" text-anchor="middle" class="pin-cue button-text">PRESS</text>`;
 }
 
 function renderPhotoresistor(geometry: ReturnType<typeof partGeometry>): string {
@@ -387,6 +409,25 @@ function renderFocusLabels(layout: Layout, box: ViewBox): string {
   return `<g id="focus-labels">${labels.join("")}</g>`;
 }
 
+function scopeSvgStyles(svg: string): string {
+  const scope = 'svg[data-vibread="breadboard"]';
+  return svg.replace(/<style>([\s\S]*?)<\/style>/g, (_match, css: string) => {
+    const scoped = css.split("}").map((rule) => {
+      const brace = rule.indexOf("{");
+      if (brace < 0) return rule;
+      const selectors = rule.slice(0, brace).split(",").map((selector) => {
+        const trimmed = selector.trim();
+        if (!trimmed || trimmed.startsWith("@")) return trimmed;
+        return trimmed === "svg" ? scope : `${scope} ${trimmed}`;
+      }).join(", ");
+      return `${selectors}${rule.slice(brace)}`;
+    }).join("}");
+    const noFilters = scoped.replace(/filter\s*:\s*[^;}]+;?/gi, "");
+    const emphasis = `${scope} .button-text{fill:#fff;stroke:#17212b;stroke-width:2px;paint-order:stroke}${scope} .part.vb-hl .part-label{fill:#fff;stroke:#17212b;stroke-width:2px;paint-order:stroke}${scope} .hole-ring{fill:none;stroke:#ffdf4d;stroke-width:2px}${scope} .hole-callout{fill:#fff;stroke:#101820;stroke-width:2px;paint-order:stroke;font-size:12px;font-weight:700}`;
+    return `<style>${noFilters}${emphasis}</style>`;
+  });
+}
+
 export function renderBreadboardSvg(input: RenderInput): string {
   const width = input.width ?? DEFAULT_WIDTH;
   const state = viewState(input.steps, input.upToStep);
@@ -404,7 +445,8 @@ export function renderBreadboardSvg(input: RenderInput): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${renderHeight}" viewBox="${viewBox}" data-vibread="breadboard" role="img" aria-label="ViBread landscape breadboard assembly"><title>${escapeSvg(input.circuit.title)} breadboard</title><desc>Rows run left to right. Columns a through e are above the horizontal channel; f through j are below it. New step items glow; labels are repeated in text instructions.</desc><style>
 svg{font-family:Arial,"DejaVu Sans",sans-serif;background:#0c1218}.board-surface{fill:#d8b06f;stroke:#8c6336;stroke-width:3}.channel{fill:#806741;opacity:.72}.hole{fill:#26313a;stroke:#e6e9ed;stroke-width:1}.rail-hole{fill:#26313a;stroke:#fff;stroke-width:1}.row-label,.column-label,.rail-label,.channel-label{fill:#14212a;font-size:12px;font-weight:700}.column-label{font-size:15px}.column-guide{fill:#f2ead8;font-size:13px;font-weight:700}.rail-label{font-size:12px}.rail-plus{stroke:#e5484d;stroke-width:5}.rail-minus{stroke:#31506d;stroke-width:5}.rail-tick{stroke:#f4f6f8;stroke-width:1;opacity:.7}.lead{stroke:#3b454c;stroke-width:3}.led-dome{stroke:#f8fafc;stroke-width:2}.led-glow{filter:blur(3px)}.resistor-body{fill:#e7c48e;stroke:#653f23;stroke-width:2}.button-body{fill:#44515c;stroke:#eef2f5;stroke-width:2}.button-cap{fill:#bb4d52;stroke:#260d10;stroke-width:2}.sensor-body{fill:#9ca3af;stroke:#111827;stroke-width:2}.sensor-mark{stroke:#17212b;stroke-width:2}.pot-body{fill:#4f6570;stroke:#eef2f5;stroke-width:2}.pot-arrow{stroke:#f1c453;stroke-width:4}.pot-arrowhead{fill:#f1c453}.buzzer-body{fill:#20252a;stroke:#f2c94c;stroke-width:3}.generic-body{fill:#5f7880;stroke:#e5f2f4;stroke-width:2}.mcu{fill:#1b3339;stroke:#90c5bd;stroke-width:3}.board-title{fill:#f3f7f8;font-weight:700;font-size:15px}.header-label{fill:#90c5bd;font-size:11px;font-weight:700}.header-pin{fill:#f2c94c;stroke:#12181d;stroke-width:2}.pin-label{fill:#f3f7f8;font-size:12px;font-weight:700}.pin-cue{fill:#0b141b;font-size:11px;font-weight:700}.part-label{fill:#10191f;font-size:12px;font-weight:700}.label-bg{fill:#f7edcf;stroke:#715c3a;stroke-width:1}.leader{stroke:#32424b;stroke-width:1.5}.wire-path{fill:none;stroke-width:4;stroke-linecap:round;opacity:.9}.wire-bg{fill:#101820}.wire-label{fill:#fff;font-size:11px;font-weight:700}.vb-old{opacity:.48}.part.vb-hl,.wire.vb-hl{filter:drop-shadow(0 0 5px #fff)}.vb-new{filter:drop-shadow(0 0 8px #f7d774)}.hole.vb-hl,.rail-hole.vb-hl{fill:#ffe166;stroke:#111;stroke-width:2}
 </style><rect x="0" y="0" width="${width}" height="700" fill="#0c1218"/><rect x="${BOARD_LEFT - 16}" y="${BOARD_TOP - 28}" width="${BOARD_RIGHT - BOARD_LEFT + 32}" height="${BOARD_BOTTOM - BOARD_TOP + 50}" rx="18" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout)}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}<g class="legend"><rect x="${BOARD_RIGHT - 160}" y="${BOARD_TOP + 5}" width="148" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 150}" y="${BOARD_TOP + 22}" class="part-label">Rows left → right</text><text x="${BOARD_RIGHT - 150}" y="${BOARD_TOP + 38}" class="part-label">a–e top · f–j bottom</text></g></svg>`;
-  if (!focusBox) return svg;
-  const focusedSvg = svg.replace(/class="base-row-label row-label"/g, `class="base-row-label row-label" style="display:none"`).replace(/class="base-column-label column-label"/g, `class="base-column-label column-label" style="display:none"`);
+  const scopedSvg = scopeSvgStyles(svg);
+  if (!focusBox) return scopedSvg;
+  const focusedSvg = scopedSvg.replace(/class="base-row-label row-label"/g, `class="base-row-label row-label" style="display:none"`).replace(/class="base-column-label column-label"/g, `class="base-column-label column-label" style="display:none"`);
   return focusedSvg.replace(`<g id="focus-labels"></g>`, renderFocusLabels(input.layout, focusBox));
 }

@@ -518,21 +518,27 @@ function makeReadOnly(plan: SelfTestPlan, profile: BoardProfile): string {
     "vbEmitBegin(PSTR(\"pins.readonly\"));",
     "bool vbReadonlyStuck = false;",
   ];
+  const passivePins = [...new Set(plan.subjects.map((subject) => subject.pin))];
+  for (const pinName of passivePins) {
+    const id = pinIdentifier(pinName);
+    lines.push(`uint32_t vbPassive0_${id} = 0; uint32_t vbPassive1_${id} = 0;`);
+  }
   for (const subject of plan.subjects) {
     const id = pinIdentifier(subject.pin);
-    lines.push(`{ vbInput_${id}(0); uint32_t ones = 0; for (uint32_t i = 0; i < VB_SAMPLES; ++i) ones += vbRead_${id}(); vbEmitRead(PSTR(\"${cppString(subject.pin)}\"), 0, ones, VB_SAMPLES); }`);
-    lines.push(`{ vbInput_${id}(1); uint32_t ones = 0; for (uint32_t i = 0; i < VB_SAMPLES; ++i) ones += vbRead_${id}(); vbEmitRead(PSTR(\"${cppString(subject.pin)}\"), 1, ones, VB_SAMPLES); }`);
+    lines.push(`{ vbInput_${id}(0); vbPassive0_${id} = 0; for (uint32_t i = 0; i < VB_SAMPLES; ++i) vbPassive0_${id} += vbRead_${id}(); vbEmitRead(PSTR("${cppString(subject.pin)}"), 0, vbPassive0_${id}, VB_SAMPLES); }`);
+    lines.push(`{ vbInput_${id}(1); vbPassive1_${id} = 0; for (uint32_t i = 0; i < VB_SAMPLES; ++i) vbPassive1_${id} += vbRead_${id}(); vbEmitRead(PSTR("${cppString(subject.pin)}"), 1, vbPassive1_${id}, VB_SAMPLES); }`);
   }
-  const outputPins = new Map<string, { pin: BoardPin; active: number }>();
+  const outputPins = new Map<string, { pin: BoardPin; active: number; passiveGuard: 0 | 1 }>();
   for (const subject of plan.subjects) {
     if (subject.kind !== "led" && subject.kind !== "buzzer") continue;
     const pin = subjectPin(subject, profile);
-    outputPins.set(subject.pin, { pin, active: subject.kind === "led" ? (subject.activeHigh ? 1 : 0) : 1 });
+    const active = subject.kind === "led" ? (subject.activeHigh ? 1 : 0) : 1;
+    outputPins.set(subject.pin, { pin, active, passiveGuard: active === 1 ? 1 : 0 });
   }
   for (const [pinName, data] of outputPins) {
     const id = pinIdentifier(pinName);
     if (data.pin.port === undefined || data.pin.bit === undefined) continue;
-    lines.push(`if (!vbStuck_${id}) { uint8_t readback = vbProbe_${id}(${data.active}); vbEmitProbe(PSTR(\"${cppString(pinName)}\"), ${data.active}, readback); if (readback != ${data.active}) { vbStuck_${id} = true; vbReadonlyStuck = true; vbEmitStuck(PSTR(\"${cppString(pinName)}\"), ${data.active}); } }`);
+    lines.push(`if (!vbStuck_${id}) { if (${data.passiveGuard} == 1 && vbPassive0_${id} == VB_SAMPLES) { vbStuck_${id} = true; vbReadonlyStuck = true; vbEmitStuck(PSTR("${cppString(pinName)}"), 1); } else if (${data.passiveGuard} == 0 && vbPassive1_${id} == 0) { vbStuck_${id} = true; vbReadonlyStuck = true; vbEmitStuck(PSTR("${cppString(pinName)}"), 0); } else { uint8_t readback = vbProbe_${id}(${data.active}); vbEmitProbe(PSTR("${cppString(pinName)}"), ${data.active}, readback); if (readback != ${data.active}) { vbStuck_${id} = true; vbReadonlyStuck = true; vbEmitStuck(PSTR("${cppString(pinName)}"), readback); } } }`);
   }
   lines.push("vbReadonlyDone = true; vbEmitEnd(PSTR(\"pins.readonly\"), vbReadonlyStuck ? PSTR(\"fail\") : PSTR(\"pass\"), vbReadonlyStuck ? PSTR(\"stuck\") : nullptr);");
   return lines.join("\n  ");
@@ -617,15 +623,15 @@ function makePot(plan: SelfTestPlan, profile: BoardProfile): string {
 function makeLed(plan: SelfTestPlan, profile: BoardProfile): string {
   const leds = subjectByKind(plan, "led").sort((a, b) => a.order - b.order);
   if (leds.length === 0) return 'vbEmitBegin(PSTR("led.sequence")); vbEmitEnd(PSTR("led.sequence"), PSTR("skipped"), PSTR("no LED subjects"));';
-  const lines: string[] = ['vbEmitBegin(PSTR("led.sequence"));', "bool ledOk = true;"];
+  const lines: string[] = ['vbEmitBegin(PSTR("led.sequence"));', "bool ledOk = true;", "bool ledStuck = false;", "bool ledWrong = false;", "bool ledTimeout = false;"];
   const choices = [...leds.map((_subject, index) => `"${index + 1}"`), '"none"'].join(",");
   leds.forEach((subject) => {
     const id = pinIdentifier(subject.pin);
     const active = subject.activeHigh ? 1 : 0;
     const order = subject.order;
-    lines.push(`if (vbStuck_${id}) { ledOk = false; } else { const char* which${order} = vbAskWhilePulsing(PSTR("led${order}"), PSTR("led.sequence"), PSTR("which-led"), PSTR("${cppString(subject.part)}"), "${choices.replace(/"/g, '\\"')}", VB_PROMPT_TIMEOUT, vbPulse_${id}, ${active}); if (which${order} == nullptr || strcmp(which${order}, "timeout") == 0) ledOk = false; if (which${order} != nullptr) vbEmitObsStr(PSTR("led.sequence"), PSTR("${cppString(subject.part)}"), PSTR("which"), which${order}); }`);
+    lines.push(`if (vbStuck_${id}) { ledStuck = true; ledOk = false; } else { const char* which${order} = vbAskWhilePulsing(PSTR("led${order}"), PSTR("led.sequence"), PSTR("which-led"), PSTR("${cppString(subject.part)}"), "${choices.replace(/"/g, '\\"')}", VB_PROMPT_TIMEOUT, vbPulse_${id}, ${active}); if (which${order} == nullptr || strcmp(which${order}, "timeout") == 0) { ledTimeout = true; ledOk = false; } else if (strcmp(which${order}, "${order}") != 0) { ledWrong = true; ledOk = false; } if (which${order} != nullptr) vbEmitObsStr(PSTR("led.sequence"), PSTR("${cppString(subject.part)}"), PSTR("which"), which${order}); }`);
   });
-  lines.push('vbEmitEnd(PSTR("led.sequence"), ledOk ? PSTR("pass") : PSTR("unknown"), ledOk ? nullptr : PSTR("stuck or timeout"));');
+  lines.push('vbEmitEnd(PSTR("led.sequence"), ledTimeout ? PSTR("unknown") : ((ledStuck || ledWrong) ? PSTR("fail") : PSTR("pass")), ledStuck ? PSTR("stuck") : (ledTimeout ? PSTR("timeout") : (ledWrong ? PSTR("wrong LED confirmation") : nullptr)));');
   return lines.join("\n  ");
 }
 

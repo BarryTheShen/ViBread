@@ -55,8 +55,10 @@ async function startOAuthTest(): Promise<{ baseUrl: string; context: AppContextH
     CAPCOM_PROVIDER: "off",
   });
   const context = createAppContext({ config, log: pino({ level: "silent" }) });
-  const app = express();
   const authHandler = toNodeHandler(context.auth);
+  const app = express();
+  app.get("/.well-known/oauth-protected-resource/mcp", (_request, response) => response.json({ resource: `${config.publicUrl}/mcp`, authorization_servers: [`${config.publicUrl}/api/auth`], bearer_methods_supported: ["header"], scopes_supported: ["circuits:read", "circuits:write", "bench:request"] }));
+  app.get("/.well-known/oauth-authorization-server", (_request, response) => response.redirect(307, "/api/auth/.well-known/oauth-authorization-server"));
   app.all("/api/auth/*splat", (request, response, next) => void authHandler(request, response).catch(next));
   app.use(express.json());
   const { ctx, auth } = context;
@@ -153,7 +155,9 @@ describe("Better Auth OAuth → MCP", () => {
     expect(token.status).toBe(200);
     const tokenBody = (await token.json()) as { access_token: string; scope?: string };
     expect(tokenBody.scope).toContain("circuits:read");
-
+    const resourceMetadata = await (await fetch(`${baseUrl}/.well-known/oauth-protected-resource/mcp`)).json() as { authorization_servers: string[] };
+    const authorizationMetadata = await (await fetch(`${baseUrl}/.well-known/oauth-authorization-server`, { redirect: "follow" })).json() as { issuer: string };
+    expect(authorizationMetadata.issuer).toBe(resourceMetadata.authorization_servers[0]);
     const unauthorized = await fetch(`${baseUrl}/mcp`, { method: "POST", headers: { "content-type": "application/json" }, body: "{}" });
     expect(unauthorized.status).toBe(401);
     expect(unauthorized.headers.get("www-authenticate")).toContain("resource_metadata");

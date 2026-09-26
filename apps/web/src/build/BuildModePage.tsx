@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BuildState, PhotoCheckResult } from "@vibread/core";
 import {
@@ -15,6 +15,8 @@ import {
   MobileStepper,
   Paper,
   Stack,
+  ToggleButton,
+  ToggleButtonGroup,
   Typography,
   useMediaQuery,
 } from "@mui/material";
@@ -36,6 +38,7 @@ import { useParams } from "react-router";
 import { BuildApiError, fetchBuildState, postBuildStep, postPhotoCheck } from "./api.js";
 
 type BuildStep = BuildState["steps"][number] & { focusImageUrl?: string };
+type ImageView = "focused" | "whole";
 type PhotoVariables = { step: number; file: File };
 
 const BUILD_QUERY_KEY = "mission-build";
@@ -118,13 +121,14 @@ function PlugBanner({ plug, reducedMotion }: { plug: BuildStep["plug"]; reducedM
 }
 
 function StepImage({ step }: { step: BuildStep }) {
-  const [showWholeBoard, setShowWholeBoard] = useState(false);
+  const [imageView, setImageView] = useState<ImageView>("focused");
   const [failed, setFailed] = useState(false);
   const hasWholeBoard = Boolean(step.focusImageUrl && step.imageUrl);
+  const showWholeBoard = imageView === "whole";
   const imageUrl = showWholeBoard ? step.imageUrl : step.focusImageUrl ?? step.imageUrl;
 
   useEffect(() => {
-    setShowWholeBoard(false);
+    setImageView("focused");
     setFailed(false);
   }, [step.n, step.focusImageUrl, step.imageUrl]);
 
@@ -151,10 +155,14 @@ function StepImage({ step }: { step: BuildStep }) {
 
   const handleImageError = () => {
     if (!showWholeBoard && hasWholeBoard) {
-      setShowWholeBoard(true);
+      setImageView("whole");
       return;
     }
     setFailed(true);
+  };
+
+  const handleImageViewChange = (_event: MouseEvent<HTMLElement>, next: ImageView | null) => {
+    if (next) setImageView(next);
   };
 
   return (
@@ -174,21 +182,57 @@ function StepImage({ step }: { step: BuildStep }) {
       />
       {hasWholeBoard && (
         <Box sx={{ display: "flex", justifyContent: "flex-end", px: 1.5, pt: 1 }}>
-          <Button
-            type="button"
+          <ToggleButtonGroup
+            exclusive
             size="small"
-            variant="text"
-            aria-pressed={showWholeBoard}
-            onClick={() => setShowWholeBoard((visible) => !visible)}
-            sx={{ minHeight: 44 }}
+            value={imageView}
+            onChange={handleImageViewChange}
+            aria-label="Step image view"
           >
-            {showWholeBoard ? "Focused view" : "Whole board"}
-          </Button>
+            <ToggleButton value="focused" sx={{ minHeight: 44 }}>
+              Focused
+            </ToggleButton>
+            <ToggleButton value="whole" sx={{ minHeight: 44 }}>
+              Whole board
+            </ToggleButton>
+          </ToggleButtonGroup>
         </Box>
       )}
     </Box>
   );
 }
+function isBuildComplete(build: BuildState): boolean {
+  const lastStep = build.steps[build.steps.length - 1];
+  const headline = build.headline?.trim().toLowerCase() ?? "";
+  return (
+    lastStep !== undefined &&
+    (headline === `step ${lastStep.n} done` ||
+      headline.startsWith("build finished") ||
+      headline.startsWith(`all ${build.steps.length} steps done`))
+  );
+}
+
+function FinishedBuild({ total }: { total: number }) {
+  return (
+    <Paper
+      component="section"
+      aria-label="Build complete"
+      variant="outlined"
+      sx={{ p: 2.5, borderRadius: 3, borderWidth: 2, borderColor: "success.main", bgcolor: "rgba(62, 189, 126, 0.1)" }}
+    >
+      <Stack spacing={1.25} sx={{ alignItems: "flex-start" }}>
+        <CheckCircleOutlined color="success" sx={{ fontSize: 38 }} aria-hidden="true" />
+        <Typography component="h2" variant="h5" sx={{ fontWeight: 800 }}>
+          All {total} steps done — now test it at the bench on your laptop
+        </Typography>
+        <Typography variant="body2" color="text.secondary">
+          Open Bench on your laptop to run the safe checks.
+        </Typography>
+      </Stack>
+    </Paper>
+  );
+}
+
 
 function StepCard({ step, total, reducedMotion }: { step: BuildStep; total: number; reducedMotion: boolean }) {
   return (
@@ -318,18 +362,40 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
   const steps = build.steps;
   const initialStep = useMemo(() => currentStepIndex(steps, build.current), [build.current, steps]);
   const [activeStep, setActiveStep] = useState(initialStep);
+  const [finished, setFinished] = useState(() => isBuildComplete(build));
   const [photoResult, setPhotoResult] = useState<PhotoCheckResult | null>(null);
   const [photoStep, setPhotoStep] = useState<number | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
+  const photoResultRef = useRef<HTMLDivElement>(null);
+  const safeActiveStep = Math.min(Math.max(activeStep, 0), Math.max(steps.length - 1, 0));
+  const lastStepNumber = steps[steps.length - 1]?.n;
+  const currentStepNumber = steps[safeActiveStep]?.n;
 
   useEffect(() => {
     setActiveStep(initialStep);
   }, [initialStep]);
 
+  useEffect(() => {
+    setPhotoResult(null);
+    setPhotoStep(null);
+    setPhotoError(null);
+  }, [safeActiveStep]);
+
+  useEffect(() => {
+    setFinished(isBuildComplete(build));
+  }, [build.headline, build.revision, build.steps.length]);
+
+  useEffect(() => {
+    if (photoResult && photoStep === currentStepNumber) {
+      photoResultRef.current?.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth", block: "nearest" });
+    }
+  }, [currentStepNumber, photoResult, photoStep, reducedMotion]);
+
   const stepMutation = useMutation({
     mutationFn: (n: number) => postBuildStep(missionId, n),
-    onSuccess: (nextBuild) => {
+    onSuccess: (nextBuild, n) => {
       queryClient.setQueryData(buildQueryKey(missionId), nextBuild);
+      if (lastStepNumber !== undefined && n >= lastStepNumber) setFinished(true);
     },
   });
   const photoMutation = useMutation<PhotoCheckResult, unknown, PhotoVariables>({
@@ -354,7 +420,8 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
     );
   }
 
-  const safeActiveStep = Math.min(Math.max(activeStep, 0), steps.length - 1);
+  if (finished) return <FinishedBuild total={steps.length} />;
+
   const step = steps[safeActiveStep];
   const handlePhotoChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -447,13 +514,17 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
           onChange={handlePhotoChange}
         />
       </Button>
+      {photoResult && photoStep === step.n && (
+        <Box ref={photoResultRef}>
+          <PhotoResult result={photoResult} />
+        </Box>
+      )}
       {photoError && (
         <Alert severity="warning" icon={<CloudOffOutlined />}>
           <AlertTitle>Photo check unavailable</AlertTitle>
           {photoError} You can continue building; photo checks are advisory.
         </Alert>
       )}
-      {photoResult && photoStep === step.n && <PhotoResult result={photoResult} />}
     </Stack>
   );
 }

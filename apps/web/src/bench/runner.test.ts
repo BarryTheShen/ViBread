@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { Circuit, SelfTestPlan } from "@vibread/core";
 import { encodeHostCommand } from "@vibread/core";
 import { BenchRunner, type BenchTransport } from "./runner.js";
@@ -69,6 +69,25 @@ describe("BenchRunner", () => {
     transport.receive(JSON.stringify({ t: "done" }));
     expect(runner.state.phase).toBe("complete");
     expect(runner.runRequest()).toMatchObject({ revision: 3, kind: "selftest", answers: { "btn0-press": "done" } });
+  });
+
+  it("answers an expired ask with timeout and keeps only the current prompt", async () => {
+    vi.useFakeTimers();
+    try {
+      const transport = new FakeTransport();
+      const runner = new BenchRunner({ circuit, plan, revision: 1, transport });
+      await runner.startSelfTest();
+      transport.receive(JSON.stringify({ t: "ask", id: "btn0-press", test: "button.interactive", kind: "press-hold", choices: ["done"], timeoutMs: 20 }));
+      vi.advanceTimersByTime(20);
+      await Promise.resolve();
+      expect(transport.writes).toContain(encodeHostCommand({ c: "answer", id: "btn0-press", v: "timeout" }));
+      transport.receive(JSON.stringify({ t: "ask", id: "btn0-release", test: "button.interactive", kind: "release", choices: ["done"], timeoutMs: 1000 }));
+      expect(runner.state.asks).toHaveLength(1);
+      expect(runner.state.asks[0]?.id).toBe("btn0-release");
+      runner.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("waits for the matching hello before sending the rail command", async () => {
