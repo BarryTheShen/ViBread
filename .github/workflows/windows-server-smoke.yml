@@ -1,0 +1,138 @@
+name: Windows server smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "apps/server/**"
+      - "packages/**"
+      - "package-lock.json"
+      - ".github/workflows/windows-server-smoke.yml"
+  workflow_dispatch:
+
+jobs:
+  server-smoke:
+    name: Claude connect flow (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      DATA_DIR: '${{ runner.temp }}\vb-data'
+      PORT: "8787"
+      ORIGIN: "http://localhost:8787"
+
+    steps:
+      - name: Check out
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22.22.1
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Build web app
+        run: npm run build
+
+      - name: Download and verify omp
+        shell: pwsh
+        run: |
+          $version = "18.3.2"
+          $url = "https://github.com/can1357/oh-my-pi/releases/download/v$version/omp-windows-x64.exe"
+          $expected = "5d99fe5c11ec3ff1792e427c0e61eeb5a6c84670cadb65d023dd2f5eb8705f40"
+          $omp = Join-Path $env:RUNNER_TEMP "omp.exe"
+          Invoke-WebRequest -Uri $url -OutFile $omp
+          $actual = (Get-FileHash -Algorithm SHA256 -Path $omp).Hash.ToLowerInvariant()
+          if ($actual -ne $expected) {
+            throw "omp $version SHA-256 mismatch: expected $expected, got $actual"
+          }
+          & $omp --version
+          "VIBREAD_OMP_BIN=$omp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Downloaded and verified omp $version ($actual)"
+
+      - name: Start server
+        shell: pwsh
+        run: |
+          $stdout = Join-Path $env:RUNNER_TEMP "vibread-server.stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "vibread-server.stderr.log"
+          $pidFile = Join-Path $env:RUNNER_TEMP "vibread-server.pid"
+          Remove-Item $stdout, $stderr, $pidFile -Force -ErrorAction SilentlyContinue
+          $server = Start-Process -FilePath "npm.cmd" -ArgumentList @("start") -WorkingDirectory $env:GITHUB_WORKSPACE -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+          $server.Id | Set-Content -Path $pidFile -Encoding ascii
+          Write-Host "Started server process $($server.Id)"
+
+      - name: Wait for server
+        shell: pwsh
+        run: |
+          $pidFile = Join-Path $env:RUNNER_TEMP "vibread-server.pid"
+          $stdout = Join-Path $env:RUNNER_TEMP "vibread-server.stdout.log"
+          $stderr = Join-Path $env:RUNNER_TEMP "vibread-server.stderr.log"
+          $serverPid = [int](Get-Content -Raw $pidFile)
+          $uri = "http://localhost:$env:PORT/api/missions"
+          $deadline = [DateTime]::UtcNow.AddSeconds(90)
+          while ([DateTime]::UtcNow -lt $deadline) {
+            try {
+              $response = Invoke-WebRequest -UseBasicParsing -Uri $uri -Method Get -TimeoutSec 5
+              if ($response.StatusCode -eq 200) {
+                Write-Host "Server is ready: GET $uri -> 200"
+                exit 0
+              }
+            } catch {
+              # The server may still be compiling or opening its database.
+            }
+            if (-not (Get-Process -Id $serverPid -ErrorAction SilentlyContinue)) {
+              Write-Host "Server process exited before becoming ready."
+              foreach ($log in @($stdout, $stderr)) {
+                if (Test-Path $log) {
+                  Write-Host "--- $log ---"
+                  Get-Content -Path $log -Tail 100
+                }
+              }
+              throw "Server process $serverPid exited before GET $uri returned 200"
+            }
+            Start-Sleep -Seconds 1
+          }
+          foreach ($log in @($stdout, $stderr)) {
+            if (Test-Path $log) {
+              Write-Host "--- $log ---"
+              Get-Content -Path $log -Tail 100
+            }
+          }
+          throw "Timed out waiting for GET $uri -> 200"
+
+      - name: Run Claude connect smoke
+        shell: pwsh
+        env:
+          SERVER_LOG: '${{ runner.temp }}\vibread-server.stdout.log'
+          SERVER_ERROR_LOG: '${{ runner.temp }}\vibread-server.stderr.log'
+        run: node scripts/ci/claude-connect-smoke.mjs
+
+      - name: Print server log tail on failure
+        if: failure()
+        shell: pwsh
+        run: |
+          foreach ($log in @(
+            (Join-Path $env:RUNNER_TEMP "vibread-server.stdout.log"),
+            (Join-Path $env:RUNNER_TEMP "vibread-server.stderr.log")
+          )) {
+            if (Test-Path $log) {
+              Write-Host "--- $log (tail) ---"
+              Get-Content -Path $log -Tail 150
+            }
+          }
+
+      - name: Stop server
+        if: always()
+        shell: pwsh
+        run: |
+          $pidFile = Join-Path $env:RUNNER_TEMP "vibread-server.pid"
+          if (Test-Path $pidFile) {
+            $serverPid = [int](Get-Content -Raw $pidFile)
+            if (Get-Process -Id $serverPid -ErrorAction SilentlyContinue) {
+              Write-Host "Stopping server process tree rooted at $serverPid"
+              & taskkill.exe /PID $serverPid /T /F | Out-Host
+              if ($LASTEXITCODE -ne 0) { Write-Warning "taskkill exited with $LASTEXITCODE" }
+            }
+          }

@@ -11,15 +11,11 @@ describe("paired phone scan polling", () => {
     vi.stubGlobal("window", {});
     vi.stubGlobal("document", { visibilityState: "hidden" });
     const { focusManager, QueryClient, QueryObserver } = await import("@tanstack/react-query");
-    const { inventoryQueryKeys, scanPollingInterval } = await import("./inventory.js");
+    const { scanQueryOptions } = await import("./inventory.js");
     let serverView = scanView(0);
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    const observer = new QueryObserver<ScanView>(client, {
-      queryKey: inventoryQueryKeys.scan("scan-1"),
-      queryFn: async () => serverView,
-      refetchInterval: (query) => scanPollingInterval(query.state.data?.status),
-      refetchIntervalInBackground: true,
-    });
+    // The real laptop query options, with only the network call replaced by the server's current view.
+    const observer = new QueryObserver(client, { ...scanQueryOptions("scan-1"), queryFn: async () => serverView });
     let latest: ScanView | undefined;
     const unsubscribe = observer.subscribe((result) => {
       latest = result.data;
