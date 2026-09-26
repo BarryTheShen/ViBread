@@ -30,7 +30,10 @@ module.exports = {
     identity: "-",
     hardenedRuntime: false,
     gatekeeperAssess: false,
-    extendInfo: { NSLocalNetworkUsageDescription: "ViBread serves its web app to phones on your local network." },
+    extendInfo: {
+      NSLocalNetworkUsageDescription: "ViBread serves its web app to phones on your local network.",
+      NSCameraUsageDescription: "ViBread uses the camera to scan your parts.",
+    },
   },
   dmg: { writeUpdateInfo: false },
   win: { target: [{ target: "nsis", arch: ["x64"] }], signAndEditExecutable: true },

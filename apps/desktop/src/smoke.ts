@@ -1,14 +1,15 @@
 // VIBREAD_SMOKE=1: end-to-end self-check of a packaged build (used by CI and for local verification).
 // Asserts the renderer is ViBread with Web Serial, the three golden missions exist and their firmware compiled with the
 // toolchain installed into userData, captures Home / mission / bench screenshots, writes smoke.json, exits 0 or 1.
-import { mkdirSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { BrowserWindow } from "electron";
 import type { DesktopPaths } from "./runtime.js";
 import type { SerialState } from "./serial.js";
 import type { ServerInfo } from "./server.js";
-import type { SetupStep } from "./setup.js";
+import { OMP_VERSION, type SetupStep } from "./setup.js";
 
 export interface SmokeTimings {
   launchedAt: number;
@@ -24,9 +25,7 @@ interface Check {
   detail: string;
 }
 
-// arduino-cli may report Windows paths with other separators or drive-letter case.
 const normalize = (path: string) => path.replaceAll("\\", "/").toLowerCase();
-
 const GOLDEN_TITLES = ["Moon-Phase Lamp", "Knob Night-Light", "Launch Control"];
 
 function outputDir(paths: DesktopPaths): string {
@@ -70,17 +69,26 @@ export async function runSmoke(input: { window: BrowserWindow; info: ServerInfo;
     check("select-serial-port handler installed", serial.handlerInstalled, String(serial.handlerInstalled));
     const secure = await web.executeJavaScript("window.isSecureContext");
     check("renderer is a secure context", secure === true, `${info.localUrl} isSecureContext=${secure}`);
+    let ompVersion = "";
+    let ompError = "";
+    try {
+      const env = { ...process.env, VIBREAD_OMP_BIN: paths.ompBin };
+      ompVersion = execFileSync(env.VIBREAD_OMP_BIN!, ["--version"], { encoding: "utf8", env, timeout: 30_000, windowsHide: true }).trim();
+    } catch (error) {
+      ompError = error instanceof Error ? error.message : String(error);
+    }
+    check("VIBREAD_OMP_BIN runs --version", ompVersion.includes(`omp/${OMP_VERSION}`), ompError || ompVersion || paths.ompBin);
     await shot("home");
 
     const missions = (await (await fetch(`${info.localUrl}/api/missions`)).json()) as { id: string; title: string }[];
     const golden = GOLDEN_TITLES.map((wanted) => missions.find((mission) => mission.title === wanted));
     check("GET /api/missions lists the 3 seeded missions", golden.every(Boolean), missions.map((m) => m.title).join(", "));
 
-    const compiled: { title: string; ok: boolean; fqbn?: string; flashBytes?: number; toolchainPath: boolean }[] = [];
+    const compiled: { title: string; ok: boolean; fqbn?: string; flashBytes?: number }[] = [];
     for (const mission of golden) {
       if (!mission) continue;
       const revision = (await (await fetch(`${info.localUrl}/api/missions/${mission.id}/revisions/1`)).json()) as {
-        results?: { compile?: { ok: boolean; fqbn: string; sizes?: { flashBytes: number }; diagnostics?: { file?: string }[] } };
+        results?: { compile?: { ok: boolean; fqbn: string; sizes?: { flashBytes: number } } };
       };
       const compile = revision.results?.compile;
       compiled.push({
@@ -88,12 +96,31 @@ export async function runSmoke(input: { window: BrowserWindow; info: ServerInfo;
         ok: compile?.ok === true,
         fqbn: compile?.fqbn,
         flashBytes: compile?.sizes?.flashBytes,
-        // Core warnings point into the AVR core, proving arduino-cli ran from <userData>/toolchain.
-        toolchainPath: (compile?.diagnostics ?? []).some((d) => d.file !== undefined && normalize(d.file).startsWith(normalize(paths.toolchain))),
       });
     }
     check("seeded firmware compiled", compiled.length === 3 && compiled.every((c) => c.ok), JSON.stringify(compiled));
-    check("compiled with the downloaded toolchain", compiled.some((c) => c.toolchainPath), paths.toolchain);
+    const expectedToolchainCli = join(paths.toolchain, "bin", process.platform === "win32" ? "arduino-cli.exe" : "arduino-cli");
+    const expectedToolchainConfig = join(paths.toolchain, "arduino", "arduino-cli.yaml");
+    const childPathsMatch =
+      normalize(info.arduinoCli) === normalize(expectedToolchainCli) && normalize(info.arduinoConfig) === normalize(expectedToolchainConfig);
+    let cliVersion = "";
+    let cliError = "";
+    try {
+      cliVersion = execFileSync(info.arduinoCli, ["--config-file", info.arduinoConfig, "version"], {
+        encoding: "utf8",
+        env: { ...process.env, VIBREAD_ARDUINO_CLI: info.arduinoCli, VIBREAD_ARDUINO_CONFIG: info.arduinoConfig },
+        timeout: 30_000,
+        windowsHide: true,
+      }).trim();
+    } catch (error) {
+      cliError = error instanceof Error ? error.message : String(error);
+    }
+    const compileThroughServer = compiled.length === 3 && compiled.every((c) => c.ok && (c.flashBytes ?? 0) > 0);
+    check(
+      "compiled with the downloaded toolchain",
+      childPathsMatch && existsSync(info.arduinoCli) && existsSync(info.arduinoConfig) && cliVersion.includes("1.5.1") && compileThroughServer,
+      JSON.stringify({ cli: info.arduinoCli, config: info.arduinoConfig, version: cliVersion || cliError, compileThroughServer }),
+    );
 
     const first = golden[0];
     if (first) {

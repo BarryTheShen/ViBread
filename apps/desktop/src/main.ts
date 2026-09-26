@@ -82,7 +82,7 @@ async function firstRun(pending: SetupStep[]): Promise<void> {
   });
   await once(setupWindow.webContents, "did-finish-load");
   const send = (channel: string, payload: unknown) => setupWindow?.webContents.send(channel, payload);
-  for (const step of ["toolchain", "seed"] as SetupStep[]) if (!pending.includes(step)) send("setup:progress", { step, state: "skipped" });
+  for (const step of ["toolchain", "omp", "seed"] as SetupStep[]) if (!pending.includes(step)) send("setup:progress", { step, state: "skipped" });
   for (;;) {
     let current: SetupStep = pendingSteps(paths)[0] ?? "toolchain";
     try {
@@ -92,7 +92,7 @@ async function firstRun(pending: SetupStep[]): Promise<void> {
         send("setup:progress", progress);
       });
       Object.assign(timings, { toolchainMs: ran.toolchain, seedMs: ran.seed });
-      for (const step of steps) send("setup:progress", { step, state: "done" });
+      for (const step of steps) if (!pendingSteps(paths).includes(step)) send("setup:progress", { step, state: "done" });
       return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
