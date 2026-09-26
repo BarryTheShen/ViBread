@@ -19,6 +19,8 @@ const golden = GOLDEN.find((g) => g.key === "moon-phase-lamp")!;
 const HUMAN: Actor = { kind: "human", id: "operator", name: "Operator", channel: "web" };
 type Chunk = { type: string; [key: string]: unknown };
 type Reply = { status?: number; headers?: Record<string, string>; body?: unknown; events?: object[] };
+type Request = { model: string; messages: { role: string; content: unknown }[]; tools?: { name: string }[]; thinking?: unknown; betas?: string[]; beta: string };
+type Replies = Reply[] | ((request: Request, index: number) => Reply);
 
 const usage = { input_tokens: 900, output_tokens: 1, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
 const start = { type: "message_start", message: { id: "msg_1", type: "message", role: "assistant", model: "claude-opus-5-5", content: [], stop_reason: null, stop_sequence: null, usage } };
@@ -53,14 +55,15 @@ afterEach(() => {
 });
 
 /** Local Anthropic endpoint: answers each POST /v1/messages with the next reply and records the request bodies. */
-async function anthropic(replies: Reply[]): Promise<{ origin: string; requests: { messages: { role: string; content: unknown }[] }[] }> {
-  const requests: { messages: { role: string; content: unknown }[] }[] = [];
+async function anthropic(replies: Replies): Promise<{ origin: string; requests: Request[] }> {
+  const requests: Request[] = [];
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (chunk) => (raw += chunk));
     req.on("end", () => {
-      requests.push(JSON.parse(raw));
-      const reply = replies[Math.min(requests.length - 1, replies.length - 1)]!;
+      const request: Request = { ...JSON.parse(raw), beta: String(req.headers["anthropic-beta"] ?? "") };
+      requests.push(request);
+      const reply = typeof replies === "function" ? replies(request, requests.length - 1) : replies[Math.min(requests.length - 1, replies.length - 1)]!;
       if (reply.status && reply.status !== 200) {
         res.writeHead(reply.status, { "content-type": "application/json", ...reply.headers });
         res.end(JSON.stringify(reply.body));
@@ -76,10 +79,14 @@ async function anthropic(replies: Reply[]): Promise<{ origin: string; requests: 
   return { origin: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, requests };
 }
 
-async function run(replies: Reply[]) {
+async function run(replies: Replies, config: { model?: string; claudeProtocol?: "managed" | "plain" } = {}) {
   const claude = await anthropic(replies);
   const deps = testDeps();
-  const runtime = createAgentRuntime({ ...deps, models: anthropicModels({ config: { model: "claude-opus-5-5", fastModel: "claude-sonnet-5", anthropicApiKey: "sk-ant-api03-test", anthropicBaseUrl: claude.origin } }) });
+  const models = anthropicModels({
+    config: { model: config.model ?? "claude-opus-5-5", fastModel: "claude-sonnet-5", anthropicApiKey: "sk-ant-api03-test", anthropicBaseUrl: claude.origin, ...(config.claudeProtocol ? { claudeProtocol: config.claudeProtocol } : {}) },
+    onProtocolFallback: (modelId, error) => deps.debug.event(null, "model", `${modelId}: retried plain`, { model: modelId, error }, "warn"),
+  });
+  const runtime = createAgentRuntime({ ...deps, models });
   const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
   const app = express();
   app.use(express.json());
@@ -100,7 +107,7 @@ async function run(replies: Reply[]) {
     .split("\n")
     .filter((line) => line.startsWith("data: {"))
     .map((line) => JSON.parse(line.slice(6)) as Chunk);
-  return { chunks, claude, history: await deps.messages.list(mission.id), runtime, mission };
+  return { chunks, claude, history: await deps.messages.list(mission.id), runtime, mission, deps };
 }
 
 const said = (chunks: Chunk[]) => chunks.filter((c) => c.type === "text-delta").map((c) => c.delta).join("");
@@ -159,5 +166,58 @@ describe("design agent on real-shaped Anthropic streams", () => {
     expect(JSON.stringify(result)).toContain('"is_error":true');
     expect(said(chunks)).toBe("I'll fix the design.");
     expect(chunks.at(-1)).toEqual({ type: "finish", finishReason: "stop" });
+  });
+
+});
+
+/** What pi-ai's managed protocol puts in a request: 2026 betas, system-role messages, adaptive thinking, deferred tools. */
+function managed(request: Request): Record<string, boolean> {
+  return {
+    betas: /mid-conversation|thinking-binding/.test(request.beta),
+    systemMessages: request.messages.some((m) => m.role === "system"),
+    adaptiveThinking: JSON.stringify(request.thinking ?? null).includes("block_binding"),
+    placeholderTool: (request.tools ?? []).some((t) => t.name === "__pi_deferred_placeholder__"),
+  };
+}
+const NONE = { betas: false, systemMessages: false, adaptiveThinking: false, placeholderTool: false };
+const REFUSED_BETA: Reply = { status: 400, body: { type: "error", error: { type: "invalid_request_error", message: "Unexpected value(s) `mid-conversation-output-config-2026-07-01` for the `anthropic-beta` header." } } };
+
+describe("pi-ai's managed request protocol for claude-opus-5-5", () => {
+  it("a 400 refusing it is retried once without it, logged, and later requests go plain straight away", async () => {
+    const { chunks, claude, deps } = await run((request, index) =>
+      managed(request).betas ? REFUSED_BETA : index === 1 ? { events: [start, ...toolUse(0, "toolu_1", "list_modules", {}), ...end("tool_use")] } : { events: [start, ...text(0, "Done."), ...end("end_turn")] },
+    );
+    expect(managed(claude.requests[0]!)).toEqual({ betas: true, systemMessages: true, adaptiveThinking: true, placeholderTool: true });
+    expect(claude.requests.slice(1).map(managed)).toEqual([NONE, NONE]);
+    expect(claude.requests[1]!.tools!.map((t) => t.name)).toContain("propose_design");
+    expect(chunks.some((c) => c.type === "error")).toBe(false);
+    expect(said(chunks)).toBe("Done.");
+    expect(deps.debug.entries.filter((e) => e.message.includes("retried plain"))).toEqual([
+      expect.objectContaining({ level: "warn", data: expect.objectContaining({ model: "claude-opus-5-5", error: expect.stringContaining("anthropic-beta") }) }),
+    ]);
+  });
+
+  it("other 400s are not retried", async () => {
+    const tooLong: Reply = { status: 400, body: { type: "error", error: { type: "invalid_request_error", message: "prompt is too long: 1200000 tokens > 1000000 maximum" } } };
+    const { chunks, claude } = await run([tooLong]);
+    expect(claude.requests).toHaveLength(1);
+    expect(chunks.find((c) => c.type === "error")?.errorText).toContain("prompt is too long");
+  });
+
+  it("VIBREAD_CLAUDE_PROTOCOL=plain never uses it", async () => {
+    const { claude, chunks } = await run([{ events: [start, ...text(0, "Hi."), ...end("end_turn")] }], { claudeProtocol: "plain" });
+    expect(claude.requests.map(managed)).toEqual([NONE]);
+    expect(said(chunks)).toBe("Hi.");
+  });
+
+  it("VIBREAD_MODEL=claude-sonnet-5 runs the design agent without it", async () => {
+    const { claude, chunks } = await run(
+      [{ events: [start, ...toolUse(0, "toolu_1", "get_inventory", {}), ...end("tool_use")] }, { events: [start, ...text(0, "Ready."), ...end("end_turn")] }],
+      { model: "claude-sonnet-5" },
+    );
+    expect(claude.requests.map((r) => r.model)).toEqual(["claude-sonnet-5", "claude-sonnet-5"]);
+    expect(claude.requests.map(managed)).toEqual([NONE, NONE]);
+    expect(claude.requests[0]!.thinking).toEqual({ type: "disabled" });
+    expect(said(chunks)).toBe("Ready.");
   });
 });

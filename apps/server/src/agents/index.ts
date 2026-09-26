@@ -56,7 +56,14 @@ export interface AgentRuntime {
  * default Claude with the owner's credential and the real engine pipeline.
  */
 export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pipeline?: Pipeline }): AgentRuntime {
-  const direct = deps.models ?? anthropicModels({ config: deps.config, claudeAccounts: deps.claudeAccounts, log: deps.log });
+  const direct =
+    deps.models ??
+    anthropicModels({
+      config: deps.config,
+      claudeAccounts: deps.claudeAccounts,
+      log: deps.log,
+      onProtocolFallback: (modelId, error) => deps.debug.event(null, "model", `${modelId}: Claude refused pi-ai's managed protocol; retried plain`, { model: modelId, error }, "warn"),
+    });
   const models = tracedModels(direct, deps.debug);
   const bus = createEventBus(deps.store);
   const injected = deps.pipeline;
