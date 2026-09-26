@@ -26,10 +26,10 @@ before any wiring, a rail checkpoint, and a read-before-drive self-test whose te
 (rule table + a simulated single-fault dictionary). A "Try it" tab runs the real compiled sketch live in the browser.
 Photo check (Claude vision) is advisory only.
 
-The same mission is reachable from **iMessage** ("CAPCOM", via Photon Spectrum) and from **Claude Code** over MCP, under
-Claude-Code-style permission modes: **Plan / Ask every time / Review (default) / Autopilot**. Physical actions (flash,
-self-test, rewiring) only ever run from a click at the bench browser; iMessage can pre-approve them, remote agents can
-only request them.
+The same mission is reachable from **iMessage** ("CAPCOM", via Photon Spectrum) and from **Claude Code** over MCP. There
+are no design permission modes: Claude can edit the design directly. **GO for build** is human-only (the web button or an
+iMessage `GO`). Physical actions (flash, self-test, rewiring) still wait for a click at the bench; remote agents can only
+request them.
 
 ## Install
 
@@ -60,11 +60,12 @@ newest from **[Releases → Latest](https://github.com/BarryTheShen/ViBread/rele
 - **Phones:** menu **ViBread → Show phone link / QR** (same Wi-Fi). Phones pair by scanning the QR code; other devices
   on the Wi-Fi can't open your ViBread. Allow ViBread through the firewall when your OS asks (Windows/macOS prompt on
   first phone connection; private networks only).
-- **AI agents:** the primary route is **Settings → Connect your Claude account**: ViBread's server runs the Claude sign-in
-  itself (pi-ai's Anthropic OAuth) and keeps the grant in its database, so no helper program is needed. The secondary
-  route is menu **ViBread → Set Anthropic API key…**; that key is encrypted with the OS keychain (macOS Keychain, Windows
-  DPAPI, GNOME Keyring/KWallet on Linux). On a Linux desktop without a keyring it is stored obfuscated, not encrypted, in
-  `settings.json` (readable only by your user), and the key window says so.
+- **AI agents:** the primary route is **Settings → Connect your Claude account**: ViBread runs pi-ai's Anthropic OAuth in
+  the server. Paste the code Claude shows, `code#state`, or the whole `localhost:53692/callback…` address; this also works
+  when the browser is on another computer. The other route is **Settings → Claude → Use an API key instead**. ViBread
+  checks that key with Anthropic before saving it, and stores either credential per user in the server database. No helper
+  program or `HOME`/`USERPROFILE` credential file is used. In the desktop menu, **ViBread → Set Anthropic API key…** sets
+  the server's fallback key in the OS credential store.
 - **Your data** lives in `~/.config/ViBread` (Linux), `%APPDATA%\ViBread` (Windows), `~/Library/Application Support/ViBread`
   (macOS): `data/` (missions), `toolchain/`, `logs/server.log`, `logs/setup.log`. Menu: *Open data folder*, *Open logs*,
   *Reset example missions*.
@@ -94,7 +95,8 @@ drive ViBread over MCP.
 ```bash
 git clone https://github.com/BarryTheShen/ViBread.git
 cd ViBread
-npm install               # ~1 min; also installs the isolated schematic renderer (packages/assembly/schematic-runtime)
+npm install               # runs postinstall for the isolated schematic runtime (packages/assembly/schematic-runtime);
+                         # rerun after git pull so new runtime dependencies such as elkjs are installed
 npm run setup:toolchain   # ~1 min; arduino-cli 1.5.1 (SHA-256 pinned) + Arduino AVR core 1.8.8 + ArduinoJson 7.4.2 → .toolchain/ (any OS)
 npm run build             # builds the web app into apps/web/dist (the server serves it)
 npm run seed              # optional: the example missions (Moon-Phase Lamp, Knob Night-Light, Launch Control) plus one recorded real Claude run
@@ -102,8 +104,9 @@ cp .env.example .env      # optional: add ANTHROPIC_API_KEY etc. (see Configurat
 npm start                 # → http://localhost:8787
 ```
 
-Open **http://localhost:8787**. Without a Claude credential everything works except the AI agents (the chat says Claude
-isn't connected): add `ANTHROPIC_API_KEY` to `.env`, or use Settings → *Connect your Claude account*.
+Open **http://localhost:8787**. Without a Claude credential, everything works except live Claude calls (the chat says Claude
+isn't connected): set the server fallback `ANTHROPIC_API_KEY`, or use Settings → **Claude** to connect your account or save
+your own Anthropic API key.
 
 Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the checks and the server tests) and
 `npm run typecheck`.
@@ -123,12 +126,25 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 |---|---|
 | `npm install` complains about the engine or lockfile | Upgrade Node to 22.12+ and npm to 10+ |
 | Port 8787 is busy | `PORT=8788 npm start` |
-| "Claude is not connected" in the chat | Expected without a credential — set `ANTHROPIC_API_KEY` or connect a Claude account in Settings |
-| Schematic tab says the drawing isn't ready | Re-run `npm install` (it installs `packages/assembly/schematic-runtime`) |
+| "Claude is not connected" in the chat | Expected without a credential — set the server fallback `ANTHROPIC_API_KEY`, or connect an account or API key in Settings → **Claude** |
+| Schematic tab says the drawing isn't ready | Re-run `npm install` (its postinstall installs `packages/assembly/schematic-runtime`, including elkjs) |
 | Compile errors mentioning `arduino-cli` / missing core | Re-run `npm run setup:toolchain` |
 | Bench can't see the board | Use Chrome/Edge on `localhost`; try another USB cable (charge-only cables have no data); close the Arduino IDE serial monitor; on Linux add yourself to the `dialout` group |
 | Flashing from the browser fails | Copy the command the bench page shows under *Laptop fallback* (it has the right paths and board), e.g. `.toolchain/bin/arduino-cli --config-file .toolchain/arduino/arduino-cli.yaml upload --fqbn arduino:avr:uno --port <port> --input-file <hex>` |
 | Start over with fresh demo data | Stop the server, `rm -rf data`, `npm run seed`, `npm start` |
+
+## Inventory, interface, and diagnostics
+
+- **Inventory:** type a list of parts or scan from the laptop camera, a phone, or an upload. The typed parser handles
+  parentheses, `N each`, `A & B`, and units. Scans have explicit upload and analysis failure states with **Retry**, and
+  Settings lets you edit part types.
+- **Chat:** the mission chat uses assistant-ui with MUI styling. Tool calls fold into grouped rows, Claude's questions are
+  answerable cards, and the chat supports stop/resume.
+- **Theme:** the light and dark palettes follow the system setting and use space cadet, cool gray, anti-flash white, and
+  red tokens.
+- **Debug logs:** the server writes redacted JSONL to `data/logs/server.jsonl` and `data/logs/missions/<missionId>.jsonl`.
+  Settings → **Diagnostics** shows the server or a selected mission log with area/level filters; browser errors are sent to
+  the server. Follow a log from the repository root with `node scripts/debug-log.mjs [missionId] --follow`.
 
 ### Configuration (`.env` in the repo root, all optional)
 
@@ -139,9 +155,10 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 | `VIBREAD_LAN_PAIRING=off` | Disable the single-operator LAN pairing guard (only on a trusted network) |
 | Tunnels (cloudflared/ngrok) | Treated as remote devices; `ssh -R`-style raw forwarding looks like the laptop itself, so use multi-user sign-in for any public tunnel |
 | `DATA_DIR` | SQLite database, artifacts and generated secrets (default `./data`, relative to the repo root) |
-| `ANTHROPIC_API_KEY` | ViBread's server key for the agents (design, test author, RETRO, photo check, scan). Users can instead connect their own Claude account (below). Without either, everything except the agents works and the chat says Claude is not connected |
+| `ANTHROPIC_API_KEY` | Optional server fallback key for design, test author, RETRO, photo check, and scan calls. A user can instead connect a Claude account or save an API key in Settings → Claude. Without both a user credential and this fallback, live Claude calls are unavailable |
 | `ANTHROPIC_BASE_URL` | Anthropic API origin for every Claude call (a proxy or local bridge; default `https://api.anthropic.com`) |
 | `VIBREAD_MODEL`, `VIBREAD_FAST_MODEL` | Default `claude-opus-5-5`, `claude-sonnet-5` |
+| `VIBREAD_CLAUDE_PROTOCOL` | `managed` (default: pi-ai's per-model request protocol — for claude-opus-5-5 adaptive thinking, mid-conversation system messages and their beta headers) or `plain`. If Claude answers 400 to a managed feature, ViBread retries that request plain and stays plain for that model (logged in Diagnostics) |
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in (callback `${PUBLIC_URL}/api/auth/callback/google`) |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub sign-in (callback `${PUBLIC_URL}/api/auth/callback/github`). With Google or GitHub configured, single-operator mode (no sign-in) is turned off |
 | `BETTER_AUTH_SECRET`, `VIBREAD_APPROVAL_SECRET` | Generated and stored in `DATA_DIR` when unset |
@@ -151,24 +168,24 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 
 ## Using it
 
-1. **Home** — describe the circuit and tap the parts you own. Pick a permission mode.
-2. **Mission workspace** — chat with the agent; tool cards show each check; approval cards ask before a design becomes
-   the build target (Review) or before every change (Ask). Tabs: Schematic, Steps, Code, Tests, Try it, Replay,
-   Telemetry, Photo. The console bar shows EECOM · GUIDO · FIDO · FAO · RETRO, and **GO for build** (you are the Flight
-   Director) releases the design as the build target once the checks are GO.
+1. **Home** — describe the circuit and tap the parts you own.
+2. **Mission workspace** — Claude edits the design directly; grouped tool rows show its work, and question cards let you
+   answer clarifications. Stop/resume is available while a run is active. Tabs include Schematic, Steps, Code, Tests, Try
+   it, Replay, Telemetry, Photo, and Diagnostics. The console bar shows EECOM · GUIDO · FIDO · FAO · RETRO. **GO for
+   build** (you are the Flight Director) is a human action from the web button or iMessage `GO`.
 3. **Build Mode on the phone** — scan the QR code in the Steps tab (`/b/<mission>`): one step at a time, focused picture,
    exact holes, plug state, "I did this", "Check with camera".
 4. **Bench** (`/m/<mission>/bench`, Chrome/Edge) — connect the board, flash safe firmware, rail checkpoint, self-test with
    on-screen prompts, diagnosis with the suspect holes highlighted, then flash the app firmware with the light-sensor
-   calibration. "Try without a board" runs the same firmware in a simulated board, with injectable wiring faults.
-   Fallback flashing: the bench's *Laptop fallback* box shows the exact `arduino-cli … upload` command and the HEX downloads.
+   calibration. "Try without a board" runs the same firmware in a simulated board, with injectable wiring faults. Physical
+   actions always wait for the click on this page.
 
 ### Connect your Claude account
 
 Settings → **Connect your Claude account** is the primary way to let your own Claude account power missions instead of
 ViBread's key. ViBread runs the Claude sign-in itself (pi-ai's Anthropic OAuth, no helper program): open the claude.ai
-link, approve, then paste the code Claude shows — or the address of the page that fails to load
-(`localhost:53692/callback?code=…`) — into ViBread; that works when your browser is on a different machine than the
+link, approve, then paste the code Claude shows, `code#state`, or the address of the page that fails to load
+(`localhost:53692/callback?code=…`) into ViBread; that works when your browser is on a different machine than the
 server. If your browser runs on the server machine, the sign-in finishes by itself (unless another program holds port
 53692 — then paste as well; the server log says so). You can connect an Anthropic API key
 instead (`POST /api/connections/claude/key`). The credential is stored in ViBread's database for your user only (pi-ai
@@ -196,7 +213,7 @@ to the agent, and GO / NO-GO to approval polls (text fallback for devices withou
 
 ## Supported circuits
 
-Arduino Uno R3 or Nano (ATmega328P, 5 V, USB power), one breadboard (30 or 63 rows), ≤ 12 parts, ≤ 10 signal nets. Module
+Arduino Uno R3 or Nano (ATmega328P, 5 V, USB power), one breadboard (30 or 63 rows), ≤ 20 parts, ≤ 20 signal nets. Module
 library: LED, resistor, push button, photoresistor, potentiometer, active and passive buzzer; other parts can be added as
 generic digital/analog modules (simulated with basic logic only, always labeled unverified). The simulator runs the exact
 binary that gets flashed at instruction level with protocol-level part models: it validates logic, timing and pin
@@ -205,27 +222,28 @@ configuration, not current, noise, brown-out or contact quality — the physical
 ## Repository layout
 
 ```
-apps/server        Express 5: auth (Better Auth), REST, chat stream, MCP /mcp, A2A /a2a, CAPCOM, mission machine (XState), approvals
-apps/web           React 19 + Vite + Material UI: workspace (MUI X Chat), Build Mode, bench (Web Serial), Try it, settings
+apps/server        Express 5: auth, REST, UI-message chat stream, MCP /mcp, A2A /a2a, CAPCOM, mission machine, bench-request broker
+apps/web           React 19 + Vite + Material UI + assistant-ui: workspace, Build Mode, bench (Web Serial), Try it, settings
 packages/core      Contracts: circuit IR (vibread.circuit/0.1), boards, breadboards, modules, scenarios, telemetry, results, services
-packages/tools     Tool registry + pipeline (every console for a revision) + AI SDK / MCP adapters + policy gate
+packages/tools     Tool registry + pi AgentTool/MCP adapters + physical bench-request gate
 packages/checks    EECOM + GUIDO rules and the ngspice cross-check
 packages/firmware  arduino-cli service, bench self-test firmware template (Eta + ArduinoJson), calibration injection
 packages/sim       avr8js ATmega328P simulator, device models, scenario runner, coverage (Node workers + browser)
 packages/assembly  Breadboard allocator, LVS, steps, SVG/PNG rendering; schematic via elkjs layout + a geometry check (isolated runtime)
 packages/bench     Self-test plan, NDJSON decoding, telemetry evaluation, diagnosis rules, fault catalog + fault dictionary
 fixtures           Golden designs with test suites and pre-built HEX
-scripts            Toolchain setup, golden seeding
+scripts            Toolchain setup, golden seeding, debug-log CLI
 ```
 
 ## Libraries and licenses
 
-ViBread's own code is MIT (see [LICENSE](LICENSE)). Main dependencies: Vercel AI SDK (`ai`, `@ai-sdk/anthropic`,
-Apache-2.0), Material UI + MUI X Chat (MIT), Better Auth and its MCP/OAuth plugins (MIT),
-Model Context Protocol SDK (MIT), A2A JS SDK (Apache-2.0), Photon `spectrum-ts` (MIT), Express (MIT), XState (MIT),
-Drizzle ORM (Apache-2.0), better-sqlite3 (MIT), elkjs (EPL-2.0, schematic layout; isolated in
-`packages/assembly/schematic-runtime`), json-rules-engine (ISC), avr8js (MIT), webserial-flasher (MIT), Eta (MIT),
-ArduinoJson (MIT, compiled into the bench firmware), yaml (ISC), zod (MIT), sharp (Apache-2.0).
+ViBread's own code is MIT (see [LICENSE](LICENSE)). Main dependencies: pi-agent-core + pi-ai (MIT; in-process Claude
+agents and structured calls), AI SDK (`ai`, `@ai-sdk/react`, Apache-2.0; the web UI-message stream format), assistant-ui
+(MIT; chat rendering), Material UI (MIT), Better Auth and its MCP/OAuth plugins (MIT), Model Context Protocol SDK (MIT),
+A2A JS SDK (Apache-2.0), Photon `spectrum-ts` (MIT), Express (MIT), XState (MIT), Drizzle ORM (Apache-2.0),
+better-sqlite3 (MIT), elkjs (EPL-2.0, schematic layout; isolated in `packages/assembly/schematic-runtime`), json-rules-engine
+(ISC), avr8js (MIT), webserial-flasher (MIT), Eta (MIT), ArduinoJson (MIT, compiled into the bench firmware), yaml (ISC),
+zod (MIT), sharp (Apache-2.0).
 
 Notices: `@resvg/resvg-js` is MPL-2.0 and `elkjs` is EPL-2.0 (both used unmodified as libraries; elkjs sources:
 https://github.com/kieler/elkjs). `heif2jpeg` is MIT but statically bundles libheif and
@@ -244,5 +262,6 @@ through Photon when CAPCOM is enabled.
 
 Everything in this repository was written during the event (Sep 25–27, 2026). Planning, research and code were produced
 with AI coding agents under the team's direction: Claude Opus 5.5 (planning, integration, review, and the agent,
-server-core and web-workspace slices) and GPT-5.6 Luna (research and the remaining package slices), orchestrated with
-oh-my-pi. Libraries are used through their public APIs; no code was copied from other projects.
+server-core and web-workspace slices) and GPT-5.6 Luna (research and the remaining package slices). The runtime design
+agent runs on pi inside the server; no external sign-in helper is needed. Tester GitHub issues #1–#14 drove an issue-by-issue QA
+loop before the final docs pass. Libraries are used through their public APIs; no code was copied from other projects.

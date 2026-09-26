@@ -5,40 +5,40 @@
 > Evidence: [`research/`](research/) (technology research, sources inline) and [`research/audit/`](research/audit/)
 > (hands-on verification of every package and claim used below: installs, type checks, offline smokes).
 
-## Build status — Sat Sep 26, ≈13:00 CT
+## Build status — Sat Sep 26 (after integration)
 
-Everything on the ranked list (§4, items 1–16) is built, committed, and tested in the container: 27 test files / 139 tests
-(`npm test`), typecheck clean. Two independent audit rounds (17 + 11 findings) and a code review were run against the plan;
-their fixes are committed, audit round 3 is next. What is **not** verified yet needs something only the team has: real
-hardware, a Claude credential, and accounts (Google/GitHub/Photon) — see "Needs you" below. Plain-language overview:
+Everything on the ranked list (§4, items 1–16) is built and tested in the container. What still needs something only the team
+has—real hardware, a Claude credential, and Google/GitHub/Photon accounts—is called out below. Plain-language overview:
 [HOW-IT-WORKS.md](HOW-IT-WORKS.md).
 
 | # | Item | State | Proof (live unless noted) |
 |---|---|---|---|
 | 1 | Core v0 | Built | Virtual board: bench firmware (Eta template) in the simulator, safe idle → rails → read-before-drive self-test → diagnosis. LED pulses measured ≤ 4.02 ms, 1.1 % duty. An output jumper in a rail row is reported stuck from passive reads and never driven (simulated fault). **Real board untested** |
-| 2 | Workspace + agents + test author + RETRO | Built | MUI workspace/approval cards/modes verified in the browser. Agents verified with the AI SDK mock model (approvals signed, exactly-once, tamper rejected). **End-to-end benchmark on real models** ([docs/e2e-benchmark.md](docs/e2e-benchmark.md)): Opus 5.5 designs over MCP while ViBread's own pipeline runs the test author and RETRO on Sonnet 5 (through a local Messages bridge to oh-my-pi; a direct Anthropic key hasn't been used yet) — 3/3 golden briefs reach five GO consoles, 18/18 model-written tests pass, and the moon lamp's first design was a real FIDO NO-GO that the agent fixed. RETRO catches a subtly wrong design (3/3 NO-GO) without false alarms. For demos without a key the seed adds a **recorded real run**, labeled as a recording everywhere |
-| 3, 10 | CAPCOM (iMessage) | Built | Terminal provider: link code → brief → status → poll fallback; links and mission attachments survive restarts; `mission N`; poll votes map to the right approval; self-test prompts answerable from iMessage; agent and iMessage bench requests show at the bench and still need the click (end-to-end test). **Cloud iMessage untested** (no Photon project) |
+| 2 | Workspace + agents + test author + RETRO | Built | assistant-ui/MUI workspace with grouped tool rows, answerable question cards, and stop/resume. The design agent runs on pi; test author, RETRO, photo check and scan use pi-ai structured calls. The web still receives the AI SDK UI-message stream format. The historical real-model benchmark ([docs/e2e-benchmark.md](docs/e2e-benchmark.md)) reached five GO consoles on 3/3 golden briefs, with 18/18 independent scenarios passing |
+| 3, 10 | CAPCOM (iMessage) | Built | Terminal provider: link code → brief → status → poll fallback; links and mission attachments survive restarts; `mission N`; poll votes map to the requested poll; self-test prompts answerable from iMessage; agent and iMessage bench requests show at the bench and still need the click (end-to-end test). **Cloud iMessage untested** (no Photon project) |
 | 4 | Photo check | Built | Upload → HEIC/JPEG → per-part advisory answers. Real Claude vision run once on a rendered step image (shown as a labeled example when no key exists); a real phone photo untested |
 | 5 | Checks (EECOM/GUIDO) | Built | Rule tests for every broken variant; 220 Ω/red worst case 16.5 mA; core warnings filtered |
-| 6, 12 | Schematic, replay, live "Try it" | Built | tscircuit (isolated runtime) SVG/PNG; replay; real-time sim in a worker: button presses step the moon phases exactly as the tests say |
+| 6, 12 | Schematic, replay, live "Try it" | Built | elkjs (EPL-2.0) layered SVG/PNG with a geometry/connectivity check on every drawing; failures become titled connection tables. Replay; real-time sim in a worker: button presses step the moon phases exactly as the tests say |
 | 7 | Layout + LVS + steps | Built | Moon lamp: 15 jumpers, 33 steps, plug state on every step, phone focus crops; bb-400 fits |
 | 8, 14 | Verification + fault dictionary | Built | Golden → "Houston, we are GO" with no fix suggested. Simulated fault table on all three goldens (25 cases, `npm run fault-table` → [docs/fault-table.md](docs/fault-table.md)): the self-test catches 22 (a wrong resistor value is electrically invisible to it on all three); the true cause ranks first in 14, second in 7, third in 1; highlighted holes. Mission complete requires a real-board pass |
 | 9, 15 | Sign-in, OAuth 2.1, A2A | Built | Single-operator mode live. OAuth 2.1 (DCR + PKCE + consent + token → MCP tools) end to end in a regression test; real Claude Code 2.1.283 connects with the bearer command. Google/GitHub are config-gated (redirects tested, no real client yet) |
 | 11 | Claude Code MCP + A2A | Built | `claude mcp list` → Connected; A2A ask-back → completed artifact |
 | 13 | SPICE cross-check | Built | Part of EECOM's evidence: fixed per-color diode models at three corners; red LED 13.99 mA SPICE vs 13.41 mA analytic; goldens show no deviation, a wrong Vf assumption is flagged |
-| 16 | Connect your Claude account | Built | pi-ai's Anthropic OAuth (paste-back of the code/redirect address, or its local callback) or an API key; credential stored per user in the database; every agent call runs on it through pi-ai. Tested with a stand-in token endpoint (paste, `code#state`, state mismatch, rejected code, local callback, one sign-in at a time, API key, refresh failure → server key). **Real sign-in needs you** |
+| 16 | Connect your Claude account | Built | pi-ai's Anthropic OAuth (paste-back of the code, `code#state`, redirect address, or its local callback) or an API key checked with Anthropic; credential stored per user in the server database; every production agent call runs through pi-ai. Tested with a stand-in token endpoint (paste, state mismatch, rejected code, local callback, one sign-in at a time, API key, refresh failure → server key). **Real sign-in needs you** |
 | — | Desktop app (Electron) | Built | Numbered releases (`desktop-v0.1.N`, newest = [Latest](https://github.com/BarryTheShen/ViBread/releases/latest)) published by CI after every green build: Linux x64 AppImage + .deb, Windows x64 installer, macOS arm64/x64 dmg. Each packaged app smoke-tested on its own OS on GitHub Actions (Arduino compiler download + seed + compile + screenshots; first run 161 s Linux, 177 s Windows, 232–386 s macOS); .deb install-tested with apt. Real Arduino over USB untested |
 | — | Phone as a home-screen web app | Built | Manifest + icons; iPhone "Add to Home Screen" tip in Build Mode |
 
 Also added while integrating: human **GO for build** (Flight Director) when the agent isn't the one releasing; mission
-completion (LAUNCH → "Does it work?" → DONE); the independent tests get written on GO for build once a credential exists.
+completion (LAUNCH → "Does it work?" → DONE); independent tests are written when a credential exists. Tester GitHub issues
+#1–#14 drove an issue-by-issue QA loop through the final fixes.
 
 **Needs you (in order):**
-1. **A Claude credential:** Settings → *Connect your Claude account* (paste the code), or put `ANTHROPIC_API_KEY` in `.env`. Then
-   run one design from Home and watch: design agent → approval card → test author → RETRO → GO for build.
+1. **A Claude credential:** Settings → *Connect your Claude account* for pi-ai's Anthropic OAuth, or Settings → **Claude →
+   Use an API key instead** (checked with Anthropic). The server's optional `ANTHROPIC_API_KEY` remains the fallback. Then
+   run one design from Home and watch: design agent → test author → RETRO → GO for build.
 2. **The board:** the Linux desktop app (or Chrome/Edge on `localhost`) → Bench → *Use USB board*: safe firmware flash
    (webserial-flasher), rails, self-test, calibration, app flash. Fallback: the `arduino-cli upload` command the bench shows.
-   Tell the build which board/USB chip you have (§10 Q1).
+   Tell the build which board/USB chip you have (see §10, "Remaining verification and demo decisions").
 
 ## 0. TL;DR
 
@@ -48,17 +48,17 @@ turns the design into **LEGO-style numbered assembly steps** on laptop and phone
 first, staged power-up, a read-before-drive self-test that streams "telemetry" back over USB, and a Claude photo check. When
 something is wrong it says *where* ("Houston, we have a problem: D2 reads LOW even with the button released — its leg shares row
 17 with the GND jumper"), proposes the fix, and re-runs the checks. The same mission is reachable from iMessage (Photon Spectrum,
-"CAPCOM") and from Claude Code over MCP, under Claude-Code-style permission modes where physical actions only run from a click
-at the bench.
+"CAPCOM") and from Claude Code over MCP. Claude can edit designs directly; **GO for build** is human-only (the web button or
+iMessage `GO`), and physical actions still wait for a click at the bench.
 
-**Build philosophy: libraries first, our code is glue.** Every subsystem uses a maintained library where one exists (Vercel AI
-SDK, Material UI + MUI X Chat, Better Auth, tscircuit, avr8js, arduino-cli, XState, Drizzle, Spectrum, MCP/A2A SDKs). Custom code
-exists only where no library fits; each piece is listed with the reason in §6.2.
+**Build philosophy: libraries first, our code is glue.** Every subsystem uses a maintained library where one exists (pi-agent-core
+and pi-ai, the AI SDK UI-message stream, assistant-ui, Material UI, Better Auth, elkjs, avr8js, arduino-cli, XState, Drizzle,
+Spectrum, MCP/A2A SDKs). Custom code exists only where no library fits; each piece is listed with the reason in §6.2.
 
-**Delivery strategy:** tonight's **hardware + hostname gate** decides board, parts, and public URL before any hardware-dependent
-code is written. Then a small **Core v0** — compile → flash → safe firmware → read-before-drive self-test → one diagnosis, shown
-in the MUI shell — must run on the real board within ~3 h of the gate (Sat 12:00 at the latest). Everything else is one ranked
-build list (§4); the cut order is its reverse.
+**Delivery strategy (historical):** the hardware + hostname gate set the board, parts, and public URL before hardware-dependent
+code was written. Core v0 then grew into the complete ranked list (§4). The remaining team checks are real hardware and live
+credentials, listed above.
+
 
 ## 1. Problem, users, definition of success
 
@@ -74,11 +74,11 @@ build list (§4); the cut order is its reverse.
   breadboard views.
 - **What ViBread adds — "Schematik tells you how to build it; ViBread checks that you actually built it right, and tells you
   where you didn't":** a closed loop on the *physical* build (self-test telemetry → locate the fault → fix → re-test) on an
-  unmodified Uno · the same binary simulated and flashed · design from the user's own parts with ask-back · a permissioned agent
-  that works from iMessage and Claude Code.
+  unmodified Uno · the same binary simulated and flashed · design from the user's own parts with ask-back · an agent that works
+  from iMessage and Claude Code.
 - **Users.** Non-technical and intermediate makers who already own an Arduino kit (brief p.3). Controller family: Arduino only.
 - **Supported-circuit envelope (brief p.5 "how complicated"):** Uno R3 or Nano (ATmega328P) · 5 V logic, USB power · one
-  breadboard (30- or 63-row) · ≤ 12 parts and ≤ 10 signal nets · planned external load ≤ 400 mA (per pin ≤ 20 mA, MCU total
+  breadboard (30- or 63-row) · ≤ 20 parts and ≤ 20 signal nets · planned external load ≤ 400 mA (per pin ≤ 20 mA, MCU total
   ≤ 200 mA) · parts from the module library, plus *generic* digital/analog parts that get basic logic simulation labeled
   unverified · no motors/relays/mains in the MVP.
 - **Successful build (brief p.5, sharpened):**
@@ -106,8 +106,8 @@ discipline for their own moonshot.
 | "Houston, we have a problem" | Closed-loop debugger localizes the fault and proposes the fix |
 | CAPCOM (the one voice talking to the crew) | iMessage agent (Photon Spectrum) talking to the builder at the bench |
 
-UI labels stay plain ("Electrical checks · EECOM"); console names are flavor. The MUI dark "mission control" theme ships with the
-workspace (build item 2), not at the end, because two of three rubric criteria (Impact-vs-prompt, UX-supports-theme) reward it.
+UI labels stay plain ("Electrical checks · EECOM"); console names are flavor. The assistant-ui chat uses the MUI theme, with
+light and dark palettes following the system setting (space cadet, cool gray, anti-flash white and red).
 
 **Hero demo circuit: the Moon-Phase Lamp** (final choice at the gate, from parts in hand). Four LEDs **in a row** show the moon's
 lit side the way the sky does: while waxing, light fills in from the right; while waning, the right side goes dark first (an
@@ -138,17 +138,17 @@ self-test ≤ 60 s including prompts. Anything slower is pre-computed for live d
 
 ## 4. Scope: one ranked build list
 
-Built top to bottom; **cut from the bottom up**. Items 1–9 are the MUST line (the brief's MVP plus Photon's hard requirement);
-items 10–14 are SHOULD; 15 is stretch; 16 is built last, after everything else (team lead's call); the rest COULD.
+All ranked items are built top to bottom; this table records the original priority and cut order. Items 1–9 were the MUST line;
+items 10–14 were SHOULD; item 15 was stretch; item 16 was built last.
 
 | # | Item | Track | Tier |
 |---|---|---|---|
 | 1 | **Core v0** (hardware-verified): hand-written Moon-Phase fixture → compile → flash (fallback `arduino-cli upload`) → safe firmware → read-before-drive self-test → one diagnosis rule, shown in the MUI shell. Stand-ins: a hand-written layout/steps file and a pre-rendered schematic | Main | MUST |
-| 2 | MUI workspace (MUI X Chat, tool cards, approvals, mode switcher, artifact tabs, mission theme) + agent design from natural language (module library ∩ inventory, ask-back) + independent test author + RETRO vote; Review mode default | Main | MUST |
+| 2 | assistant-ui/MUI workspace (grouped tool rows, answerable question cards, artifact tabs, mission theme, stop/resume) + agent design from natural language (module library ∩ inventory, ask-back) + independent test author + RETRO vote | Main | MUST |
 | 3 | Thin CAPCOM: brief by DM, status replies, GO/NO-GO poll (text fallback) | Photon | MUST |
 | 4 | Thin web photo check: phone camera/upload → Claude vision vs the expected step image, per-part answers with `unknown`; advisory, never blocks (brief p.5) | Main | MUST |
 | 5 | Checks: ERC + Uno rules, analytic limits at worst-case corners, compile warnings, code↔circuit pin-mode check, test coverage rules | Main | MUST |
-| 6 | Schematic via tscircuit + simulation replay on the breadboard view (the user "checks the simulation") | Main | MUST |
+| 6 | Schematic via elkjs layered layout + geometry/connectivity check (fall back to a titled connection table) and simulation replay on the breadboard view | Main | MUST |
 | 7 | Auto-layout + LVS + LEGO steps (insert/highlight animation, reduced-motion aware) with staged power-up | Main | MUST |
 | 8 | Full verification: rail-power checkpoint, all self-tests, light-sensor calibration, 3 deliberate faults diagnosed and fixed | Main | MUST |
 | 9 | Google sign-in on the single public origin + iMessage linking | Main + Photon | MUST |
@@ -158,12 +158,13 @@ items 10–14 are SHOULD; 15 is stretch; 16 is built last, after everything else
 | 13 | SPICE cross-check (ngspice) of the analytic limits | Main | SHOULD |
 | 14 | Fault dictionary (single-fault layout mutants) ranking on top of the rule table | Main | SHOULD |
 | 15 | OAuth 2.1 for Claude Code (Better Auth MCP + CIMD) and A2A OAuth scheme; GitHub sign-in | Main | STRETCH |
-| 16 | **Connect your Claude account** (team lead's call, built last): the user authenticates ViBread with their Claude account through OAuth, the way omp does it, using omp's auth setup in the backend; their own account then powers their missions. ViBread's server key stays the default and the fallback | Main | LAST |
+| 16 | **Connect your Claude account**: the user connects via pi-ai's Anthropic OAuth (paste the code, `code#state`, redirect address, or local callback) or a per-user API key checked with Anthropic; credentials live in the server database and model calls use pi-ai. The server key remains the fallback | Main | LAST |
 | — | Claude Code Channel push; skill-level exposition; inventory from a kit photo; Wokwi cross-check; ArUco rectification; KiCad export | Main | COULD |
 | — | Uno R4/ESP32/Pico, PCB layout, arbitrary-part simulation, AR overlay, mains/high voltage | — | WON'T |
 
-**Team-size cuts:** ≤ 2 people → items 1–9 plus 11's bearer path, Review mode only. 3 people → through item 12. 4 people →
-through item 14, stretch if time. The brief marks instruction adaptation to variants/skill levels "out of scope for MVP" (p.5).
+**Team-size cuts:** these were planning tiers, not runtime permission modes. The shipped product has no design permission modes:
+Claude edits designs directly, the person presses GO for build, and physical actions still wait for a bench click. The brief marks
+instruction adaptation to variants/skill levels "out of scope for MVP" (p.5).
 
 **Named fallbacks (each component degrades, not the whole demo):**
 
@@ -171,9 +172,9 @@ through item 14, stretch if time. The brief marks instruction adaptation to vari
 |---|---|---|---|
 | Flashing | `webserial-flasher` in the bench browser | `arduino-cli upload --input-file <hex>` on the laptop (browser releases the port first); browser keeps reading telemetry | Arduino IDE on the laptop with the same sketch |
 | Agent | Live Opus 5.5 run | Cached runs of the golden prompts (pre-warmed missions) | Hand-written fixture |
-| Chat UI | MUI X Chat (alpha) | `@assistant-ui/react` ExternalStoreRuntime styled with MUI | Plain MUI list + form |
+| Chat UI | assistant-ui with MUI styling | Plain MUI list + form | Recorded run |
 | Simulation tests | Custom avr8js runner | Wokwi CI scenarios (cloud, quota) | Test list without replay |
-| Schematic | tscircuit adapter | Pre-rendered SVG for golden designs | Netlist table |
+| Schematic | elkjs layered renderer + geometry check | Titled connection table fallback | Netlist table |
 | Layout/steps | Auto-allocator | Hand-written layout files for golden designs | — |
 | CAPCOM | Cloud iMessage | Terminal provider on screen | Video |
 | Photo check | Live Claude vision | Recorded example | — |
@@ -188,7 +189,7 @@ through item 14, stretch if time. The brief marks instruction adaptation to vari
 ```mermaid
 flowchart LR
   subgraph Laptop["Bench laptop — Chrome/Edge on https://&lt;public-host&gt;"]
-    WEB["MUI workspace<br/>MUI X Chat · approvals · artifacts · bench"]
+    WEB["MUI workspace<br/>assistant-ui chat · grouped tools · artifacts · bench"]
     BENCH["Bench connector<br/>Web Serial: flash + self-test NDJSON"]
     CC["Claude Code"]
     USB["Arduino + breadboard"]
@@ -196,9 +197,9 @@ flowchart LR
   PHONE["Phone<br/>Build Mode (polling) · photo check · iMessage"]
   subgraph Server["ViBread server — Node 22 in hackwashu-ai container"]
     API["Express 5<br/>UI message stream (SSE) · REST · static web"]
-    AUTH["Better Auth<br/>Google sign-in · sessions (OAuth AS in stretch)"]
-    ORCH["Mission machine (XState)<br/>+ ApprovalBroker"]
-    AG["Agents (pi agent-core + pi-ai)<br/>design · test author · RETRO · vision"]
+    AUTH["Better Auth<br/>Google/GitHub sign-in · OAuth 2.1 MCP"]
+    ORCH["Mission machine (XState)<br/>+ bench-request broker"]
+    AG["Agents (pi agent-core + pi-ai)<br/>design · test author · RETRO · vision · scan"]
     TOOLS["Tool registry<br/>circuit · checks · firmware · sim · assembly · bench"]
     MCP["MCP server /mcp<br/>(MCP SDK 1.30.1, bearer)"]
     A2A["A2A server /a2a<br/>(@a2a-js/sdk, bearer)"]
@@ -230,35 +231,31 @@ flowchart LR
 - In iMessage, CAPCOM sends a plain URL only after the user's first reply (Photon deliverability guidance).
 - The browser owns the USB device; the server never touches the laptop's serial port.
 
-### 5.2 Agent harness — pi (`@earendil-works/pi-agent-core`) over the Claude API (research/audit/A9, A1)
+### 5.2 Agent harness — pi (`@earendil-works/pi-agent-core`) over the Claude API
 
-- **Why not the Claude Agent SDK:** it runs the Claude Code binary, and Anthropic's terms for products that run Claude Code say
-  the company "may not pay for, resell, or intermediate Claude usage on their end users' behalf" — each end user would need their
-  own Anthropic credentials. Anthropic's Commercial Terms (§A.1) do allow using the Claude API "to power products and services
-  Customer makes available to its own customers and end users", billed to our account. So by default ViBread calls the Messages
-  API with its own server-side key and users bring nothing. **Item 16, built last**, adds *Connect your Claude account* (§5.11):
-  the agent code stays the same; only the credential each call uses changes.
+- ViBread does not use the Claude Agent SDK. The server runs the design agent in-process on pi and uses the server key by
+  default, or the mission owner's per-user Claude credential when one is connected. The same model code works with either
+  credential; an unavailable owner credential falls back to the server key.
 - **Library:** the design agent runs on **pi** in-process: `@earendil-works/pi-agent-core` 0.87.1 (`Agent`, sequential tool
   execution, `beforeToolCall` caps design attempts at 4 per turn, `finishTurn` ends the turn after `ask_user` or 20 model turns)
-  + `@earendil-works/pi-ai` 0.87.1 (Claude through the owner's credential, §5.11). Each run rebuilds
-  the pi transcript from the server-held UI history (`agents/pi-ui.ts`) and translates pi events into AI SDK UI message chunks
-  (`createUIMessageStream` from `ai` 7.0.116), streamed with `pipeUIMessageStreamToResponse` on Express, so the web chat
-  contract is unchanged. The single-shot calls (test author, RETRO, photo check, scan) also run on pi-ai: one request whose
-  only tool is the answer schema, required via `toolChoice`, validated by the zod schema (`agents/pi-object.ts`).
-- **Approvals are server-authored:** the chat history lives on the server (`messages` table). The browser sends only
-  `{approvalId, decision}`; the ApprovalBroker validates it and writes the approval response into the stored history with the
-  signature from `experimental_toolApprovalSecret` before the agent resumes. Spike 14 proves a signed approval resumes and executes
-  exactly once and a missing or tampered signature is rejected (an earlier `ai` release dropped the signature on resume).
+  + `@earendil-works/pi-ai` 0.87.1. Each run rebuilds the pi transcript from server-held UI history (`agents/pi-ui.ts`) and
+  translates pi events into AI SDK UI-message chunks (`createUIMessageStream` from `ai` 7.0.116), streamed with
+  `pipeUIMessageStreamToResponse` on Express, so the web chat contract stays unchanged. The single-shot calls (test author,
+  RETRO, photo check, scan) also use pi-ai structured calls: one request whose only tool is the answer schema, required via
+  `toolChoice` and validated by zod (`agents/pi-object.ts`).
+- **No design permission system:** Claude's design and parts tools run directly when pi calls them. The browser stores the
+  server-held conversation and can stop or resume a run; `ask_user` ends a turn until the person answers. A physical tool never
+  touches the board: it files a bench request bound to the released revision, and the bench browser runs it only after a click.
 - **Three agent roles, separate calls/contexts:** *design agent* (IR + sketch; `claude-opus-5-5`), *test author* (sees brief + IR
-  interface, never the sketch), *RETRO reviewer* (sees everything, can only vote and explain). Test author, RETRO, and photo
-  checks are benchmarked on `claude-sonnet-5` at Checkpoint B to meet the latency budget.
-- **Tools are defined once** in `packages/tools` (zod schema + handler, tagged `read-only` or `state-changing`) and registered by
-  thin adapters as pi `AgentTool`s for the design agent (`agents/pi-tools.ts`: zod → JSON Schema, arguments validated by pi,
-  refusals returned to the model as tool errors) and as MCP tools on `/mcp`. No internal MCP hop.
+  interface, never the sketch), *RETRO reviewer* (sees everything, can only vote and explain). Test author, RETRO, photo
+  checks and scans use the configured fast Claude model.
+- **Tools are defined once** in `packages/tools` (zod schema + handler, tagged for read/state-changing/physical classification)
+  and registered by thin adapters as pi `AgentTool`s for the design agent (`agents/pi-tools.ts`: zod → JSON Schema, arguments
+  validated by pi, refusals returned to the model as tool errors) and as MCP tools on `/mcp`. No internal MCP hop.
 
 | Tool group | Tools (abridged) | Libraries behind it |
 |---|---|---|
-| `circuit` | `list_modules` (ro), `get_inventory` (ro), `propose_design`, `validate_ir` (ro), `render_schematic` (ro) | zod, tscircuit (`@tscircuit/core` → Circuit JSON → `circuit-to-svg`) |
+| `circuit` | `list_modules` (ro), `get_inventory` (ro), `propose_design`, `validate_ir` (ro), `render_schematic` (ro) | zod, elkjs schematic renderer |
 | `checks` | `run_erc` (ro), `electrical_limits` (ro), `spice_crosscheck` (ro, item 13), `explain_finding` (ro) | json-rules-engine, ngspice CLI |
 | `firmware` | `compile` (ro), `pin_mode_check` (ro), `generate_selftest` | arduino-cli, Eta + ArduinoJson, avr8js |
 | `sim` | `run_scenarios` (ro), `coverage_report` (ro), `sim_trace` (ro) | avr8js, yaml, worker_threads |
@@ -267,12 +264,13 @@ flowchart LR
 
 Flashing and self-tests are machine-driven bench actions executed by the browser after a human click — never agent tools.
 
+
 ### 5.3 Circuit IR and module library (research/02, audit/A8)
 
 - A small versioned **zod schema** (`vibread.circuit/0.1`) is the contract the agent writes and every tool reads — a data
-  definition, not an engine. It stays ours because tscircuit's Circuit JSON (checked hands-on) doesn't carry pin electrical types
-  and its IDs are generated; an adapter emits Circuit JSON from the IR for schematic rendering. **A human reviews and freezes the IR
-  schema, the NDJSON telemetry format, and the golden fixture before the overnight build starts.**
+  definition, not an engine. It stays ours because the IR carries the electrical pin types, board limits and provenance that
+  the schematic renderer and deterministic checks need. The isolated schematic runtime consumes the IR directly. **A human
+  reviews and freezes the IR schema, the NDJSON telemetry format, and the golden fixture before the overnight build starts.**
 - Field groups: `board` (profile `uno-r3-atmega328p-5v` / `nano-atmega328p-5v`: pin capabilities, limits, reserved pins, on/off
   breadboard, USB power-path protection) · `parts` (id, ref, `moduleKey`, variant, value + tolerance) · `pins` with KiCad-style
   electrical types · `nets` · `sketch` · `tests` · `provenance` (intent clauses, assumptions). Every artifact carries the revision
@@ -289,8 +287,8 @@ persisted snapshots in SQLite, so human waits survive restarts.
 
 - **DESIGN:** the design agent proposes IR + sketch; deterministic checkers return findings; it repairs until every checker is GO
   or 4 iterations elapse, then reports what blocks. The test author writes intent tests; RETRO reviews at the end.
-- **Revisions:** any change creates revision *n+1* and re-runs every checker; approvals bind to a revision hash.
-- **VERIFY is machine-driven**, not an LLM tool call: flashing, human prompts, and telemetry collection are states with timeouts;
+- **Revisions:** any change creates revision *n+1* and re-runs every checker. **GO for build** releases one revision as the
+  build target; physical bench requests bind to that released revision's hash.
   the LLM receives the final telemetry + diagnosis to explain.
 
 | Console | Evidence | Source |
@@ -340,9 +338,10 @@ persisted snapshots in SQLite, so human waits survive restarts.
 
 ### 5.7 Schematic, breadboard layout, LVS, and LEGO-style steps (research/07, audit/A3, A8)
 
-- **Schematic — library:** IR → adapter → `@tscircuit/core` (board modeled as a `chip` with Arduino pin labels) → Circuit JSON →
-  `circuit-to-svg`, verified hands-on for Uno-chip + LED + resistor (audit/A8). `@tscircuit/core` runs under `tsx`/Bun in a worker
-  (a Node ESM directory-import issue was found). PNG via resvg for iMessage.
+- **Schematic — isolated runtime:** the circuit IR is sent to `packages/assembly/schematic-runtime`, a child process with
+  `elkjs` 0.12.0 (EPL-2.0). ELK supplies layered layout and orthogonal routing; our renderer draws the Arduino, parts, power
+  symbols, labels, junctions and wires. `checkSchematicSvg` checks connectivity and geometry on every drawing. A failure is
+  replaced by a titled connection table, never a misleading drawing. PNGs use resvg for iMessage and step artifacts.
 - **Breadboard — custom glue (no library exists):** audits found no MIT/Apache breadboard component or solderless placer (Wokwi
   Elements has part glyphs but no breadboard; Fritzing is GPL/CC-BY-SA; other repos are apps, not libraries). We draw the board
   grid **and** the part glyphs as plain SVG: the same drawing must render in the browser and in resvg (step PNGs for the phone and
@@ -361,29 +360,27 @@ persisted snapshots in SQLite, so human waits survive restarts.
   animation (off under reduced motion), exact holes in text ("R1: E12 → E16"), never color alone (WCAG 1.4.1). PNG per step via
   `@resvg/resvg-js` 2.6.2 (≈19 ms for 1200×800, audit/A3).
 
-### 5.8 User interface — Material UI (research/audit/A7)
+### 5.8 User interface — Material UI + assistant-ui
 
-A Claude-Code-like agent workspace, made friendly for non-technical users, composed from MUI components:
+A plain-language agent workspace made from MUI components and assistant-ui:
 
-- **Libraries:** `@mui/material` 9.4.0 + Emotion, `@mui/icons-material` 9.4.0, **`@mui/x-chat` 9.0.0-alpha.18** (MIT; ChatBox with
-  streaming, tool-call parts, approval states, stop, accessible message list), `react-markdown` + `react-syntax-highlighter`,
-  `qrcode.react`, React 19.3 + Vite 8.3.1, React Router 8, TanStack
-  Query 5 (polling). MUI v9 needs `sx` for spacing props.
-- **Stream glue:** MUI X Chat's `createAiSdkAdapter` parses the AI SDK UI message stream (verified with a mock model, including
-  `tool-approval-request`). We wrap it to add `addToolApprovalResponse` (POSTs `{approvalId, decision}` to the broker), `stop`, and
-  `reconnectToStream`, which the stock adapter doesn't provide.
+- **Libraries:** `@mui/material` 9.4.0 + Emotion, `@mui/icons-material` 9.4.0, `@assistant-ui/react` 0.15.22,
+  `@assistant-ui/react-ai-sdk` 1.4.13, `react-markdown` + `react-syntax-highlighter`, `qrcode.react`, React 19.3 + Vite
+  8.3.1, React Router 8, TanStack Query 5 (polling). MUI v9 needs `sx` for spacing props.
+- **Stream glue:** the server translates pi events to the AI SDK UI-message stream. assistant-ui's AI SDK runtime handles
+  streaming, stop/resume and reconnect; ViBread supplies MUI-styled tool rows, answerable `ask_user` cards, mission timeline
+  rows and artifact panels.
 
 | Screen | MUI composition |
 |---|---|
 | Home / new mission | `Card` + multiline `TextField` ("What should your circuit do?"), parts `Chip`s, recent missions `List` |
-| Mission workspace (laptop) | `AppBar` with mode `Select` (Plan / Ask every time / Review / Autopilot), connection status, **Stop agent**; left `Drawer` of mission steps; center `ChatBox` with tool cards ("Checking the circuit… ✓", expandable details) and inline approval cards; right `Tabs` artifact canvas (Schematic · Steps · Code · Replay · Tests · Telemetry · Photo); bottom console lights (text + icon, never color alone) |
-| Approval card | Plain-language action + consequence, revision + expiry `Chip`s, **Allow once / Always for this mission / Deny**; physical actions say "runs only when you click Start at the bench" |
-| Bench / Verify | `Stepper`: Connect board (port chooser filtered to known Uno/Nano USB IDs, with a picture of what to pick) → Safe firmware → Rail checkpoint → Self-test (live prompts: "Press the button now") → Diagnose; `Alert` "Board lost power — unplug, then check the rails and the cable" |
+| Mission workspace (laptop) | MUI shell with assistant-ui thread, grouped tool rows, answerable question cards, **Stop** while a run is active, and artifact tabs (Schematic · Steps · Code · Replay · Tests · Telemetry · Photo) |
+| Bench / Verify | `Stepper`: Connect board (filtered Uno/Nano port chooser) → Safe firmware → Rail checkpoint → Self-test (live prompts) → Diagnose; physical actions stay behind an explicit click |
 | Build Mode (phone) | `MobileStepper` + one step `Card` (image, parts callout, holes, plug state), "I did this", **Check with camera**, stale-connection badge; polls; never offers flashing |
-| Settings / Connections | Sign-in, **Connect Claude Code** (copyable `claude mcp add` command with a short-lived token), **Link iMessage** (the user's assigned CAPCOM number as a tap-to-text link / QR with the code pre-filled), default mode |
+| Settings / Connections | Claude account or API key, **Connect Claude Code** (copyable `claude mcp add` command with a short-lived token), **Link iMessage**, phones and **Diagnostics** |
 
 Wireframes and copy guidelines: research/audit/A7 §"Screen set". Accessibility: visible focus, ≥ 24 px targets (44 px on phone),
-reduced motion honored (steps, replay, celebration), polite streaming announcements (built into X Chat).
+reduced motion honored (steps, replay, celebration), and polite streaming announcements.
 
 ### 5.9 Physical verification and debugging (research/06, audit/A3, A8)
 
@@ -440,25 +437,20 @@ reduced motion honored (steps, replay, celebration), polite streaming announceme
 
 (D = detectable, C = conditional, N = not detectable; research/06 §6.7.)
 
-### 5.10 Permission model (brief p.5 "claude code permission control")
+### 5.10 Design authority and physical-action gate
 
-Mapped onto AI SDK `toolApproval` callbacks (returning `approved`, `denied`, or `user-approval` per call; research/audit/A9), using
-each tool's `read-only` / `state-changing` tag:
+The earlier permission-mode design was removed. There are no Plan / Ask every time / Review / Autopilot modes and no approval
+prompt before Claude edits a design. The design agent's tools run directly when called. The person remains the Flight Director:
 
-| ViBread mode | Read-only tools + checkers | State-changing software tools (new revision, sketch edit) | Releasing a revision as build target | Physical (flash, self-test, rewire step) | BOM change (new part) |
-|---|---|---|---|---|---|
-| Plan | `approved` | `denied` — shown as a proposal | ask | ask | ask |
-| Ask every time | `approved` | `user-approval` on every call | ask | ask | ask |
-| **Review (default)** | `approved` | `approved` | `user-approval` once per revision (plain-language tests + diff + console evidence) | human, at the bench | human |
-| Autopilot | `approved` | `approved` | automatic when all consoles incl. RETRO are GO | human, at the bench | human |
+| Action | Authority |
+|---|---|
+| Design, revision and parts tools | Claude can run them directly; the server records the revision and findings |
+| Release a revision as the build target | Human-only **GO for build** from the web button or an operator's iMessage `GO` |
+| Flash, rail check, self-test and other physical bench actions | A remote agent or iMessage can request them; the bench browser runs them only after a person clicks |
 
-- **ApprovalBroker** (SQLite via Drizzle): request id, action class, exact action hash (revision + action + input), expiry, one-shot
-  decision, decider identity and kind (human/agent). First valid decision wins; stale or mismatched approvals are rejected. UI
-  decisions are requests; the broker is the authority.
-- **Physical actions run only from a click in the bench browser that holds the serial port.** A linked iMessage handle can
-  *pre-approve* ("GO for flash"), but nothing executes until the bench click. OAuth/bearer clients (Claude Code, A2A) can request
-  physical actions, never approve them.
-- The narrowing of "bypass all permissions" is listed in §9 for sign-off.
+The bench-request broker stores the request, released-revision hash, expiry and human decision. An iMessage operator can
+pre-approve a request, but the physical action still waits for the bench click. Claude Code and A2A can request physical
+actions but cannot approve or run them.
 
 ### 5.11 Identity, API access, and OAuth (research/audit/A6, A2)
 
@@ -473,32 +465,28 @@ each tool's `read-only` / `state-changing` tag:
   `claude mcp add --transport http vibread https://<public-host>/mcp --header "Authorization: Bearer <token>"`. The server checks it
   with v1's `requireBearerAuth` against a token table (hashed, scoped, expiring). Scopes: `circuits:read`, `circuits:write`,
   `bench:request`. Ask-back: task tools return `input_required` with the question; Claude continues with `vibread_continue_task`.
-- **OAuth 2.1 for MCP (item 15, stretch — only after spike 6 passes end-to-end: login → consent → token → tool call):** Better Auth
-  `@better-auth/mcp` + `@better-auth/oauth-provider` (≥ 1.7.3, which fixed loopback callbacks) + `@better-auth/cimd` as authorization
-  server with Protected Resource Metadata, PKCE S256, resource-bound JWTs; `/mcp` verifies them through `requireBearerAuth` with a
-  JWKS check. Known Claude Code callback workaround kept ready (`MCP_OAUTH_CALLBACK_PORT` + `127.0.0.1` callback; anthropics/
-  claude-code#37747).
-- **A2A (item 11 if cheap):** `@a2a-js/sdk` 1.2.1 on Express with bearer-verification middleware before the handlers (the SDK only
-  advertises security, it doesn't enforce it); OAuth scheme on the card with item 15.
+- **OAuth 2.1 for MCP (item 15, built):** Better Auth `@better-auth/mcp` + `@better-auth/oauth-provider` (≥ 1.7.3, which
+  fixed loopback callbacks) + `@better-auth/cimd` provide Protected Resource Metadata, PKCE S256, resource-bound JWTs and
+  dynamic client registration; `/mcp` verifies them through `requireBearerAuth`. The short-lived bearer command remains the
+  simplest demo path.
+- **A2A (item 11):** `@a2a-js/sdk` 1.2.1 on Express with bearer-verification middleware before the handlers (the SDK only
+  advertises security, it doesn't enforce it); the agent card advertises the OAuth scheme.
 - **iMessage linking (item 9):** the Connections page shows the user's assigned CAPCOM number (shared-pool plans assign each user
   their own) as a tap-to-text link / QR with a one-time code pre-filled; the server binds the verified sender handle to the account
-  (after registering it as a Photon project user). Codes are hashed, expiring, single-use; CAPCOM shares its contact card after the
-  first reply.
-- **Anthropic:** one server-side API key (secrets only, never in the browser), per-user usage caps; data-retention disclosure in the
-  README.
-- **Connect your Claude account (item 16, built last — team lead's call):** the user authenticates ViBread with their Claude
-  account through pi-ai's own Anthropic OAuth (`@earendil-works/pi-ai` 0.87.1, MIT; no auth code of ours, no helper process):
-  `Models.login("anthropic", "oauth")` produces the claude.ai sign-in URL (the Connections page shows it); the user pastes the
-  code or the final redirect address (`localhost:53692/callback?code=…&state=…`, or `code#state`) — so a browser on another
-  machine works — or pi-ai's local callback completes it when the browser is on the server machine. Each sign-in runs
-  pi-ai's login in its own worker thread, whose callback listener falls back to a free port when another program holds
-  53692 (paste still works; logged). An Anthropic API key is
-  the other way to connect (`POST /api/connections/claude/key`). The credential is stored per user in the `claude_accounts`
-  table behind pi-ai's `CredentialStore` contract (serialized writes; pi-ai refreshes the OAuth token inside them), and every
-  model call — design agent, test author, RETRO, photo check, scan — goes through pi-ai with it. No files, HOME or USERPROFILE
-  are involved, so it behaves the same on Windows. Per mission: the owner's credential first, else the server key (also when
-  the owner's sign-in can't be refreshed), else "Claude is not connected". This authorizes ViBread to use the account; it is
-  not a ViBread sign-in.
+  (after registering it as a Photon project user). Codes are hashed, expiring, single-use; CAPCOM shares its contact card after
+  the first reply.
+- **Anthropic:** the optional server-side `ANTHROPIC_API_KEY` is kept out of the browser; per-user Claude credentials are
+  checked and stored by the server, with data-retention disclosure in the README.
+- **Connect your Claude account:** the user connects through pi-ai's own Anthropic OAuth (`@earendil-works/pi-ai` 0.87.1,
+  MIT; no auth code or helper process of ours). `Models.login("anthropic", "oauth")` produces the claude.ai sign-in URL; the
+  user pastes the code, `code#state`, or the final redirect address (`localhost:53692/callback?code=…&state=…`) so a browser
+  on another machine works. pi-ai's local callback completes it on the server machine; each sign-in runs in its own worker
+  thread and falls back to a free port when 53692 is occupied. An Anthropic API key is the other route
+  (`POST /api/connections/claude/key`). The credential is stored per user in the `claude_accounts` table behind pi-ai's
+  `CredentialStore` contract (serialized writes; pi-ai refreshes OAuth tokens). Every production model call—design agent, test
+  author, RETRO, photo check and scan—uses pi-ai. No `HOME` or `USERPROFILE` credential files are involved. Per mission:
+  owner's credential first, then the server key (also when refresh fails), then "Claude is not connected". This authorizes
+  ViBread to use the account; it is not a ViBread sign-in.
 
 ### 5.12 Photon CAPCOM (research/08, audit/A4)
 
@@ -532,57 +520,60 @@ channel can resume a mission.
 |---|---|
 | Runtime | Node 22.22.x (npm ≥ 10 — the image's npm 9.2 must be upgraded for avr8js), TypeScript, `tsx` |
 | HTTP | Express 5.2.1, pino 10.3.1, express-rate-limit 8.7.0 |
-| Agent | `ai` 7.0.116 + `@ai-sdk/anthropic` 4.0.65 (Apache-2.0); `@ai-sdk/mcp` 2.0.60 only to consume external MCP servers; zod 4.6.5 |
-| Auth | better-auth 1.7.6 (MIT); `@better-auth/mcp` / `oauth-provider` / `cimd` 1.7.6 for the stretch item |
+| Agent | `@earendil-works/pi-agent-core` / `@earendil-works/pi-ai` 0.87.1 (MIT); `ai` 7.0.116 remains the UI-message stream contract; zod 4.6.5 |
+| Auth | better-auth 1.7.6 (MIT); `@better-auth/mcp` / `oauth-provider` / `cimd` 1.7.6 |
 | Interop | `@modelcontextprotocol/sdk` 1.30.1 (MIT), `@a2a-js/sdk` 1.2.1 (Apache-2.0) |
 | Messaging | `spectrum-ts` 12.10.1 (MIT), `heif2jpeg` 0.1.6 (MIT; statically bundles LGPL libheif/libde265 — notice in README) |
 | Workflow + data | xstate 5.33.2 (MIT), drizzle-orm 0.45.3 (Apache-2.0) + drizzle-kit 0.31.11, better-sqlite3 13.0.3 (MIT) |
-| Circuit/schematic | `@tscircuit/core` 0.0.1989 (MIT), `circuit-json` 0.0.506 (ISC), `circuit-to-svg` 0.0.433 (ISC) |
+| Circuit/schematic | `elkjs` 0.12.0 (EPL-2.0) in the isolated schematic runtime; our IR renderer and geometry checker |
 | Checks | json-rules-engine 7.3.1 (ISC); ngspice 45.2 (apt, external tool) |
 | Firmware | arduino-cli 1.5.1 + `arduino:avr@1.8.8` (external tool, GPL-3); eta 4.6.0 (MIT); ArduinoJson 7.4.2 (MIT, in sketches) |
 | Simulation | avr8js 0.21.1 (MIT), yaml 2.9.1 (ISC) |
 | Bench | webserial-flasher 1.0.1 (MIT), `@types/w3c-web-serial` |
 | Rendering | `@resvg/resvg-js` 2.6.2 (MPL-2.0), sharp 0.35.4 (Apache-2.0); breadboard/part drawings are our own SVG |
-| UI | `@mui/material` / `@mui/icons-material` 9.4.0, `@mui/x-chat` 9.0.0-alpha.18 (MIT), React 19.3, Vite 8.3.1, react-router 8, `@tanstack/react-query` 5, react-markdown 10.1, react-syntax-highlighter 16.1, qrcode.react 4.2 |
+| UI | `@mui/material` / `@mui/icons-material` 9.4.0, `@assistant-ui/react` 0.15.22, `@assistant-ui/react-ai-sdk` 1.4.13, React 19.3, Vite 8.3.1, react-router 8, `@tanstack/react-query` 5, react-markdown 10.1, react-syntax-highlighter 16.1, qrcode.react 4.2 |
 | Claude account (item 16) | `@earendil-works/pi-ai` 0.87.1 (MIT): Anthropic OAuth + API-key auth, `CredentialStore` |
 | Network | the chosen stable tunnel (cloudflared 2026.9.3 via Cloudflare's `any` apt repo, ngrok, or Tailscale) |
 
-Avoided on purpose: Claude Agent SDK (terms, §5.2) · MUI X Pro/Premium (commercial) · tscircuit packages without a license
-(`circuit-json-to-spice`, `@tscircuit/checks`) · Firmata (unsafe reset) · Fritzing assets (CC-BY-SA) · GPL/AGPL code in the repo ·
-a hand-written STK500 uploader (`arduino-cli upload` is the fallback).
+Avoided on purpose: Claude Agent SDK (terms, §5.2) · MUI X Pro/Premium (commercial) · tscircuit packages and Fritzing assets
+(licensing/maintenance) · Firmata (unsafe reset) · GPL/AGPL code in the repo · a hand-written STK500 uploader
+(`arduino-cli upload` is the fallback).
 
 ### 6.2 What we write ourselves (the glue) — and why no library covers it
 
 | Custom piece | Why custom | Built on |
 |---|---|---|
-| IR zod schema, board profiles, module data | Contract + facts specific to Arduino kits; Circuit JSON lacks pin electrical types | zod |
-| Adapters: IR → tscircuit, tools → AI SDK / MCP, AI SDK stream → MUI X Chat approvals, Spectrum messaging port, A2A executor | Connecting libraries | the libraries themselves |
-| Mission machine definition + ApprovalBroker policy | Our workflow and safety rules | XState, Drizzle |
+| IR zod schema, board profiles, module data | Contract + facts specific to Arduino kits; the IR carries electrical pin types and provenance | zod |
+| Adapters: IR → elkjs schematic, tools → pi AgentTools / MCP, pi events → AI SDK UI stream, Spectrum messaging port, A2A executor | Connecting libraries | the libraries themselves |
+| Mission machine definition + bench-request broker | Our workflow and physical safety rules | XState, Drizzle |
 | Scenario runner + 5 device models + generic part | No portable avr8js part models exist | avr8js, yaml |
 | Uno rule data + pin-type check + analytic limits | Board-specific electrical rules | json-rules-engine |
 | Breadboard allocator, LVS, step list, board SVG | No solderless-breadboard placer or component exists (MIT/Apache) | Wokwi glyphs, resvg |
 | Self-test template, expected signatures, diagnosis rules | Safety depends on knowing the netlist; Firmata is unsafe | Eta, ArduinoJson, json-rules-engine |
-| MUI screens | Composition of MUI components | MUI, MUI X Chat |
+| MUI screens and assistant-ui composition | Product-specific layout and MUI styling | MUI, assistant-ui |
 
 ### 6.3 Repo layout
 
 ```
 vibread/
-  apps/server        Express 5: auth, UI stream, REST, /mcp, /a2a, CAPCOM, mission machine, broker, static web
-  apps/web           React + Vite + MUI: workspace, Build Mode, bench (Web Serial), photo check, sim replay/live worker
+  apps/server        Express 5: auth, UI-message stream, REST, /mcp, /a2a, CAPCOM, mission machine, bench-request broker, static web
+  apps/web           React + Vite + MUI + assistant-ui: workspace, Build Mode, bench (Web Serial), inventory, photo check, sim replay/live worker
   packages/core      IR schema, board profiles, module library, hashing
-  packages/tools     tool registry (zod + handlers, ro/state tags) → AI SDK tools + MCP tools
+  packages/tools     tool registry (zod + handlers, classifications) → pi AgentTools + MCP tools
   packages/checks    rule data + json-rules-engine, pin-type check, analytic limits, SPICE cross-check
   packages/firmware  arduino-cli service, Eta self-test template, calibration injection
   packages/sim       avr8js runner, device models, scenarios, coverage (Node workers + browser)
-  packages/assembly  tscircuit schematic adapter, breadboard layout, LVS, steps, SVG/PNG
+  packages/assembly  elkjs schematic runtime, breadboard layout, LVS, steps, SVG/PNG
   packages/bench     expected signatures, diagnosis rules, fault dictionary, NDJSON protocol
   fixtures/          golden designs, hand-written layouts, faulted variants, sample photos
 ```
 
-## 7. Execution plan and timeline (CT)
+## 7. Execution plan and timeline (historical schedule)
 
-**Owners.** Headcount is open (§10 Q2); roles to fill, with the team-size cuts from §4:
+The schedule below is the original event plan, not a list of remaining work. Current implementation and unverified items are in
+the Build status table at the top.
+
+**Owners.** Headcount was open during planning; the roles below were the planning assignments:
 
 | Role | Owns |
 |---|---|
@@ -615,8 +606,8 @@ vibread/
 1. arduino-cli compiles Blink for Uno/Nano → ELF + HEX; JSON parsed (done once in audit/A5; repeat in the repo).
 2. avr8js runs that HEX (via `parseIntelHex`) in a worker thread; PB5 toggles at 1 Hz virtual time; virtual-s per wall-s recorded.
 3. ngspice: 5 V → 220 Ω → red LED → 13.39 mA after sign normalization.
-4. AI SDK + Anthropic: one live `streamText` call on `claude-opus-5-5` with one tool whose `toolApproval` returns `user-approval`;
-   the server-authored approval resumes the loop.
+4. Pi design agent + pi-ai: a live `Agent` run with ViBread AgentTools, `ask_user`, stop/resume, and pi events translated to the
+   AI SDK UI-message stream; single-shot test author, RETRO, photo-check and scan calls use pi-ai's structured answer tool.
 5. A2A: card served; bearer middleware rejects no-token; `sendMessage` → `TASK_STATE_INPUT_REQUIRED` → continuation →
    `TASK_STATE_COMPLETED` with an artifact.
 6. Claude Code OAuth (item 15): `claude mcp add` → Better Auth login → consent → token → tool call.
@@ -627,19 +618,21 @@ vibread/
 10. Claude vision returns schema-valid per-part JSON for a sample breadboard photo + expected step image.
 11. `heif2jpeg` converts a sample HEIC photo.
 12. Demo phone on venue Wi-Fi opens Build Mode on the public host; a step change appears within 2 s; Google sign-in completes.
-13. tscircuit adapter renders the golden fixture's schematic SVG (Uno as labeled chip) under `tsx` in a worker.
-14. MUI X Chat (wrapped `createAiSdkAdapter`) renders a streamed tool card; a signed approval resumes and executes exactly once; a
-    missing or tampered signature is rejected.
+13. elkjs renders the golden fixture's schematic SVG in the isolated runtime; the geometry/connectivity check rejects a broken
+    drawing and returns the titled connection table.
+14. assistant-ui + AI SDK runtime renders a streamed grouped tool row and an answerable question card; stop/resume reconnects
+    to the server-held run. Design changes run without approval prompts; physical requests still require a bench click.
 15. Laptop → golf connectivity from venue Wi-Fi and from the phone hotspot; laptop-only mode starts from a clean checkout.
-16. Connect your Claude account (item 16): OAuth completes in the browser, the token is stored server-side, one design-agent call
-    runs on it, and a refresh succeeds; with the token revoked, the call falls back to the server key.
+16. Connect your Claude account: the user pastes the OAuth code, `code#state` or redirect address (or uses the local callback);
+    the credential is stored server-side, one design-agent call runs on it, and refresh succeeds. With the owner credential
+    unavailable, the call falls back to the server key.
 
 **Acceptance per MUST item:**
 
 | Item | Proof |
 |---|---|
 | 1 Core v0 | On the real board: safe firmware flashed before wiring; read-only phase reports pin states; one deliberate fault (button leg in a GND row) diagnosed in the MUI shell |
-| 2 Agent + workspace | 3 golden prompts (moon lamp, launch control, knob night-light) → schema-valid IR + compiling sketch + schematic in ≤ 4 iterations; tests written without sketch access; RETRO vote recorded; Plan mode runs read-only tools and blocks new revisions; Review is the default |
+| 2 Agent + workspace | 3 golden prompts (moon lamp, launch control, knob night-light) → schema-valid IR + compiling sketch + schematic in ≤ 4 iterations; tests written without sketch access; RETRO vote recorded; Claude edits designs directly, the human alone presses GO for build, and the assistant-ui chat supports question cards and stop/resume |
 | 3 Thin CAPCOM | Brief by DM → status → GO/NO-GO poll (and text fallback) on a registered phone |
 | 4 Photo check | A photo of a correct step and of a step with a reversed LED → per-part answers; the reversed LED is flagged or answered `unknown`, never "correct" |
 | 5 Checks | Rule tests: LED without resistor, floating button, output-output conflict, 5 V–GND short, PWM on non-PWM pin → exact rule IDs; worst-case LED current matches hand calculation; coverage rules reject a suite missing an output assertion |
@@ -657,11 +650,11 @@ vibread/
 | Scope/time overrun | High / high | Small Core v0; one ranked list with reverse cut order; team-size cuts; named fallbacks; overnight AI build on frozen contracts |
 | Venue network or golf unreachable | Medium / high | Laptop-only mode with cached missions; phone hotspot; spike 15; one hotspot rehearsal |
 | Room can't see the demo | Medium / medium | Overhead camera + phone mirroring; confirm projector at office hours |
-| MUI X Chat is alpha | Medium / medium | Pinned exact version; spike 14; assistant-ui fallback |
-| Approval signature bugs in custom glue | Medium / high | Server-authored approval messages; spike 14 exactly-once + tamper tests |
-| Claude Code OAuth compatibility | Medium / low | Bearer token is the demo default; OAuth is stretch behind spike 6; documented callback workaround |
-| Claude-account login (item 16) vs Anthropic's published terms: third-party developers may not "offer Claude.ai login into their own applications"; enforcement "without prior notice" ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)) | Unknown / medium | Team lead's call; built last and optional on the Connections page; the server key stays the default and the automatic fallback, so a rejected token never stops a demo |
-| tscircuit runtime quirks (Node ESM) | Medium / low | Run under `tsx`/Bun worker (verified); pre-rendered schematic fallback |
+| Chat library migration | Medium / medium | assistant-ui is the shipped chat runtime; keep the AI SDK UI-message stream contract covered by the chat smoke |
+| Physical-action gate regressions | Medium / high | Bench-request broker binds requests to the released hash; every physical action remains behind the bench click |
+| Claude Code OAuth compatibility | Medium / low | Short-lived bearer token is the simple demo path; OAuth 2.1 is built and covered by the MCP regression |
+| Claude-account login vs Anthropic's published terms: third-party developers may not "offer Claude.ai login into their own applications"; enforcement "without prior notice" ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)) | Unknown / medium | The feature is optional; users can use an Anthropic API key or the server fallback. The caveat is shown near Connect Claude |
+| Schematic layout or geometry failure | Medium / low | Isolated elkjs renderer checks every drawing and falls back to a titled connection table |
 | No stable HTTPS hostname | Medium / high | Chosen tonight (Cloudflare domain, ngrok static domain, or Tailscale Funnel); laptop-only mode otherwise |
 | Agent designs weak or tests self-serving | Medium / high | Curated library, schema-constrained tools, deterministic checkers, independent test author + coverage rules, RETRO vote, cached runs |
 | `webserial-flasher` edge cases (new, 5 stars, listener race) | Medium / high | Buffered wrapper; spike 8 on the kit's board; `arduino-cli upload` fallback |
@@ -681,25 +674,21 @@ vibread/
    generic parts with basic logic simulation, labeled unverified.
 3. *"Camera to Claude to see if we did anything wrong."* Kept as a MUST, but advisory: the MCU self-test is authoritative, matching
    the brief's own "main thing is tests ran through the microcontroller."
-4. *"Bypass all permissions."* Autopilot bypasses software approvals only; flashing, self-tests, rewiring, and new parts always need a
-   human click at the bench.
-5. *Claude accounts.* Decided by the team lead: item 16 (built last) lets a user connect their own Claude account the way omp does;
-   ViBread's API key stays the default and the fallback. The terms risk is recorded in the table above. The Claude Agent SDK is
-   still not used.
+4. *"Bypass all permissions."* The product has no design permission modes: Claude edits designs directly, GO for build is human-only,
+   and flashing, self-tests, rewiring and other physical actions always need a human click at the bench.
+5. *Claude accounts.* Users can connect their own Claude account through pi-ai's Anthropic OAuth or save a per-user API key in
+   Settings → Claude. The server's `ANTHROPIC_API_KEY` remains an optional fallback. The Claude Agent SDK is still not used.
 
-## 10. Decisions needed from the team (tonight)
+## 10. Remaining verification and demo decisions
 
-1. **Board and parts:** exact board(s) + USB-serial chip, breadboard size, a photo/list of the kit; is there a spare, and who picks
-   one up at 10:00 if not?
-2. **Team:** members (≤ 4), who takes each role in §7, and which team-size cut applies.
-3. **Stable HTTPS hostname:** a domain on Cloudflare, an ngrok account (static domain), or Tailscale?
-4. **Anthropic API key** for the app (budget cap; the default until item 16 and the fallback after it) and the **Google OAuth
-   client** for the chosen host.
-5. **Photon:** who signs up + redeems `HACKWITHPHOTON`; which iPhones (iOS 26 for polls) to register.
-6. **Contract freeze:** who reviews and freezes the IR schema, NDJSON format, and golden fixture before the overnight build.
-7. **Theme + hero circuit:** approve Mission Control and the Moon-Phase Lamp (row layout, correct waxing/waning), or pick a fallback.
-8. **Sign-off** on the pushback points in §9 (simulation claims, "any hardware", "bypass all permissions"); Claude accounts are
-   decided (item 16).
+1. **Real board:** test the Linux desktop app (or Chrome/Edge on `localhost`) with the team's Uno/Nano, including safe flash,
+   rail checkpoint, self-test, calibration and app flash. The virtual bench is already covered; the real board is not.
+2. **Real Claude credential:** connect through Settings → **Claude** with pi-ai OAuth or a per-user API key, then run one live
+   design and scan. The server key remains a fallback for a demo.
+3. **Cloud iMessage:** provision the Photon project and run the cloud round-trip; the terminal provider is covered.
+4. **Google/GitHub sign-in:** supply real OAuth clients if the public multi-user flow is part of the demo; single-operator mode
+   needs neither.
+5. **Judging logistics:** choose the public hostname, rehearse the camera/phone view, and keep the cached mission fallback ready.
 
 ## 11. Originality, licensing, submission
 
@@ -708,7 +697,7 @@ vibread/
   prompts, module data, and art are written this weekend. The KiCad-style pin matrix is written from documentation, not GPL sources.
 - **Positioning for the Creativity rubric:** "Schematik tells you how to build it; ViBread checks that you actually built it right,
   and tells you where you didn't." ViBread builds on Trigger-Action-Circuits and ElectroTutor (cited in the pitch) and adds the
-  physical closed loop, one binary simulated and flashed, design from the user's own parts, and a permissioned agent in iMessage and
-  Claude Code.
+  physical closed loop, one binary simulated and flashed, design from the user's own parts, and an agent reachable from iMessage
+  and Claude Code.
 - **Devpost package:** title, short description, team, problem/solution, tech list naming the AI coding agents and models used, 2–3
   min video + 60 s Photon clip, screenshots, GitHub link, tracks: Main + Photon.
