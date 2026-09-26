@@ -223,6 +223,71 @@ void loop() {
     session.run(100);
     expect(session.partState("LED1")).toBeGreaterThan(0.02);
   }, 120_000);
+  it("checks multiple parts over one shared window and annotates sequential drift", async () => {
+    const circuit = structuredClone(moon.circuit);
+    circuit.title = "Three LED timeline";
+    circuit.parts = [
+      { id: "LED1", module: "led", params: { color: "red" } },
+      { id: "LED2", module: "led", params: { color: "yellow" } },
+      { id: "LED3", module: "led", params: { color: "green" } },
+      { id: "R1", module: "resistor", params: { ohms: 220, tolerancePct: 5 } },
+      { id: "R2", module: "resistor", params: { ohms: 220, tolerancePct: 5 } },
+      { id: "R3", module: "resistor", params: { ohms: 220, tolerancePct: 5 } },
+    ];
+    circuit.nets = [
+      { id: "D8", kind: "signal", pins: [{ part: "board", pin: "D8" }, { part: "R1", pin: "1" }] },
+      { id: "D9", kind: "signal", pins: [{ part: "board", pin: "D9" }, { part: "R2", pin: "1" }] },
+      { id: "D10", kind: "signal", pins: [{ part: "board", pin: "D10" }, { part: "R3", pin: "1" }] },
+      { id: "L1", kind: "signal", pins: [{ part: "R1", pin: "2" }, { part: "LED1", pin: "A" }] },
+      { id: "L2", kind: "signal", pins: [{ part: "R2", pin: "2" }, { part: "LED2", pin: "A" }] },
+      { id: "L3", kind: "signal", pins: [{ part: "R3", pin: "2" }, { part: "LED3", pin: "A" }] },
+      { id: "GND", kind: "ground", pins: [{ part: "board", pin: "GND" }, { part: "LED1", pin: "K" }, { part: "LED2", pin: "K" }, { part: "LED3", pin: "K" }] },
+    ];
+    circuit.roles = [
+      { pin: "D8", mode: "OUTPUT", part: "LED1", purpose: "first light" },
+      { pin: "D9", mode: "OUTPUT", part: "LED2", purpose: "second light" },
+      { pin: "D10", mode: "OUTPUT", part: "LED3", purpose: "third light" },
+    ];
+    circuit.sketch = {
+      source: `void setup(){pinMode(8,OUTPUT);pinMode(9,OUTPUT);pinMode(10,OUTPUT);}
+void loop(){bool first=millis()>=1000; digitalWrite(8,first); digitalWrite(9,LOW); digitalWrite(10,LOW);}`,
+    };
+    const compiled = await compileSketch({ source: circuit.sketch.source, board: circuit.board.profile });
+    if (!compiled.ok || !compiled.hex) throw new Error(`timeline compile failed: ${compiled.log}`);
+    const sharedWindow: Scenario = {
+      id: "T90",
+      title: "Shared LED timeline",
+      clauses: ["C1"],
+      categories: ["power-on"],
+      setup: {},
+      steps: [
+        { "expect-parts": { checks: [{ part: "LED1", state: "off" }, { part: "LED2", state: "off" }, { part: "LED3", state: "off" }], windowMs: 50 } },
+        { wait: 950 },
+        { "expect-parts": { checks: [{ part: "LED1", state: "on" }, { part: "LED2", state: "off" }, { part: "LED3", state: "off" }], windowMs: 50 } },
+      ],
+    };
+    const corrected = await runScenario({ circuit, hex: compiled.hex, scenario: sharedWindow });
+    expect(corrected.result.ok, corrected.result.steps.map((step) => step.message).join("; ")).toBe(true);
+
+    const drifting: Scenario = {
+      ...sharedWindow,
+      id: "T91",
+      steps: [
+        { "expect-part": { part: "LED1", state: "off", windowMs: 50 } },
+        { "expect-part": { part: "LED2", state: "off", windowMs: 50 } },
+        { "expect-part": { part: "LED3", state: "off", windowMs: 50 } },
+        { wait: 900 },
+        { "expect-part": { part: "LED1", state: "off", windowMs: 50 } },
+      ],
+    };
+    const drifted = await runScenario({ circuit, hex: compiled.hex, scenario: drifting });
+    const failure = drifted.result.steps.find((step) => !step.ok);
+    expect(drifted.result.ok).toBe(false);
+    expect(failure?.message).toContain("t=1050–1100 ms");
+    expect(failure?.message).toContain("LED1 turned on at t=1000 ms");
+    expect(failure?.startMs).toBe(1050);
+    expect(failure?.endMs).toBe(1100);
+  }, 120_000);
 
   it("supports a SimSession serial round trip without RX overrun", () => {
     const session = new SimSession({ circuit: moon.circuit, hex: echoHex });

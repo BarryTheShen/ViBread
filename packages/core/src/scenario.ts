@@ -15,16 +15,30 @@ import { z } from "zod";
  *  - `set-analog` sets a potentiometer wiper position 0 (at pin A) … 1 (at pin B), or a generic analog sensor output as a
  *    fraction of VCC.
  *  - `expect-pin` checks a board pin's driven output level now (the pin must be an OUTPUT).
- *  - `expect-part` watches a part for `windowMs` (advancing time): LED "on" = lit ≥ 90 % of the window, "off" = ≤ 10 %;
+ *  - `expect-part` watches a part for `windowMs` (advancing time): LED "on" = lit ≥ 90 % of the window, "off" = ≤ 10%;
  *    active buzzer "on" = sounding the same way.
- *  - `expect-pwm` measures the HIGH fraction of a pin over `windowMs` (advancing time).
- *  - `expect-tone` measures a passive buzzer's drive frequency over `windowMs` (advancing time).
+ *  - `expect-parts` watches several parts over one shared `windowMs` (advancing time once); each check may specify
+ *    `state`, `minBrightness`, and/or `maxBrightness`.
  *  - `expect-serial` passes when serial output since reset contains `contains`, waiting up to `withinMs`.
  */
 export const SIM_SCHEMA = "vibread.sim/v1" as const;
 
 const part = z.string().min(1);
 const ms = z.number().int().positive().max(60_000);
+const expectPartCheck = z.object({
+  part,
+  state: z.enum(["on", "off"]).optional(),
+  minBrightness: z.number().min(0).max(1).optional(),
+  maxBrightness: z.number().min(0).max(1).optional(),
+}).strict().superRefine((value, context) => {
+  if (value.state === undefined && value.minBrightness === undefined && value.maxBrightness === undefined) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "expect-parts check needs state or a brightness bound." });
+  }
+  if (value.minBrightness !== undefined && value.maxBrightness !== undefined && value.minBrightness > value.maxBrightness) {
+    context.addIssue({ code: z.ZodIssueCode.custom, message: "expect-parts minBrightness cannot exceed maxBrightness." });
+  }
+});
+const expectPartsPayload = z.object({ checks: z.array(expectPartCheck).min(1), windowMs: ms.default(50) }).strict();
 
 export const ScenarioStepSchema = z.union([
   z.object({ wait: ms }).strict(),
@@ -35,6 +49,8 @@ export const ScenarioStepSchema = z.union([
   z.object({ "set-analog": z.object({ part, value: z.number().min(0).max(1) }).strict() }).strict(),
   z.object({ "expect-pin": z.object({ pin: z.string().min(1), level: z.enum(["high", "low"]) }).strict() }).strict(),
   z.object({ "expect-part": z.object({ part, state: z.enum(["on", "off"]), windowMs: ms.default(50) }).strict() }).strict(),
+  z.object({ "expect-parts": expectPartsPayload }).strict(),
+  z.object({ kind: z.literal("expect-parts"), checks: z.array(expectPartCheck).min(1), windowMs: ms.default(50) }).strict(),
   z.object({ "expect-pwm": z.object({ pin: z.string().min(1), min: z.number().min(0).max(1), max: z.number().min(0).max(1), windowMs: ms.default(100) }).strict() }).strict(),
   z.object({ "expect-tone": z.object({ part, minHz: z.number().positive(), maxHz: z.number().positive(), windowMs: ms.default(200) }).strict() }).strict(),
   z.object({ "expect-serial": z.object({ contains: z.string().min(1), withinMs: z.number().int().nonnegative().max(60_000).default(0) }).strict() }).strict(),
