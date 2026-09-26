@@ -69,7 +69,7 @@ USB bench works the same on every OS). How it works inside: [HOW-IT-WORKS.md](HO
 
 ### Option B — From source (developers)
 
-Tested from a clean clone of this repository (install → toolchain → build → seed → 99 tests → app) on Linux x86_64.
+Tested from a clean clone of this repository (install → toolchain → build → seed → `npm test` → app) on Linux x86_64.
 
 ### 1. What you need
 
@@ -93,7 +93,7 @@ cd ViBread
 npm install               # ~1 min; also installs the isolated schematic renderer (packages/assembly/schematic-runtime)
 npm run setup:toolchain   # ~1 min; arduino-cli 1.5.1 (SHA-256 pinned) + Arduino AVR core 1.8.8 + ArduinoJson 7.4.2 → .toolchain/ (any OS)
 npm run build             # builds the web app into apps/web/dist (the server serves it)
-npm run seed              # optional: three ready-made demo missions (Moon-Phase Lamp, Knob Night-Light, Launch Control)
+npm run seed              # optional: the example missions (Moon-Phase Lamp, Knob Night-Light, Launch Control) plus one recorded real Claude run
 cp .env.example .env      # optional: add ANTHROPIC_API_KEY etc. (see Configuration)
 npm start                 # → http://localhost:8787
 ```
@@ -123,7 +123,7 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 | Schematic tab says the drawing isn't ready | Re-run `npm install` (it installs `packages/assembly/schematic-runtime`) |
 | Compile errors mentioning `arduino-cli` / missing core | Re-run `npm run setup:toolchain` |
 | Bench can't see the board | Use Chrome/Edge on `localhost`; try another USB cable (charge-only cables have no data); close the Arduino IDE serial monitor; on Linux add yourself to the `dialout` group |
-| Flashing from the browser fails | Use the fallback shown on the bench page: `.toolchain/bin/arduino-cli upload --input-file <hex> -p <port> -b arduino:avr:uno` |
+| Flashing from the browser fails | Copy the command the bench page shows under *Laptop fallback* (it has the right paths and board), e.g. `.toolchain/bin/arduino-cli --config-file .toolchain/arduino/arduino-cli.yaml upload --fqbn arduino:avr:uno --port <port> --input-file <hex>` |
 | Start over with fresh demo data | Stop the server, `rm -rf data`, `npm run seed`, `npm start` |
 
 ### Configuration (`.env` in the repo root, all optional)
@@ -132,6 +132,7 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 |---|---|
 | `PORT`, `HOST`, `PUBLIC_URL` | Listen address (default `0.0.0.0:8787`) and the public origin used in links, QR codes, OAuth metadata and the `claude mcp add` command |
 | `VIBREAD_PHONE_URL` | Phone/QR origin override; when unset, an HTTP localhost `PUBLIC_URL` uses the first non-internal LAN IPv4 address |
+| `VIBREAD_LAN_PAIRING=off` | Disable the single-operator LAN pairing guard (only on a trusted network) |
 | `DATA_DIR` | SQLite database, artifacts and generated secrets (default `./data`, relative to the repo root) |
 | `ANTHROPIC_API_KEY` | ViBread's server key for the agents (design, test author, RETRO, photo check). Users can instead connect their own Claude account (below). Without either, everything except the agents works and the chat says Claude is not connected |
 | `VIBREAD_MODEL`, `VIBREAD_FAST_MODEL` | Default `claude-opus-5-5`, `claude-sonnet-5` |
@@ -155,7 +156,7 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 4. **Bench** (`/m/<mission>/bench`, Chrome/Edge) — connect the board, flash safe firmware, rail checkpoint, self-test with
    on-screen prompts, diagnosis with the suspect holes highlighted, then flash the app firmware with the light-sensor
    calibration. "Try without a board" runs the same firmware in a simulated board, with injectable wiring faults.
-   Fallback flashing: `arduino-cli upload --input-file <hex> -p <port> -b arduino:avr:uno` with the HEX from the revision.
+   Fallback flashing: the bench's *Laptop fallback* box shows the exact `arduino-cli … upload` command and the HEX downloads.
 
 ### Connect your Claude account
 

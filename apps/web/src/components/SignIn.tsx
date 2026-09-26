@@ -46,8 +46,8 @@ export function SignInRequired({ message = "Sign in to see your missions." }: { 
 }
 
 /** Renders a query error: the sign-in prompt for a 401, the given fallback otherwise. */
-export function ErrorOrSignIn({ error, children }: { error: unknown; children: ReactNode }) {
-  return isSignInRequired(error) ? <SignInRequired /> : <>{children}</>;
+export function ErrorOrSignIn({ error, children, message }: { error: unknown; children: ReactNode; message?: string }) {
+  return isSignInRequired(error) ? <SignInRequired message={message} /> : <>{children}</>;
 }
 
 /** Only callback targets on this site: relative paths, never `//host` or absolute URLs (no open redirect). */

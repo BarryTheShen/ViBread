@@ -57,7 +57,7 @@ export interface Mission {
 /** Everything computed for one revision. Large blobs live in artifacts (content-addressed) and are referenced by key. */
 export interface RevisionResults {
   reports: ConsoleReport[];
-  compile?: Omit<CompileResult, "hex" | "elfPath">;
+  compile?: Omit<CompileResult, "hex">;
   sim?: Omit<SimRunResult, "traces">;
   layout?: Layout;
   layoutHash?: string;
