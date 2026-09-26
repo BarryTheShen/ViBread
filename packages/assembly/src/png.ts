@@ -102,6 +102,9 @@ function createWorker(): WorkerClient {
     scheduleIdleStop(client);
   });
   child.on("error", (error) => stopWorker(client, error.message));
+  // A write to a worker that just died fails asynchronously (EPIPE) as an 'error' event on stdin; unhandled, it would
+  // crash the whole server. Treat it like the worker stopping: pending requests reject, the next request starts a new one.
+  child.stdin.on("error", (error) => stopWorker(client, error.message));
   child.on("exit", (code, signal) => stopWorker(client, `child exited (${code ?? "null"}${signal ? `, ${signal}` : ""})`));
   return client;
 }
