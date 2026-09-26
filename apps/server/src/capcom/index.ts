@@ -101,6 +101,17 @@ export function isSelectedPollOption(content: Record<string, unknown>): boolean 
   return content.selected !== false;
 }
 
+export function approvalOutcome(
+  status: "pending" | "approved" | "denied" | "expired" | "consumed",
+  decision: "approve-once" | "approve-mission" | "deny" | undefined,
+  requested: "approve-once" | "deny",
+): "approved" | "denied" | "expired" | "decided" {
+  if ((status === "approved" || status === "consumed") && decision === requested) return "approved";
+  if (status === "denied" && decision === requested) return "denied";
+  if (status === "expired") return "expired";
+  return "decided";
+}
+
 function senderHandle(space: Space, message: Message): string {
   return message.sender?.id ?? space.id;
 }
@@ -485,16 +496,28 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
     if (!queue) return false;
     const index = pendingApprovalIndex(queue, pollTitle);
     if (index < 0) return false;
-    const [pending] = queue.splice(index, 1);
+    const pending = queue[index];
     if (!pending) return false;
-    if (queue.length === 0) pendingApprovalsBySpace.delete(space.id);
     const actor = await actorForHandle(handle);
     if (!actor) return false;
-    await ctx.missions.decide(pending.notice.id, vote, actor);
-    if (pending.notice.actionClass === "physical") {
-      await sendText(space, vote === "approve-once" ? "Pre-approval recorded. A human must still click the bench control." : "Physical action denied; nothing was run.");
+    const outcome = await ctx.missions.decide(pending.notice.id, vote, actor);
+    queue.splice(index, 1);
+    if (queue.length === 0) pendingApprovalsBySpace.delete(space.id);
+    const result = approvalOutcome(outcome.status, outcome.decision, vote);
+    if (result === "approved") {
+      if (pending.notice.actionClass === "physical") {
+        await sendText(space, "Pre-approval recorded. A human must still click the bench control.");
+      } else {
+        await sendText(space, "GO recorded.");
+      }
+    } else if (result === "denied") {
+      if (pending.notice.actionClass === "physical") {
+        await sendText(space, "Physical action denied; nothing was run.");
+      } else {
+        await sendText(space, "NO-GO recorded.");
+      }
     } else {
-      await sendText(space, vote === "approve-once" ? "GO recorded." : "NO-GO recorded.");
+      await sendText(space, result === "expired" ? "That approval already expired." : "That approval was already decided.");
     }
     return true;
   };
@@ -594,9 +617,6 @@ export async function startCapcom(ctx: AppContext): Promise<{ stop(): Promise<vo
       await handlePhoto(space, handle, message);
       return;
     }
-    if (type === "poll_option") {
-      const optionValue = asRecord(content.option);
-      const pollValue = asRecord(content.poll);
     if (type === "poll_option") {
       if (!isSelectedPollOption(content)) return;
       const optionValue = asRecord(content.option);

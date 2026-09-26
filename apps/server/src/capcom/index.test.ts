@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { benchAskOptionTitle, benchAskValueForOption, cloudSendDelayMs, faultAlertText, isFaultAlertEvent, isQuietHours, missionSelection, pendingApprovalIndex, pollTitleForApproval, shouldSendCelebrationEffect } from "./index.js";
+import { approvalOutcome, benchAskOptionTitle, benchAskValueForOption, cloudSendDelayMs, faultAlertText, isFaultAlertEvent, isQuietHours, isSelectedPollOption, isSupportedInboundContentType, missionSelection, pendingApprovalIndex, pollTitleForApproval, shouldSendCelebrationEffect } from "./index.js";
 
 describe("CAPCOM timeline alerts", () => {
   it("does not duplicate the Houston prefix from bench diagnoses", () => {
@@ -66,5 +66,18 @@ describe("CAPCOM timeline alerts", () => {
     expect(benchAskValueForOption(ask, "None of them")).toBe("none");
     expect(benchAskValueForOption(ask, "2")).toBe("2");
     expect(benchAskValueForOption(ask, "5")).toBeUndefined();
+  });
+
+  it("ignores read receipts, poll deselection, and stale approval decisions", () => {
+    expect(isSupportedInboundContentType("text")).toBe(true);
+    expect(isSupportedInboundContentType("attachment")).toBe(true);
+    expect(isSupportedInboundContentType("poll_option")).toBe(true);
+    expect(isSupportedInboundContentType("read")).toBe(false);
+    expect(isSupportedInboundContentType("reaction")).toBe(false);
+    expect(isSelectedPollOption({ selected: false })).toBe(false);
+    expect(isSelectedPollOption({ selected: true })).toBe(true);
+    expect(approvalOutcome("approved", "approve-once", "approve-once")).toBe("approved");
+    expect(approvalOutcome("denied", "deny", "approve-once")).toBe("decided");
+    expect(approvalOutcome("expired", "approve-once", "approve-once")).toBe("expired");
   });
 });
