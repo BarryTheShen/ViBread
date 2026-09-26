@@ -120,6 +120,8 @@ export const api = {
   claudeComplete: (loginId: string, code: string) => sendJson<ClaudeAccountView>("POST", "/api/connections/claude/complete", { loginId, code }),
   claudeCancel: (loginId: string) => sendJson<ClaudeAccountView>("POST", "/api/connections/claude/cancel", { loginId }),
   claudeDisconnect: () => sendJson<ClaudeAccountView>("DELETE", "/api/connections/claude"),
+  /** Save an Anthropic API key for this user (the server checks it with Anthropic first). */
+  claudeKey: (key: string) => sendJson<ClaudeAccountView>("POST", "/api/connections/claude/key", { key }),
   stopAgent: (id: string) => sendJson<{ ok: true }>("POST", `${m(id)}/chat/stop`),
   chatPath: (id: string) => `${m(id)}/chat`,
   connections: (signal?: AbortSignal) => getJson<ConnectionsView>("/api/connections", signal),

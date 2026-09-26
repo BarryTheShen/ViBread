@@ -74,7 +74,7 @@ describe("Claude account connection (pi-ai sign-in, credentials in the database)
     opened = openDatabase(dir);
     callbackPort = await freePort();
     token = await tokenStub();
-    service = createClaudeAccountService({ config: {}, db: opened.db, log: pino({ level: "silent" }), signIn: { callbackPort, rewrite: { from: TOKEN_URL, to: token.url } } });
+    service = createClaudeAccountService({ config: {}, db: opened.db, log: pino({ level: "silent" }), fetch: async () => new Response("{}", { status: 200 }), signIn: { callbackPort, rewrite: { from: TOKEN_URL, to: token.url } } });
   });
 
   afterEach(async () => {
@@ -152,11 +152,17 @@ describe("Claude account connection (pi-ai sign-in, credentials in the database)
 
   it("connects with an API key, and disconnecting removes the stored credential", async () => {
     await expect(service.saveApiKey("bob", "  ")).rejects.toMatchObject({ status: 400, code: "key_required" });
-    expect(await service.saveApiKey("bob", " sk-ant-api03-bob ")).toMatchObject({ connected: true, using: "claude-account" });
+    expect(await service.saveApiKey("bob", " sk-ant-api03-bob ")).toMatchObject({ connected: true, using: "api-key", verified: true });
     expect(await service.credentials("bob").read("anthropic")).toEqual({ type: "api_key", key: "sk-ant-api03-bob" });
     expect(await service.disconnect("bob")).toMatchObject({ connected: false, using: "none" });
     expect(await service.credentials("bob").read("anthropic")).toBeUndefined();
   });
+  it("rejects an API key when Anthropic returns unauthorized", async () => {
+    const rejected = createClaudeAccountService({ config: {}, db: opened.db, log: pino({ level: "silent" }), fetch: async () => new Response("{}", { status: 401 }) });
+    await expect(rejected.saveApiKey("alice", "sk-ant-api03-rejected")).rejects.toMatchObject({ status: 400, code: "key_rejected" });
+    await rejected.stop();
+  });
+
 
   it("credential writes are serialized per user, so a token refresh never loses a concurrent write", async () => {
     const store = service.credentials("alice");

@@ -914,7 +914,7 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
                 icon={<AddHomeOutlined />}
                 label="Add to Home Screen · Share → Add to Home Screen"
                 onDelete={dismissPwaTip}
-                deleteIcon={<ErrorOutlined aria-label="Dismiss Add to Home Screen tip" />}
+                deleteIcon={<Close aria-label="Dismiss Add to Home Screen tip" />}
                 variant="outlined"
                 sx={{
                   minHeight: 40,

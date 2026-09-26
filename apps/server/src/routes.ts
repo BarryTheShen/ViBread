@@ -644,7 +644,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.post("/connections/claude/key", async (req, res) => {
     const user = actorUser(res, ctx);
-    const body = req.body as { key?: unknown };
+    const body = (req.body ?? {}) as { key?: unknown };
     if (typeof body.key !== "string") throw httpError(400, "INVALID_REQUEST", "key is required");
     res.json(await ctx.claudeAccounts.saveApiKey(user.id, body.key));
   });

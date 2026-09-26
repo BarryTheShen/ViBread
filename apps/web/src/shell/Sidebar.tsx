@@ -251,7 +251,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
               variant={claudeReady ? "outlined" : "filled"}
               label={collapsed ? undefined : claudeReady ? "Claude ready" : "Claude not connected · Connect"}
               aria-label={claudeReady ? "Claude ready" : "Claude not connected. Connect"}
-              sx={{ width: "100%", justifyContent: collapsed ? "center" : "flex-start", overflow: "hidden", "& .MuiChip-label": { overflow: "hidden", textOverflow: "ellipsis" } }}
+              sx={{ width: "100%", minHeight: 30, height: "auto", py: 0.5, justifyContent: collapsed ? "center" : "flex-start", "& .MuiChip-label": { whiteSpace: "normal", overflow: "visible", textOverflow: "clip", lineHeight: 1.2, textAlign: "left" } }}
             />
           </Tooltip>
         )}

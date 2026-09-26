@@ -82,15 +82,16 @@ export function createClaudeAccountService(deps: {
   config: Pick<ServerConfig, "anthropicApiKey">;
   db: DB;
   log: Logger;
+  fetch?: typeof globalThis.fetch;
   /** Test seams for the sign-in worker (anthropic-login.ts); unset in production. */
   signIn?: AnthropicLoginOptions;
 }): ClaudeAccountService {
   const { db, config } = deps;
   const log = deps.log.child({ component: "claude-accounts" });
   const pending = new Map<string, PendingLogin>();
+  const keyVerification = new Map<string, boolean>();
   /** Per-user write chain: CredentialStore.modify is a serialized read-modify-write (OAuth refresh runs inside it). */
   const chains = new Map<string, Promise<unknown>>();
-
   const accountFor = (userId: string) => db.select().from(claudeAccounts).where(eq(claudeAccounts.userId, userId)).get();
 
   function serialized<T>(userId: string, task: () => Promise<T>): Promise<T> {
@@ -169,16 +170,35 @@ export function createClaudeAccountService(deps: {
     return undefined;
   }
 
+  async function verifyApiKey(key: string): Promise<boolean> {
+    const base = (process.env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com").replace(/\/+$/, "");
+    const request = deps.fetch ?? globalThis.fetch;
+    try {
+      const response = await request(`${base}/v1/models`, {
+        headers: { "x-api-key": key, "anthropic-version": "2023-06-01" },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (response.status === 401 || response.status === 403) throw new ClaudeAccountError(400, "key_rejected", "Anthropic rejected this API key.");
+      return response.ok;
+    } catch (error) {
+      if (error instanceof ClaudeAccountError) throw error;
+      return false;
+    }
+  }
+
   async function view(userId: string): Promise<ClaudeAccountView> {
     const account = accountFor(userId);
     const login = pendingFor(userId);
+    const credential = account ? JSON.parse(account.credential) as { type?: string } : undefined;
+    const apiKey = credential?.type === "api_key";
     return {
       connected: Boolean(account),
       email: account?.email ?? undefined,
       orgName: account?.orgName ?? undefined,
       connectedAt: account?.connectedAt.toISOString(),
       pending: login ? { loginId: login.id, url: login.url, startedAt: new Date(login.startedAt).toISOString() } : undefined,
-      using: account ? "claude-account" : config.anthropicApiKey ? "server-key" : "none",
+      using: account ? (apiKey ? "api-key" : "claude-account") : config.anthropicApiKey ? "server-key" : "none",
+      ...(apiKey && keyVerification.has(userId) ? { verified: keyVerification.get(userId) } : {}),
     };
   }
 
@@ -264,18 +284,17 @@ export function createClaudeAccountService(deps: {
     async saveApiKey(userId, key) {
       const trimmed = key.trim();
       if (!trimmed) throw new ClaudeAccountError(400, "key_required", "Paste your Anthropic API key.");
-      await claudeModels(credentials(userId)).login(CLAUDE_PROVIDER, "api_key", {
-        signal: AbortSignal.timeout(STEP_TIMEOUT_MS),
-        notify: () => undefined,
-        prompt: async () => trimmed,
-      });
+      const verified = await verifyApiKey(trimmed);
+      await credentials(userId).modify(CLAUDE_PROVIDER, async () => ({ type: "api_key", key: trimmed }));
+      keyVerification.set(userId, verified);
       db.update(claudeAccounts).set({ email: null, orgName: null }).where(eq(claudeAccounts.userId, userId)).run();
-      log.info({ userId }, "Claude connected with an API key");
+      log.info({ userId, verified }, "Claude connected with an API key");
       return view(userId);
     },
 
     async disconnect(userId) {
       await claudeModels(credentials(userId)).logout(CLAUDE_PROVIDER);
+      keyVerification.delete(userId);
       return view(userId);
     },
 

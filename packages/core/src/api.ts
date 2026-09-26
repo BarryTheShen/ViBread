@@ -218,8 +218,10 @@ export interface ClaudeAccountView {
   connectedAt?: string;
   /** A sign-in this user started that is waiting for the pasted code (or the local callback). */
   pending?: { loginId: string; url: string; startedAt: string };
-  /** What powers this user's agents: their Claude account, ViBread's server key, or nothing yet. */
-  using: "claude-account" | "server-key" | "none";
+  /** What powers this user's agents: their Claude account, their own API key, ViBread's server key, or nothing yet. */
+  using: "claude-account" | "api-key" | "server-key" | "none";
+  /** Only for `api-key`: false when the key was saved without Anthropic confirming it (e.g. offline). */
+  verified?: boolean;
 }
 
 export interface ClaudeLoginStart {

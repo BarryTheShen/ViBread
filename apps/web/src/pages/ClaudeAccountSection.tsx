@@ -1,4 +1,5 @@
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
+import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
@@ -23,8 +24,9 @@ import { ErrorOrSignIn } from "../components/SignIn.js";
 
 const USING: Record<ClaudeAccountView["using"], string> = {
   "claude-account": "Your missions use your Claude account.",
+  "api-key": "Your missions use your own Anthropic API key.",
   "server-key": "Right now your missions use ViBread's own Claude key.",
-  none: "Right now nothing powers the AI agent: connect a Claude account to use it.",
+  none: "Right now nothing powers the AI agent: connect a Claude account.",
 };
 
 /** Plain-language messages for the server's Claude-login error codes. */
@@ -35,6 +37,7 @@ const ERRORS: Record<string, string> = {
   login_state_mismatch: "That code belongs to a different sign-in. Paste the address from the newest Claude tab, or click Connect to start over.",
   code_required: "Paste the code (or the whole address) from the Claude sign-in page first.",
   login_unavailable: "Claude sign-in isn't available right now. Try again in a minute.",
+  key_rejected: "Anthropic rejected this API key.",
 };
 
 function friendly(error: Error): string {
@@ -55,6 +58,8 @@ export function ClaudeAccountSection() {
     qc.setQueryData<ConnectionsView>(queryKeys.connections, (old) => (old ? { ...old, claude } : old));
   const [code, setCode] = useState("");
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
+  const [apiKey, setApiKey] = useState("");
+  const [copiedUrl, setCopiedUrl] = useState(false);
 
   const start = useMutation({
     mutationFn: () => api.claudeStart(),
@@ -78,9 +83,23 @@ export function ClaudeAccountSection() {
       setClaude(claude);
     },
   });
+  const saveKey = useMutation({
+    mutationFn: (key: string) => api.claudeKey(key),
+    onSuccess: (nextClaude) => {
+      setApiKey("");
+      setClaude(nextClaude);
+    },
+  });
+  const clearErrors = () => {
+    start.reset();
+    complete.reset();
+    cancel.reset();
+    disconnect.reset();
+    saveKey.reset();
+  };
 
   const claude = connections.data?.claude;
-  const error = [start, complete, cancel, disconnect].find((m) => m.isError)?.error ?? null;
+  const error = [start, complete, cancel, disconnect, saveKey].find((m) => m.isError)?.error ?? null;
 
   return (
     <Card component="section" aria-labelledby="claude-account-heading">
@@ -105,7 +124,11 @@ export function ClaudeAccountSection() {
                 <Chip
                   color="success"
                   icon={<CheckCircleIcon />}
-                  label={`Connected as ${claude.email ?? "your Claude account"}${claude.orgName ? ` (${claude.orgName})` : ""}`}
+                  label={
+                    claude.using === "api-key"
+                      ? `Connected with an API key${claude.verified === false ? " · not verified yet" : ""}`
+                      : `Connected as ${claude.email ?? "your Claude account"}${claude.orgName ? ` (${claude.orgName})` : ""}`
+                  }
                 />
                 {claude.connectedAt && (
                   <Typography variant="body2" sx={{ color: "text.secondary" }}>
@@ -123,10 +146,30 @@ export function ClaudeAccountSection() {
                     Open Claude sign-in
                   </Button>
                 </Box>
+                <Stack direction={{ xs: "column", sm: "row" }} sx={{ gap: 1, alignItems: { sm: "center" } }}>
+                  <Typography component="code" sx={{ flex: 1, p: 1, bgcolor: "code.main", borderRadius: 1, wordBreak: "break-all", fontSize: 12 }}>
+                    {claude.pending.url}
+                  </Typography>
+                  <Button
+                    variant="outlined"
+                    size="small"
+                    startIcon={<ContentCopyIcon />}
+                    onClick={() => {
+                      const clipboard = navigator.clipboard;
+                      if (!clipboard) return;
+                      void clipboard.writeText(claude.pending?.url ?? "").then(() => {
+                        setCopiedUrl(true);
+                        window.setTimeout(() => setCopiedUrl(false), 2_000);
+                      });
+                    }}
+                  >
+                    {copiedUrl ? "Copied" : "Copy sign-in URL"}
+                  </Button>
+                </Stack>
                 <Box component="ol" sx={{ m: 0, pl: 3, "& li": { mb: 0.5 } }}>
                   <li>Sign in and approve.</li>
                   <li>
-                    Claude will either show you a code, or send you to a page that can't load (localhost:54545…). Copy that code — or the
+                    Claude will either show you a code, or send you to a page that can't load (localhost:53692…). Copy that code — or the
                     whole address from the address bar — and paste it here.
                   </li>
                 </Box>
@@ -149,7 +192,14 @@ export function ClaudeAccountSection() {
                   <Button type="submit" variant="contained" disabled={!code.trim() || complete.isPending}>
                     {complete.isPending ? "Finishing…" : "Finish"}
                   </Button>
-                  <Button onClick={() => claude.pending && cancel.mutate(claude.pending.loginId)} disabled={cancel.isPending}>
+                  <Button
+                    onClick={() => {
+                      clearErrors();
+                      setCode("");
+                      if (claude.pending) cancel.mutate(claude.pending.loginId);
+                    }}
+                    disabled={cancel.isPending}
+                  >
                     Cancel
                   </Button>
                 </Stack>
@@ -161,12 +211,52 @@ export function ClaudeAccountSection() {
               </Stack>
             ) : (
               <Box>
-                <Button variant="contained" disabled={start.isPending} onClick={() => start.mutate()}>
+                <Button
+                  variant="contained"
+                  disabled={start.isPending}
+                  onClick={() => {
+                    clearErrors();
+                    setCode("");
+                    start.mutate();
+                  }}
+                >
                   {start.isPending ? "Starting…" : "Connect"}
                 </Button>
               </Box>
             )}
           </>
+        )}
+        {claude && (
+          <Box sx={{ borderTop: 1, borderColor: "divider", pt: 2 }}>
+            <Typography variant="h3">Use an API key instead</Typography>
+            <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
+              Save your Anthropic API key on this server instead of signing in with Claude.
+            </Typography>
+            <Stack
+              component="form"
+              direction={{ xs: "column", sm: "row" }}
+              sx={{ gap: 1, mt: 1.5 }}
+              onSubmit={(event) => {
+                event.preventDefault();
+                if (!apiKey.trim()) return;
+                clearErrors();
+                saveKey.mutate(apiKey.trim());
+              }}
+            >
+              <TextField
+                label="Anthropic API key"
+                type="password"
+                value={apiKey}
+                onChange={(event) => setApiKey(event.target.value)}
+                autoComplete="off"
+                sx={{ flex: 1 }}
+              />
+              <Button type="submit" variant="contained" disabled={!apiKey.trim() || saveKey.isPending}>
+                {saveKey.isPending ? "Saving…" : "Save API key"}
+              </Button>
+            </Stack>
+            {saveKey.isSuccess && <Alert severity="success" sx={{ mt: 1.5 }}>API key saved.</Alert>}
+          </Box>
         )}
         {error && <Alert severity="error">{friendly(error)}</Alert>}
       </CardContent>
