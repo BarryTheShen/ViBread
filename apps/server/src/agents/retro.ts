@@ -1,8 +1,8 @@
 import { verdictOf, type ConsoleReport, type Finding, type MissionStore } from "@vibread/core";
 import type { RegistryHooks } from "@vibread/tools";
-import { Output, generateText } from "ai";
 import { z } from "zod";
 import type { AgentModels } from "./models.js";
+import { completeObject } from "./pi-object.js";
 import { RETRO_SYSTEM } from "./prompts.js";
 
 export const RetroVoteSchema = z.object({
@@ -25,7 +25,7 @@ export type RetroVote = z.infer<typeof RetroVoteSchema>;
 export function createRetroReviewer(deps: { models: AgentModels; store: MissionStore }): { review: NonNullable<RegistryHooks["review"]> } {
   return {
     async review({ mission, revision, signal }) {
-      const { model, modelId } = await deps.models.fast(mission.ownerId, { missionId: mission.id, purpose: "retro" });
+      const claude = await deps.models.fast(mission.ownerId, { missionId: mission.id, purpose: "retro" });
       const consoles = revision.results.reports
         .filter((r) => r.console !== "RETRO")
         .map((r) => ({ console: r.console, verdict: r.verdict, summary: r.summary, findings: r.findings.map((f) => `${f.severity} ${f.ruleId}: ${f.title}`) }));
@@ -35,14 +35,8 @@ export function createRetroReviewer(deps: { models: AgentModels; store: MissionS
         `Test results:\n${JSON.stringify(scenarios)}\nCoverage gaps: ${revision.results.sim?.coverage.missing.join("; ") || "none"}\n` +
         `Pin modes the compiled sketch actually set in simulation:\n${JSON.stringify(revision.results.sim?.pinModes ?? [])}\n\n` +
         `Console results:\n${JSON.stringify(consoles, null, 2)}\n\nVote now.`;
-      const result = await generateText({
-        model,
-        system: RETRO_SYSTEM,
-        prompt,
-        output: Output.object({ schema: RetroVoteSchema, name: "retro_vote" }),
-        ...(signal ? { abortSignal: signal } : {}),
-      });
-      return retroReport(result.output, revision.hash, modelId);
+      const vote = await completeObject(claude, { system: RETRO_SYSTEM, content: prompt, schema: RetroVoteSchema, name: "retro_vote", ...(signal ? { signal } : {}) });
+      return retroReport(vote, revision.hash, claude.modelId);
     },
   };
 }

@@ -206,10 +206,11 @@ export interface ConnectionsView {
   claude: ClaudeAccountView;
 }
 
-/** PLAN item 16: the user's own Claude account powering their missions (through oh-my-pi's auth broker + gateway). */
+/**
+ * PLAN item 16: the user's own Claude account (or API key) powering their missions — pi-ai's Anthropic sign-in or a
+ * key saved with POST /api/connections/claude/key {key}, stored per user by the server.
+ */
 export interface ClaudeAccountView {
-  /** oh-my-pi is installed on this server, so a Claude account can be connected. */
-  available: boolean;
   connected: boolean;
   email?: string;
   orgName?: string;
@@ -222,7 +223,7 @@ export interface ClaudeAccountView {
 
 export interface ClaudeLoginStart {
   loginId: string;
-  /** claude.ai sign-in page to open in a new tab. */
+  /** claude.ai sign-in page to open in a new tab. Finish with the pasted code, `code#state`, or the whole localhost callback address. */
   url: string;
 }
 

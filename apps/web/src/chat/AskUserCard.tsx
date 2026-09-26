@@ -10,9 +10,8 @@ import { useState } from "react";
 import { isRecord } from "../lib/guards.js";
 import { INTER_FONT } from "../theme.js";
 
-/** The `ask_user` tool input ({ question, choices? }); tolerant of partial or over-long input (it is shown, never validated). */
-export function askUserOf(input: unknown): { question?: string; choices: string[] } {
-  const record = isRecord(input) ? input : {};
+function questionOf(value: unknown): { question?: string; choices: string[] } {
+  const record = isRecord(value) ? value : {};
   return {
     ...(typeof record.question === "string" && record.question.trim() ? { question: record.question } : {}),
     choices: Array.isArray(record.choices) ? record.choices.filter((c): c is string => typeof c === "string" && c.trim().length > 0) : [],
@@ -20,11 +19,21 @@ export function askUserOf(input: unknown): { question?: string; choices: string[
 }
 
 /**
+ * The `ask_user` question: the tool output's display copy (the server shortens over-long questions and choices) when the
+ * call has finished, else the raw input as it streams in. Tolerant of partial input (it is shown, never validated).
+ */
+export function askUserOf(input: unknown, output?: unknown): { question?: string; choices: string[] } {
+  const raw = questionOf(input);
+  const display = questionOf(output);
+  return display.question ? { question: display.question, choices: display.choices.length > 0 ? display.choices : raw.choices } : raw;
+}
+
+/**
  * Claude's clarifying question (`ask_user`): the question, one button per choice, and a free-text answer. The run has
  * stopped; answering sends a normal chat message. `answerable` is false once the conversation has moved on.
  */
-export function AskUserCard({ input, answerable, onAnswer }: { input: unknown; answerable: boolean; onAnswer(text: string): void }) {
-  const { question, choices } = askUserOf(input);
+export function AskUserCard({ input, output, answerable, onAnswer }: { input: unknown; output?: unknown; answerable: boolean; onAnswer(text: string): void }) {
+  const { question, choices } = askUserOf(input, output);
   const [text, setText] = useState("");
   const send = () => {
     if (!text.trim()) return;

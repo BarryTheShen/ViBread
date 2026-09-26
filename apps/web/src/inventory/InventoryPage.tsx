@@ -188,25 +188,29 @@ export default function InventoryPage() {
 
   return (
     <Container maxWidth="lg" sx={{ py: { xs: 2, md: 4 } }}>
-      <Stack spacing={2.5}>
-        <Stack direction={{ xs: "column", md: "row" }} sx={{ alignItems: { md: "center" }, justifyContent: "space-between" }} spacing={2}>
-          <Box>
-            <Typography variant="h1">Inventory · {total} part{total === 1 ? "" : "s"}</Typography>
-            <Typography color="text.secondary">Your shared parts library, ready for every mission.</Typography>
-          </Box>
-          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
-            <Button variant="outlined" startIcon={<CameraAltOutlinedIcon />} onClick={() => setScanOpen(true)}>Scan parts</Button>
-            <Button variant="outlined" startIcon={<TextFieldsOutlinedIcon />} onClick={() => setTypePartsOpen(true)}>Type parts</Button>
-            <Button variant="contained" startIcon={<AddIcon />} onClick={() => { setEditing(undefined); setAddOpen(true); }}>Add part</Button>
-            <Button variant="text" startIcon={<BuildOutlinedIcon />} onClick={() => { setSourceType(undefined); setTypeEditorOpen(true); }}>New part type</Button>
+      <Box sx={{ position: "sticky", top: 0, zIndex: 2, bgcolor: "background.default", pt: { xs: 0, md: 0.5 }, pb: 1 }}>
+        <Stack spacing={2.5}>
+          <Stack direction={{ xs: "column", md: "row" }} sx={{ alignItems: { md: "center" }, justifyContent: "space-between" }} spacing={2}>
+            <Box>
+              <Typography variant="h1">Inventory · {total} part{total === 1 ? "" : "s"}</Typography>
+              <Typography color="text.secondary">Your shared parts library, ready for every mission.</Typography>
+            </Box>
+            <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
+              <Button variant="outlined" startIcon={<CameraAltOutlinedIcon />} onClick={() => setScanOpen(true)}>Scan parts</Button>
+              <Button variant="outlined" startIcon={<TextFieldsOutlinedIcon />} onClick={() => setTypePartsOpen(true)}>Type parts</Button>
+              <Button variant="contained" startIcon={<AddIcon />} onClick={() => { setEditing(undefined); setAddOpen(true); }}>Add part</Button>
+              <Button variant="text" startIcon={<BuildOutlinedIcon />} onClick={() => { setSourceType(undefined); setTypeEditorOpen(true); }}>New part type</Button>
+            </Stack>
           </Stack>
+          <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+            <OutlinedInput fullWidth placeholder="Search inventory…" value={search} onChange={(event) => setSearch(event.target.value)} startAdornment={<InputAdornment position="start">⌕</InputAdornment>} inputProps={{ "aria-label": "Search inventory" }} />
+          </Stack>
+          <Tabs value={filter} onChange={(_, value: Filter) => setFilter(value)} variant="scrollable" allowScrollButtonsMobile aria-label="Inventory filters">
+            {FILTERS.map((value) => <Tab key={value} value={value} label={filterLabel(value)} />)}
+          </Tabs>
         </Stack>
-        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
-          <OutlinedInput fullWidth placeholder="Search inventory…" value={search} onChange={(event) => setSearch(event.target.value)} startAdornment={<InputAdornment position="start">⌕</InputAdornment>} inputProps={{ "aria-label": "Search inventory" }} />
-        </Stack>
-        <Tabs value={filter} onChange={(_, value: Filter) => setFilter(value)} variant="scrollable" allowScrollButtonsMobile aria-label="Inventory filters">
-          {FILTERS.map((value) => <Tab key={value} value={value} label={filterLabel(value)} />)}
-        </Tabs>
+      </Box>
+      <Stack spacing={2.5}>
         {rows.length === 0 ? (
           <Card><CardContent><Stack spacing={1.5} sx={{ alignItems: "flex-start" }}><Typography variant="h2">Your inventory is empty</Typography><Typography color="text.secondary">Scan a pile of parts or type a quick list. You can also add one part at a time.</Typography><Stack direction="row" spacing={1}><Button variant="contained" startIcon={<CameraAltOutlinedIcon />} onClick={() => setScanOpen(true)}>Scan your parts</Button><Button variant="outlined" onClick={() => setTypePartsOpen(true)}>Type parts</Button></Stack></Stack></CardContent></Card>
         ) : grouped.length === 0 ? (

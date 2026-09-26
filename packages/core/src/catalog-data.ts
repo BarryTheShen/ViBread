@@ -76,7 +76,7 @@ export const BUILT_IN_PART_TYPES: PartType[] = [
     "full",
     [
       choiceField("color", "Color", ledColors, { identity: true, electrical: true, required: true }),
-      choiceField("size", "Size", ["3", "5", "10"], { identity: false, electrical: false, required: false, unit: "mm" }),
+      choiceField("size", "Lens diameter", ["3", "5", "10"], { identity: false, electrical: false, required: false, unit: "mm" }),
     ],
     { kind: "module", module: "led", params: { color: "color" } },
   ),

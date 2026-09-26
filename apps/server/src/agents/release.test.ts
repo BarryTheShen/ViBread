@@ -4,7 +4,7 @@ import type { Pipeline } from "@vibread/tools";
 import { describe, expect, it } from "vitest";
 import { createAgentRuntime } from "./index.js";
 import { anthropicModels, type AgentModels } from "./models.js";
-import { jsonModel, mockModels, scriptedDesign, testDeps } from "./testing.js";
+import { mockModels, scriptedDesign, scriptedJson, testDeps, type ScriptedModel } from "./testing.js";
 
 const golden = GOLDEN.find((g) => g.key === "moon-phase-lamp")!;
 const FLIGHT: Actor = { kind: "human", id: "operator", name: "Operator", channel: "web" };
@@ -33,7 +33,7 @@ async function setup(input: { models?: AgentModels; fao?: Verdict; vote?: object
   const deps = testDeps();
   const pipeline = fixedPipeline(deps.store, input.fao);
   // The fast model answers as RETRO or as the independent test author, depending on the system prompt.
-  const fast = jsonModel((call) => (JSON.stringify(call.prompt).includes("You are RETRO") ? (input.vote ?? GO_VOTE) : golden.suite));
+  const fast = scriptedJson((context) => (JSON.stringify(context.messages).includes("You are RETRO") ? (input.vote ?? GO_VOTE) : golden.suite));
   const models = input.models ?? mockModels(scriptedDesign([]), fast);
   const runtime = createAgentRuntime({ ...deps, models, pipeline });
   const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: FLIGHT });
@@ -48,7 +48,7 @@ async function setup(input: { models?: AgentModels; fao?: Verdict; vote?: object
   return { deps, runtime, mission, fast };
 }
 
-const authorCalls = (fast: ReturnType<typeof jsonModel>) => fast.doGenerateCalls.filter((c) => JSON.stringify(c.prompt).includes("independent test author")).length;
+const authorCalls = (fast: ScriptedModel) => fast.requests.filter((c) => JSON.stringify(c.messages).includes("independent test author")).length;
 
 describe("human release (GO for build)", () => {
   it("releases a GO revision, runs RETRO first when it never ran, and sends RELEASED", async () => {

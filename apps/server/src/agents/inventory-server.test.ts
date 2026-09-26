@@ -14,8 +14,9 @@ import { startServer, type RunningServer } from "../main.js";
 
 /**
  * Redesign S5 on the real server (SQLite stores, REST routes, /mcp, /a2a): missions copy the owner's inventory on every
- * creation path, the camera scan runs through the routes, and vibread_get_inventory serves the owner's parts. Claude is a
- * local stand-in for the per-user gateway (the owner's "connected account"), so nothing leaves the machine.
+ * creation path, the camera scan runs through the routes, and vibread_get_inventory serves the owner's parts. The owner
+ * connected their Claude account (a stored sign-in) and ANTHROPIC_BASE_URL points at a local stand-in, so nothing leaves
+ * the machine.
  */
 
 const SCAN_GROUPS = {
@@ -31,33 +32,37 @@ interface Seen {
   stream: boolean;
 }
 
-/** Anthropic Messages API stand-in: streams a short text for chat turns, returns the scan JSON for vision calls. */
+/** Anthropic Messages API stand-in: streams a short text for chat turns and answers a required tool (the scan) with its JSON. */
 async function claudeStub(): Promise<{ baseURL: string; seen: Seen[]; server: Server }> {
   const seen: Seen[] = [];
   const server = createServer((req, res) => {
     let raw = "";
     req.on("data", (chunk) => (raw += chunk));
     req.on("end", () => {
-      const body = JSON.parse(raw || "{}") as { stream?: boolean; model?: string; system?: { text: string }[] | string };
+      const body = JSON.parse(raw || "{}") as { stream?: boolean; model?: string; system?: { text: string }[] | string; tool_choice?: { type: string; name?: string } };
       const system = typeof body.system === "string" ? body.system : (body.system ?? []).map((s) => s.text).join("\n");
       seen.push({ path: new URL(req.url ?? "", "http://stub").pathname, system, stream: Boolean(body.stream) });
       const usage = { input_tokens: 3, output_tokens: 4 };
-      const text = system.includes("You identify electronics parts") ? JSON.stringify(SCAN_GROUPS) : "Got it — what should the light do when it's bright?";
-      if (body.stream) {
-        const events = [
-          { type: "message_start", message: { id: "m", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage } },
-          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text } },
-          { type: "content_block_stop", index: 0 },
-          { type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 4 } },
-          { type: "message_stop" },
-        ];
-        res.writeHead(200, { "content-type": "text/event-stream" });
-        res.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
-      } else {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify({ id: "m", type: "message", role: "assistant", model: body.model, content: [{ type: "text", text }], stop_reason: "end_turn", stop_sequence: null, usage }));
-      }
+      const forced = body.tool_choice?.type === "tool" ? body.tool_choice.name : undefined;
+      const answer = forced && system.includes("You identify electronics parts") ? JSON.stringify(SCAN_GROUPS) : undefined;
+      const block = answer
+        ? [
+            { type: "content_block_start", index: 0, content_block: { type: "tool_use", id: "toolu_scan", name: forced, input: {} } },
+            { type: "content_block_delta", index: 0, delta: { type: "input_json_delta", partial_json: answer } },
+          ]
+        : [
+            { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+            { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Got it — what should the light do when it's bright?" } },
+          ];
+      const events = [
+        { type: "message_start", message: { id: "m", type: "message", role: "assistant", model: body.model, content: [], stop_reason: null, stop_sequence: null, usage } },
+        ...block,
+        { type: "content_block_stop", index: 0 },
+        { type: "message_delta", delta: { stop_reason: answer ? "tool_use" : "end_turn", stop_sequence: null }, usage: { output_tokens: 4 } },
+        { type: "message_stop" },
+      ];
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.end(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(""));
     });
   });
   server.listen(0, "127.0.0.1");
@@ -89,16 +94,14 @@ describe("inventory-driven missions, scan, and vibread_get_inventory (real serve
         DATA_DIR: `/tmp/vb-s5a-test-${randomBytes(6).toString("hex")}`,
         BETTER_AUTH_SECRET: "b".repeat(40),
         VIBREAD_APPROVAL_SECRET: "a".repeat(40),
-        VIBREAD_OMP_BIN: "omp-not-installed",
+        ANTHROPIC_BASE_URL: stub.baseURL,
       }),
     );
     base = `http://127.0.0.1:${port}`;
-    // The operator has "connected their Claude account": its endpoint is the local stand-in gateway.
-    const accounts = running.context.ctx.claudeAccounts;
-    Object.assign(accounts, {
-      endpointFor: async (userId: string) => (userId === "operator" ? { baseURL: stub.baseURL, authToken: "gw" } : undefined),
-      view: async () => ({ available: true, connected: true, using: "claude-account", email: "operator@example.com" }),
-    });
+    // The operator connected their Claude account: a stored sign-in, saved through the real credential store.
+    await running.context.ctx.claudeAccounts
+      .credentials("operator")
+      .modify("anthropic", async () => ({ type: "oauth", access: "sk-ant-oat01-operator", refresh: "sk-ant-ort01-operator", expires: Date.now() + 3_600_000 }));
 
     const upsert = await fetch(`${base}/api/inventory/items`, {
       method: "POST",

@@ -196,11 +196,13 @@ export const inventoryScans = sqliteTable("inventory_scans", {
 
 
 
-/** PLAN item 16: a ViBread user's connected Claude account (credential lives in the oh-my-pi auth broker's own store). */
+/**
+ * PLAN item 16: a ViBread user's connected Claude account. `credential` is pi-ai's Credential JSON (OAuth tokens that
+ * pi-ai refreshes in place, or an API key), read and written only through claude/accounts.ts's CredentialStore.
+ */
 export const claudeAccounts = sqliteTable("claude_accounts", {
   userId: text("userId").primaryKey(),
-  credentialId: integer("credentialId").notNull(),
-  identityKey: text("identityKey").notNull(),
+  credential: text("credential").notNull(),
   email: text("email"),
   orgName: text("orgName"),
   connectedAt: timestamp("connectedAt").notNull(),

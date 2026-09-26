@@ -47,7 +47,6 @@ describe("bench requests from agents reach the bench", () => {
       DATA_DIR: `/tmp/vb-agents-bench-${randomBytes(6).toString("hex")}`,
       BETTER_AUTH_SECRET: "b".repeat(40),
       VIBREAD_APPROVAL_SECRET: "a".repeat(40),
-      VIBREAD_OMP_BIN: "omp-not-installed",
     });
     process.env.LOG_LEVEL ??= "silent";
     process.env.VIBREAD_NO_STATIC = "1";
@@ -128,7 +127,7 @@ describe("bench requests from agents reach the bench", () => {
     const design = scriptedDesign([{ toolCalls: [{ name: "request_bench_action", input: { action: "run-selftest", note: "Check the LEDs" } }] }, { text: "Click Start at the bench." }]);
     const agent = new Agent({
       initialState: { systemPrompt: "You are the design agent.", model: design.model, tools: registryTools({ registry: ctx.tools, broker: ctx.broker, store: ctx.store, ctx: { missionId, actor } }) },
-      streamFn: design.streamFn,
+      streamFn: (model, context, options) => design.models.streamSimple(model, context, options),
     });
     const outputs: unknown[] = [];
     agent.subscribe((event) => {

@@ -4,7 +4,7 @@ import { createUserTools, invokeTool } from "@vibread/tools";
 import { describe, expect, it } from "vitest";
 import { createAgentRuntime } from "./index.js";
 import { designSystemPrompt } from "./prompts.js";
-import { jsonModel, memoryInventory, mockModels, scriptedDesign, testDeps } from "./testing.js";
+import { memoryInventory, mockModels, scriptedDesign, scriptedJson, testDeps } from "./testing.js";
 
 const golden = GOLDEN.find((g) => g.key === "moon-phase-lamp")!;
 const OWNER: Actor = { kind: "human", id: "operator", name: "Operator", channel: "web" };
@@ -34,7 +34,7 @@ const USER_TILT: PartType = {
 function runtimeWith(entries: InventoryEntry[], types: PartType[] = []) {
   const deps = testDeps();
   const inventory = memoryInventory({ entries: { operator: entries }, types: { operator: types } });
-  const runtime = createAgentRuntime({ ...deps, inventory, models: mockModels(scriptedDesign([]), jsonModel([])) });
+  const runtime = createAgentRuntime({ ...deps, inventory, models: mockModels(scriptedDesign([]), scriptedJson([])) });
   return { deps, runtime, inventory };
 }
 

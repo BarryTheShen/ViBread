@@ -91,13 +91,14 @@ function ReplyMarkdown({ text }: { text: string }) {
 }
 
 /** `ask_user`: the run stops after it; answering (a choice or free text) sends a normal chat message. */
-function AskUserPart({ args }: { args: unknown }) {
+function AskUserPart({ args, result }: { args: unknown; result: unknown }) {
   const aui = useAui();
   const isLast = useAuiState((s) => s.message.isLast);
   const running = useAuiState((s) => s.thread.isRunning);
   return (
     <AskUserCard
       input={args}
+      output={result}
       answerable={isLast && !running}
       onAnswer={(text) => aui.thread().append({ role: "user", content: [{ type: "text", text }] })}
     />
@@ -150,7 +151,7 @@ function renderAssistantPart({ part, children }: { part: EnrichedPartState | { t
       return "text" in part && part.text ? <ReplyMarkdown text={part.text} /> : <></>;
     case "tool-call": {
       if (!("toolName" in part)) return <></>;
-      if (part.toolName === "ask_user") return <AskUserPart args={part.args} />;
+      if (part.toolName === "ask_user") return <AskUserPart args={part.args} result={part.isError ? undefined : part.result} />;
       return (
         <ToolRow toolName={part.toolName} toolCallId={part.toolCallId} args={part.args} result={part.result} isError={part.isError} status={part.status} approval={part.approval} />
       );
