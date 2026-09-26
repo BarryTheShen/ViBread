@@ -28,7 +28,7 @@ describe("ViBread theme contrast tokens", () => {
       [THEME_TOKENS.dark.link, THEME_TOKENS.dark.main],
       [THEME_TOKENS.light.primaryText, THEME_TOKENS.light.success],
       [THEME_TOKENS.light.primaryText, THEME_TOKENS.light.info],
-      [THEME_TOKENS.light.primaryText, THEME_TOKENS.light.warning],
+      [THEME_TOKENS.light.warningText, THEME_TOKENS.light.warning],
       [THEME_TOKENS.light.primaryText, THEME_TOKENS.light.error],
       [THEME_TOKENS.dark.primaryText, THEME_TOKENS.dark.success],
       [THEME_TOKENS.dark.primaryText, THEME_TOKENS.dark.info],
