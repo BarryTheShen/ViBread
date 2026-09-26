@@ -201,7 +201,8 @@ flowchart LR
   third-party apps).
 - **Library:** `ai` 7.0.116 + `@ai-sdk/anthropic` 4.0.65 (Apache-2.0). `streamText`/`ToolLoopAgent` with
   `stopWhen: isStepCount(20)`; per-call `toolApproval` callbacks implement the permission modes (§5.10); output streams to the
-  browser with `pipeUIMessageStreamToResponse` on Express.
+  browser with `pipeUIMessageStreamToResponse` on Express. The Claude-Code-style modes are our own implementation of the idea —
+  no Claude Code code is reused; only the Agent SDK *library* was replaced.
 - **Approvals are server-authored:** the chat history lives on the server (`messages` table). The browser sends only
   `{approvalId, decision}`; the ApprovalBroker validates it and writes the approval response into the stored history with the
   signature from `experimental_toolApprovalSecret` before the agent resumes. Spike 14 proves a signed approval resumes and executes
