@@ -34,10 +34,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
-      ELECTRON_CACHE: ${{ github.workspace }}/.electron-cache
-      ELECTRON_BUILDER_CACHE: ${{ github.workspace }}/.electron-builder-cache
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      npm_config_allow_scripts: "true"
     steps:
       - uses: actions/checkout@v5
 
@@ -46,11 +43,11 @@ jobs:
           node-version: 22.22.1
           cache: npm
 
-      - name: Linux packaging and display deps
+      - name: Linux display + packaging deps
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y xvfb libfuse2t64 || sudo apt-get install -y xvfb libfuse2
+        run: sudo apt-get update && sudo apt-get install -y xvfb
 
-      - name: Install (native modules for this runner)
+      - name: Install (native modules built for this runner)
         run: npm ci --no-audit --no-fund
 
       - name: Build web app
@@ -60,18 +57,23 @@ jobs:
         working-directory: apps/desktop
         shell: bash
         run: |
-          node node_modules/electron/install.js 2>/dev/null || node ../../node_modules/electron/install.js
+          node ../../node_modules/electron/install.js
           node scripts/build.mjs
           node scripts/stage-runtime.mjs
           npx electron-builder --config electron-builder.config.cjs ${{ matrix.builder }} --publish never
+          ls -la release
 
       - name: Smoke (first run + server + renderer + screenshots)
         shell: bash
         env:
-          VIBREAD_SMOKE: "1"
           VIBREAD_USER_DATA: ${{ runner.temp }}/vibread-smoke
           VIBREAD_SMOKE_DIR: ${{ github.workspace }}/smoke
         run: node apps/desktop/scripts/smoke-packaged.mjs
+
+      - name: Collect logs
+        if: always()
+        shell: bash
+        run: mkdir -p smoke/logs && cp -r "${{ runner.temp }}/vibread-smoke/logs/." smoke/logs/ 2>/dev/null || true
 
       - name: Upload
         if: always()
@@ -85,13 +87,12 @@ jobs:
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
             smoke/
-            ${{ runner.temp }}/vibread-smoke/logs/
           if-no-files-found: warn
 
   release:
     name: Prerelease desktop-v0.1.0
     needs: package
-    if: github.ref == 'refs/heads/desktop' && github.event_name != 'pull_request'
+    if: github.ref == 'refs/heads/desktop'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v5
@@ -111,5 +112,5 @@ jobs:
           else
             gh release create desktop-v0.1.0 upload/* --prerelease --target "$GITHUB_SHA" --repo "$GITHUB_REPOSITORY" \
               --title "ViBread desktop v0.1.0 (preview)" \
-              --notes "Unsigned preview builds of the ViBread desktop app for Linux x64, Windows x64 and macOS (Apple silicon + Intel). See the README 'Desktop app' section for first-run steps."
+              --notes "Unsigned preview builds of the ViBread desktop app. See the README 'Desktop app' section for first-run steps."
           fi

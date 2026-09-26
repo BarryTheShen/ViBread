@@ -69,9 +69,10 @@ export async function runSetup(paths: DesktopPaths, steps: SetupStep[], onProgre
   }
 }
 
-const GOLDEN_COUNT = 3;
+// Three golden designs plus the recorded real-model moon-lamp run (scripts/seed-golden.ts).
+const EXAMPLE_COUNT = 4;
 
-/** Creates the three pre-warmed example missions with scripts/seed-golden.ts (full pipeline incl. firmware compile). */
+/** Creates the pre-warmed example missions with scripts/seed-golden.ts (full pipeline incl. firmware compile). */
 export async function seedGolden(paths: DesktopPaths, onLog: (line: string) => void, onProgress: (progress: SetupProgress) => void): Promise<void> {
   onProgress({ step: "seed", message: "Building the example missions (checks, firmware, simulation, layout)", fraction: 0 });
   const child = spawnRuntime(paths, "scripts/seed-golden.ts", [], childEnv(paths, { ANTHROPIC_API_KEY: undefined, NODE_ENV: "production" }));
@@ -84,11 +85,11 @@ export async function seedGolden(paths: DesktopPaths, onLog: (line: string) => v
     for (const line of text.split(/\r?\n/)) {
       if (!line.trim()) continue;
       onLog(line);
-      const created = /^([a-z-]+): mission \S+ r\d+/.exec(line);
+      const created = /^(.+?): mission \S+ r\d+/.exec(line);
       if (created) {
         done += 1;
-        onProgress({ step: "seed", message: `Example ${done}/${GOLDEN_COUNT} ready: ${created[1]}`, fraction: done / (GOLDEN_COUNT + 1) });
-        if (done === GOLDEN_COUNT) onProgress({ step: "seed", message: "Preparing bench fault dictionaries", fraction: GOLDEN_COUNT / (GOLDEN_COUNT + 1) });
+        onProgress({ step: "seed", message: `Example ${done}/${EXAMPLE_COUNT} ready: ${created[1]}`, fraction: done / (EXAMPLE_COUNT + 1) });
+        if (done === EXAMPLE_COUNT) onProgress({ step: "seed", message: "Preparing bench fault dictionaries", fraction: EXAMPLE_COUNT / (EXAMPLE_COUNT + 1) });
       }
     }
   };

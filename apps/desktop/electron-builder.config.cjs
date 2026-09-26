@@ -7,11 +7,16 @@ module.exports = {
   copyright: "Copyright © 2026 ViBread",
   directories: { output: "release", buildResources: "build" },
   files: ["dist/**/*", "static/**/*", "package.json", "!dist/**/*.map"],
-  extraResources: [{ from: ".stage/runtime", to: "runtime", filter: ["**/*"] }],
+  // electron-builder always drops a copied directory's top-level node_modules, so it gets its own entry.
+  extraResources: [
+    { from: ".stage/runtime", to: "runtime", filter: ["**/*"] },
+    { from: ".stage/runtime/node_modules", to: "runtime/node_modules", filter: ["**/*"] },
+  ],
   asar: true,
-  // Nothing to rebuild: the app itself has no runtime dependencies (esbuild bundles them) and the server's native
-  // modules belong to the bundled Node, not to Electron.
-  npmRebuild: false,
+  // The app has no node_modules at all: esbuild bundles main/preload, and the server's native modules belong to the
+  // bundled Node, not to Electron. Resolving to false tells electron-builder node_modules are handled externally, so
+  // it neither rebuilds nor walks the workspace dependency tree.
+  beforeBuild: async () => false,
   nodeGypRebuild: false,
   electronLanguages: ["en-US"],
   artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
