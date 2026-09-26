@@ -891,6 +891,7 @@ export function executeScenario(input: { circuit: Circuit; hex: string; scenario
     const outcome = executeStep(machine, step);
     const endMs = Math.round(machine.timeMs);
     stepResults.push({ index, step, ok: outcome.ok, message: outcome.message, startMs, endMs, atMs: startMs });
+    index += 1;
   }
   const trace = machine.finishTrace(input.scenario.id);
   return {
