@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+<title>Open ViBread on your phone</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>Open ViBread on your phone</h1>
+<p class="sub">Your phone must be on the same Wi-Fi network as this computer.</p>
+<div class="qr">
+  <img id="qr" alt="QR code">
+  <div>
+    <div>Scan the code with the camera, or open:</div>
+    <code class="url" id="url"></code>
+    <p class="hint" id="note"></p>
+    <div class="row" style="justify-content:flex-start"><button id="copy">Copy link</button><button class="secondary" id="close">Close</button></div>
+  </div>
+</div>
+<script src="phone.js"></script>
+</body>
+</html>
