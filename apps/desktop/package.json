@@ -16,7 +16,8 @@
     "stage": "node scripts/stage-runtime.mjs",
     "start": "npm run build && npm run stage && electron .",
     "dist": "npm run build && npm run stage && electron-builder --config electron-builder.config.cjs --publish never",
-    "typecheck": "tsc -p tsconfig.json"
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run --root ."
   },
   "devDependencies": {
     "@resvg/resvg-js": "2.6.2",
