@@ -19,6 +19,7 @@ import { MissionShellContext } from "../chat/missionShell.js";
 import { withRevisionEvents } from "../chat/timeline.js";
 import { isRecord } from "../lib/guards.js";
 import { ArtifactPanel } from "../workspace/ArtifactPanel.js";
+import { ResizablePanel } from "../workspace/ResizablePanel.js";
 import { MissionCompleteCard } from "../workspace/MissionCompleteCard.js";
 import { MissionHeader } from "../workspace/MissionHeader.js";
 
@@ -155,11 +156,7 @@ export default function MissionPage() {
             />
           </Box>
           {panel.open && (
-            <Box
-              component="aside"
-              aria-label="Mission panel"
-              sx={{ flex: "1 1 45%", minWidth: 420, maxWidth: 900, borderLeft: 1, borderColor: "divider", bgcolor: "background.paper", minHeight: 0 }}
-            >
+            <ResizablePanel label="Mission panel">
               <ArtifactPanel
                 missionId={missionId}
                 detail={detail}
@@ -170,7 +167,7 @@ export default function MissionPage() {
                 onRevisionChange={(revision) => setPanel((p) => ({ ...p, revision }))}
                 onClose={closePanel}
               />
-            </Box>
+            </ResizablePanel>
           )}
         </Box>
       </Box>
