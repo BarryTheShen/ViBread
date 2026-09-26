@@ -48,6 +48,7 @@ interface FirmwareResponse {
   plan?: SelfTestPlan;
   fallbackUpload?: { command: string; args: string[] };
 }
+
 interface BenchApprovalRequest {
   id: string;
   action: "flash-bench" | "rail-checkpoint" | "run-selftest" | "flash-app";
@@ -201,7 +202,10 @@ export default function BenchPage(): ReactElement | null {
     }
     loadBench(missionId)
       .then((value) => {
-        if (alive) setLoaded(value);
+        if (alive) {
+          setLoaded(value);
+          setFallbackUpload(value.revision.fallbackUpload);
+        }
       })
       .catch((reason: unknown) => {
         const message = reason instanceof Error ? reason.message : String(reason);
@@ -466,6 +470,7 @@ export default function BenchPage(): ReactElement | null {
           answers: request.answers,
           kind: request.kind,
           revision: request.revision,
+
           runId: runner.runId,
         });
       }
@@ -478,6 +483,24 @@ export default function BenchPage(): ReactElement | null {
       setBusy(undefined);
     }
   }, [loaded, missionId, mode, runner]);
+  const downloadFirmware = useCallback(async (kind: "bench" | "app"): Promise<void> => {
+    if (!missionId) return;
+    setBusy(`download:${kind}`);
+    try {
+      const firmware = await firmwareFor(missionId, kind);
+      setFallbackUpload(firmware.fallbackUpload);
+      const url = URL.createObjectURL(new Blob([firmware.hex], { type: "text/plain" }));
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${kind}.hex`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(undefined);
+    }
+  }, [missionId]);
 
   useEffect(() => {
     if (runnerState?.done && activeStep === 3 && !busy && !run) void submitRun();
@@ -855,8 +878,8 @@ export default function BenchPage(): ReactElement | null {
             <Typography sx={{ fontWeight: 700 }}>Laptop fallback</Typography>
             <Typography variant="body2">If this browser cannot use Web Serial, release the port and upload either server-built HEX on the laptop:</Typography>
             <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 1 }}>
-              {benchArtifactUrl && <Button component="a" href={benchArtifactUrl} download="bench.hex" variant="outlined" sx={actionButtonSx}>Download bench.hex</Button>}
-              {appArtifactUrl && <Button component="a" href={appArtifactUrl} download="app.hex" variant="outlined" sx={actionButtonSx}>Download app.hex</Button>}
+              {benchArtifactUrl ? <Button component="a" href={benchArtifactUrl} download="bench.hex" variant="outlined" sx={actionButtonSx}>Download bench.hex</Button> : <Button onClick={() => void downloadFirmware("bench")} disabled={Boolean(busy)} variant="outlined" sx={actionButtonSx}>Download bench.hex</Button>}
+              {appArtifactUrl ? <Button component="a" href={appArtifactUrl} download="app.hex" variant="outlined" sx={actionButtonSx}>Download app.hex</Button> : <Button onClick={() => void downloadFirmware("app")} disabled={Boolean(busy)} variant="outlined" sx={actionButtonSx}>Download app.hex</Button>}
             </Stack>
             {fallbackUpload && <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ mt: 1, alignItems: { md: "center" } }}>
               <Box component="code" sx={{ display: "block", flex: 1, fontFamily: "monospace", overflowX: "auto" }}>{fallbackCommand(fallbackUpload)}</Box>

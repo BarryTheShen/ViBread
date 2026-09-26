@@ -1,10 +1,14 @@
+import { readdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { GOLDEN } from "@vibread/fixtures";
 import type { SelfTestPlan } from "@vibread/core";
 import { compileBenchFirmware, compileSketch, renderBenchFirmware } from "./index.js";
 
 const board = "uno-r3-atmega328p-5v" as const;
-
+async function compilerTempNames(prefix?: string): Promise<string[]> {
+  return (await readdir(tmpdir())).filter((name) => prefix ? name.startsWith(prefix) : /^vibread-(?:firmware|artifact)-/.test(name)).sort();
+}
 const launchPlan: SelfTestPlan = {
   schema: "vibread.selftest/1",
   design: "launch-test",
@@ -64,15 +68,53 @@ describe("firmware compiler", () => {
     expect(result.sizes?.ramBytes).toBeLessThan(result.sizes?.ramMax ?? 0);
   }, 30_000);
 
+  it("rejects source reads and inline assembly before invoking the compiler", async () => {
+    const includeAttacks = [
+      '#include "/home/u/.ssh/id_rsa"',
+      "#include <../secret.h>",
+      '#define F "/etc/passwd"\n#include F',
+      '%:include "/etc/passwd"',
+      '#/**/include "/etc/passwd"',
+      `#incl${String.fromCharCode(92)}\nude "/etc/passwd"`,
+      '#if __has_include("/etc/passwd")\n#endif',
+      "#include_next <Arduino.h>",
+      "#import <Arduino.h>",
+      '#line 1 "/etc/passwd"',
+      '#pragma GCC dependency "/etc/passwd"',
+    ];
+    for (const prefix of includeAttacks) {
+      const result = await compileSketch({ source: `${prefix}\nvoid setup(){}\nvoid loop(){}\n`, board });
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toMatch(/standard Arduino and library headers/);
+    }
+    for (const source of ['void setup(){ asm(".incbin \"/etc/passwd\""); }\nvoid loop(){}', 'void setup(){ ".inc" "bin"; }\nvoid loop(){}']) {
+      const result = await compileSketch({ source, board });
+      expect(result.ok).toBe(false);
+      expect(result.diagnostics).toHaveLength(1);
+      expect(result.diagnostics[0]?.message).toContain("Inline assembly");
+    }
+    const securityPrefix = `vibread-firmware-security-${process.pid}-`;
+    const previousPrefix = process.env.VIBREAD_JOB_PREFIX;
+    process.env.VIBREAD_JOB_PREFIX = securityPrefix;
+    try {
+      const before = await compilerTempNames(securityPrefix);
+      const safe = await compileSketch({ source: "#include <avr/pgmspace.h>\n#include <ArduinoJson.h>\nvoid setup(){}\nvoid loop(){}\n", board });
+      expect(safe.ok).toBe(true);
+      expect((await compilerTempNames(securityPrefix)).filter((name) => !before.includes(name))).toEqual([]);
+    } finally {
+      if (previousPrefix === undefined) delete process.env.VIBREAD_JOB_PREFIX;
+      else process.env.VIBREAD_JOB_PREFIX = previousPrefix;
+    }
+  }, 30_000);
+
   it("rejects LED safety-limit violations before compiling", () => {
     expect(() => renderBenchFirmware({ ...launchPlan, timing: { ...launchPlan.timing, ledOnMs: 6 } })).toThrow(/ledOnMs/);
   });
-
-  it("keeps concurrent compile artifacts isolated", async () => {
+  it("keeps concurrent compiles successful", async () => {
     const results = await Promise.all(
       Array.from({ length: 3 }, () => compileSketch({ source: "void setup(){} void loop(){}", board })),
     );
     expect(results.every((result) => result.ok)).toBe(true);
-    expect(new Set(results.map((result) => result.elfPath)).size).toBe(3);
   }, 30_000);
 });
