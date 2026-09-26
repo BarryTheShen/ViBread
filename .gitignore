@@ -21,3 +21,5 @@ coverage/
 apps/desktop/.cache/
 apps/desktop/.stage/
 apps/desktop/release/
+apps/desktop/build/
+apps/desktop/static/icon.png

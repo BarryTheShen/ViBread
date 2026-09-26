@@ -174,19 +174,20 @@ const invokedDirectly = import.meta.url !== undefined && process.argv[1] !== und
 if (invokedDirectly) {
   const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const dir = process.argv[2] ? resolve(process.argv[2]) : join(root, ".toolchain");
-  try {
-    const paths = await installToolchain({
-      dir,
-      onProgress: ({ message, fraction }) => {
-        if (fraction === undefined || fraction === 0 || fraction === 1) console.log(`» ${message}`);
-      },
-      onLog: (line) => console.log(`  ${line}`),
+  installToolchain({
+    dir,
+    onProgress: ({ message, fraction }) => {
+      if (fraction === undefined || fraction === 0 || fraction === 1) console.log(`» ${message}`);
+    },
+    onLog: (line) => console.log(`  ${line}`),
+  })
+    .then(async (paths) => {
+      for (const args of [["version"], ["core", "list"], ["lib", "list"]]) {
+        console.log(await run(paths.cli, ["--config-file", paths.config, ...args]));
+      }
+    })
+    .catch((error) => {
+      console.error(error instanceof Error ? error.message : error);
+      process.exit(1);
     });
-    for (const args of [["version"], ["core", "list"], ["lib", "list"]]) {
-      console.log(await run(paths.cli, ["--config-file", paths.config, ...args]));
-    }
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : error);
-    process.exit(1);
-  }
 }
