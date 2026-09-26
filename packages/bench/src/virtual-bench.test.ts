@@ -8,7 +8,8 @@ import { applyFault, calibrationMacros, LineDecoder, evaluateRun, planSelfTest }
 
 const moon = GOLDEN.find((entry) => entry.key === "moon-phase-lamp");
 const knob = GOLDEN.find((entry) => entry.key === "knob-night-light");
-if (moon === undefined || knob === undefined) throw new Error("golden moon and knob fixtures are required");
+const launch = GOLDEN.find((entry) => entry.key === "launch-control");
+if (moon === undefined || knob === undefined || launch === undefined) throw new Error("golden moon, knob, and launch fixtures are required");
 
 interface VirtualRun {
   lines: DeviceLine[];
@@ -109,5 +110,18 @@ describe("virtual bench protocol", () => {
     expect(run.invalid, JSON.stringify(run.invalid)).toHaveLength(0);
     const result = await evaluateRun({ circuit: knob.circuit, layout, plan, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: "virtual-knob" });
     expect(result.verdict, JSON.stringify(result.results)).toBe("pass");
+  }, 120_000);
+  it("runs Launch Control and answers the buzzer heard-beep prompt from simulated sound", async () => {
+    const plan = planSelfTest(launch.circuit, revisionHash(launch.circuit));
+    const compiled = await compileBenchFirmware(plan);
+    expect(compiled.ok, compiled.log).toBe(true);
+    if (!compiled.ok || compiled.hex === undefined) throw new Error("launch bench firmware did not compile");
+    const layout = layoutBoard(launch.circuit);
+    const run = runVirtual(launch.circuit, plan, compiled.hex);
+    expect(run.invalid, JSON.stringify(run.invalid)).toHaveLength(0);
+    expect(run.answers.buzzer0).toBe("yes");
+    const result = await evaluateRun({ circuit: launch.circuit, layout, plan, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: "virtual-launch" });
+    expect(result.verdict, JSON.stringify(result.results)).toBe("pass");
+    expect(result.results.find((entry) => entry.test === "buzzer.confirm")?.status).toBe("pass");
   }, 120_000);
 });
