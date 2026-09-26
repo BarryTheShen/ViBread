@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+<title>Anthropic API key</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<h1>Anthropic API key</h1>
+<p class="sub">ViBread's AI flight controllers (design, review, test authoring) use Claude through your own key.</p>
+<form id="form">
+  <label for="key">API key</label>
+  <input id="key" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…">
+  <p class="hint" id="hint">Stored encrypted in your system keychain; the ViBread server restarts to use it.</p>
+  <div class="row"><span class="status" id="status"></span><button type="button" class="secondary" id="clear">Remove key</button><button type="button" class="secondary" id="cancel">Cancel</button><button type="submit" id="save">Save</button></div>
+</form>
+<script src="apikey.js"></script>
+</body>
+</html>
