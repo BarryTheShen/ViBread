@@ -17,11 +17,13 @@ import {
   formatOhms,
   modulePins,
   pinKey,
+  wireCss,
   type Circuit,
   type Net,
   type Part,
 } from "@vibread/core";
 import { junctionPoints, textBox, textWidth, type Box, type Pt, type TextAnchor } from "../src/schematic/check.js";
+import { netColors } from "../src/layout/colors.js";
 
 const FONT_FAMILY = "DejaVu Sans, Verdana, Arial, Helvetica, sans-serif";
 const COLORS = {
@@ -29,7 +31,6 @@ const COLORS = {
   body: "#172033",
   outline: "#93c5fd",
   lead: "#5eead4",
-  wire: "#5eead4",
   reference: "#f8fafc",
   value: "#fde68a",
   note: "#94a3b8",
@@ -864,8 +865,12 @@ function primSvg(prim: Prim, dx: number, dy: number): string {
   }
 }
 
-/** Lay out and draw `circuit`. The result still has to pass `checkSchematicSvg` before anyone sees it. */
-export async function drawSchematic(circuit: Circuit): Promise<string> {
+// The result still has to pass `checkSchematicSvg` before anyone sees it.
+/**
+ * Lay out and draw `circuit`. Each signal net is drawn in its build wire colour (`colors` = net id → kit name or
+ * #rrggbb; defaults to the suggested colours) so the schematic and the breadboard agree.
+ */
+export async function drawSchematic(circuit: Circuit, colors: Record<string, string> = netColors(circuit)): Promise<string> {
   const layout = await layoutSchematic(circuit);
   const width = Math.ceil(layout.width);
   const height = Math.ceil(layout.height);
@@ -886,14 +891,18 @@ export async function drawSchematic(circuit: Circuit): Promise<string> {
     const polylines = layout.wires.get(net.id) ?? [];
     const pins = net.pins.flatMap((ref) => anchors.get(pinKey(ref)) ?? []);
     const segments = polylines.flatMap((points) => points.slice(1).map((b, index) => ({ a: points[index]!, b })));
+    const stroke = wireCss(colors[net.id] ?? "white");
     out.push(`<g class="net" data-net="${escapeXml(net.id)}">`);
     for (const points of polylines) {
-      out.push(`<polyline class="wire" points="${points.map((p) => `${fmt(p.x)},${fmt(p.y)}`).join(" ")}" fill="none" stroke="${COLORS.wire}" stroke-width="2" stroke-linejoin="round"/>`);
+      const coords = points.map((p) => `${fmt(p.x)},${fmt(p.y)}`).join(" ");
+      out.push(`<polyline class="wire" points="${coords}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linejoin="round"/>`);
+      // Invisible wide twin so a finger or cursor can tap the net (the web picker recolours it).
+      out.push(`<polyline class="wire-hit" points="${coords}" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>`);
     }
     for (const point of junctionPoints(segments, pins)) {
-      out.push(`<circle class="junction" cx="${fmt(point.x)}" cy="${fmt(point.y)}" r="4" fill="${COLORS.wire}"/>`);
+      out.push(`<circle class="junction" cx="${fmt(point.x)}" cy="${fmt(point.y)}" r="4" fill="${stroke}"/>`);
     }
-    for (const point of pins) out.push(`<circle class="pin-end" cx="${fmt(point.x)}" cy="${fmt(point.y)}" r="2.5" fill="${COLORS.wire}"/>`);
+    for (const point of pins) out.push(`<circle class="pin-end" cx="${fmt(point.x)}" cy="${fmt(point.y)}" r="2.5" fill="${stroke}"/>`);
     out.push(`</g>`);
   }
   for (const { node, x, y } of layout.placed) {

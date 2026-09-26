@@ -8,7 +8,10 @@ import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { BOARD_PROFILES, MODULES, formatOhms, type Part, type RevisionDetail } from "@vibread/core";
+import { useState } from "react";
+import { useBuildState } from "../../api/hooks.js";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
+import { WireColorPicker, WireLegend, useWireColor, type WireTarget } from "../WireColors.js";
 import { MONO_FONT } from "../../theme.js";
 
 function partDescription(part: Part): string {
@@ -20,8 +23,13 @@ function partDescription(part: Part): string {
   return `${part.label ? `${part.label}: ` : ""}${mod?.name ?? part.module}${bits.length ? ` (${bits.join(", ")})` : ""}`;
 }
 
-export function SchematicTab({ revision }: { revision: RevisionDetail }) {
-  const url = revision.artifactUrls["schematic.svg"];
+export function SchematicTab({ missionId, revision, released }: { missionId: string; revision: RevisionDetail; released: boolean }) {
+  const build = useBuildState(missionId, released);
+  const wires = build.data?.revision === revision.n ? build.data.wires : undefined;
+  const setWireColor = useWireColor(missionId, ["mission", missionId, "build"]);
+  const [picker, setPicker] = useState<{ target: WireTarget; anchor: { top: number; left: number } } | null>(null);
+  // The build target is drawn with the builder's wire colours; tapping a net recolours all its wires.
+  const url = wires?.schematicUrl ?? revision.artifactUrls["schematic.svg"];
   const { circuit } = revision;
   return (
     <Stack sx={{ gap: 2 }}>
@@ -32,12 +40,22 @@ export function SchematicTab({ revision }: { revision: RevisionDetail }) {
         <Typography sx={{ color: "text.secondary" }}>{circuit.summary}</Typography>
       </Box>
       {url ? (
-        <Paper variant="outlined" sx={{ p: 1, bgcolor: "canvas.main" }}>
-          <SvgArtifact url={url} label={`Schematic of ${circuit.title}`} />
+        <Paper
+          variant="outlined"
+          sx={{ p: 1, bgcolor: "canvas.main", ...(wires ? { "& g.net": { cursor: "pointer" } } : {}) }}
+          onClick={(event) => {
+            if (!wires) return;
+            const net = (event.target as Element).closest("g.net[data-net]")?.getAttribute("data-net");
+            if (net) setPicker({ target: { net }, anchor: { top: event.clientY, left: event.clientX } });
+          }}
+        >
+          <SvgArtifact url={url} label={`Schematic of ${circuit.title}${wires ? ". Tap a wire to change its colour." : ""}`} />
+          <WireLegend wires={wires} />
         </Paper>
       ) : (
         <Alert severity="info">The schematic drawing isn't ready for this design yet.</Alert>
       )}
+      <WireColorPicker anchor={picker?.anchor ?? null} target={picker?.target ?? null} wires={wires} revision={revision.n} onClose={() => setPicker(null)} onPick={(request) => setWireColor.mutate(request)} />
       <Box>
         <Typography variant="overline" sx={{ color: "text.secondary" }}>
           What it should do

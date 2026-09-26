@@ -17,7 +17,6 @@ import {
   BOARD_PROFILES,
   BREADBOARD_PROFILES,
   MODULES,
-  WIRE_COLORS,
   contactGroup,
   hashJson,
   isValidHole,
@@ -35,16 +34,15 @@ import {
   type Placement,
   type WireColor,
 } from "@vibread/core";
+import { defaultNetColors } from "./colors.js";
 import { lvs } from "./lvs.js";
 import { headerRow, partDrawingBox, type DrawingBox } from "./svg.js";
 
 type Side = "left" | "right";
-type NetKind = "power" | "ground" | "signal";
 
 /** Part columns fill from the centre channel outward; jumper ends fill from the rail edge inward. */
 const PART_COLUMNS: Record<Side, readonly Column[]> = { left: ["e", "d", "c", "b", "a"], right: ["f", "g", "h", "i", "j"] };
 const JUMPER_COLUMNS: Record<Side, readonly Column[]> = { left: ["a", "b", "c", "d", "e"], right: ["j", "i", "h", "g", "f"] };
-const SIGNAL_COLORS = ["yellow", "green", "blue", "orange", "white", "purple"] as const;
 
 /** Thrown when no strategy produces an LVS-clean layout. `toolSide` means the circuit itself is valid. */
 export class LayoutFitError extends Error {
@@ -79,7 +77,8 @@ interface Ctx {
   strategy: Strategy;
   /** "LED1.A" → net id; unconnected pins get a private "__nc:" net. */
   pinNet: Map<string, string>;
-  netKind: Map<string, NetKind>;
+  /** Suggested wire colour per net (colors.ts). */
+  colors: Record<string, WireColor>;
   /** Contact group → owning net ("__board" for unused Nano header rows). */
   stripNet: Map<string, string>;
   /** Hole → what occupies it: a pin key, "body:<part>", "jumper", or "board:<pin>". */
@@ -154,13 +153,9 @@ function endpointKey(endpoint: Endpoint): string {
   return "hole" in endpoint ? `hole:${endpoint.hole}` : `board:${endpoint.board}`;
 }
 
-function buildPinNets(circuit: Circuit): { pinNet: Map<string, string>; netKind: Map<string, NetKind> } {
+function buildPinNets(circuit: Circuit): Map<string, string> {
   const pinNet = new Map<string, string>();
-  const netKind = new Map<string, NetKind>();
-  for (const net of circuit.nets) {
-    netKind.set(net.id, net.kind);
-    for (const ref of net.pins) pinNet.set(pinKey(ref), net.id);
-  }
+  for (const net of circuit.nets) for (const ref of net.pins) pinNet.set(pinKey(ref), net.id);
   for (const part of circuit.parts) {
     for (const group of MODULES[part.module].internallyConnected ?? []) {
       const known = [...new Set(group.map((pin) => pinNet.get(`${part.id}.${pin}`)).filter((net): net is string => net !== undefined))];
@@ -173,15 +168,11 @@ function buildPinNets(circuit: Circuit): { pinNet: Map<string, string>; netKind:
       if (!pinNet.has(key)) pinNet.set(key, `__nc:${key}`);
     }
   }
-  return { pinNet, netKind };
+  return pinNet;
 }
 
 function wireColor(ctx: Ctx, net: string): WireColor {
-  const kind = ctx.netKind.get(net) ?? "signal";
-  if (kind === "power") return WIRE_COLORS[0];
-  if (kind === "ground") return WIRE_COLORS[1];
-  const signals = ctx.circuit.nets.filter((entry) => entry.kind === "signal").map((entry) => entry.id).sort();
-  return SIGNAL_COLORS[Math.max(0, signals.indexOf(net)) % SIGNAL_COLORS.length]!;
+  return ctx.colors[net] ?? "white";
 }
 
 function addJumper(ctx: Ctx, from: Endpoint, to: Endpoint, net: string, phase: number): void {
@@ -585,13 +576,13 @@ function connectNet(ctx: Ctx, netId: string): void {
 // Entry points
 
 function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strategy): Layout {
-  const { pinNet, netKind } = buildPinNets(circuit);
+  const pinNet = buildPinNets(circuit);
   const ctx: Ctx = {
     circuit,
     profile,
     strategy,
     pinNet,
-    netKind,
+    colors: defaultNetColors(circuit),
     stripNet: new Map(),
     occupied: new Map(),
     freeCount: new Map(),

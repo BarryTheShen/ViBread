@@ -201,7 +201,7 @@ export function ArtifactPanel({ missionId, detail, view, revision: pickedRevisio
           <Alert severity="error">Couldn't load design r{n}: {revision.error.message}</Alert>
         ) : !revision.data ? null : (
           <Suspense fallback={<LinearProgress />}>
-            {view === "schematic" && <SchematicTab revision={revision.data} />}
+            {view === "schematic" && <SchematicTab missionId={missionId} revision={revision.data} released={revision.data.n === released} />}
             {view === "steps" && <BuildStepsView missionId={missionId} revision={revision.data} released={revision.data.n === released} inventory={detail.mission.inventory} />}
             {view === "code" && <CodeTab revision={revision.data} />}
             {view === "tests" && <TestsTab revision={revision.data} recording={detail.recording} />}

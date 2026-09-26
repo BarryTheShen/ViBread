@@ -13,6 +13,7 @@ import {
 } from "@vibread/core";
 
 import { layoutHash } from "./allocator.js";
+import { wireColorName } from "./colors.js";
 
 function endpointText(endpoint: Jumper["from"]): string {
   if ("board" in endpoint) return `Arduino ${endpoint.board} header pin`;
@@ -82,8 +83,8 @@ function placementText(part: Part, layout: Layout): { text: string; holes: strin
   return { text: `${text} Keep USB unplugged.`, holes };
 }
 
-function jumperText(jumper: Jumper): string {
-  return `Connect a ${jumper.color} wire from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. Check both printed endpoints; color is only a visual aid.`;
+function jumperText(jumper: Jumper, color: string): string {
+  return `Connect a ${wireColorName(color)} wire from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. Check both printed endpoints; color is only a visual aid.`;
 }
 
 function countedCallout(group: InventoryGroup): string {
@@ -139,7 +140,12 @@ function testsForSubsection(circuit: Circuit): TestId[] {
   return [...tests];
 }
 
-export function buildSteps(circuit: Circuit, layout: Layout): StepList {
+/**
+ * The numbered build. `wireColors` (jumper id → colour, from `jumperColors`) carries the builder's colour choices into
+ * the wording; without it each wire uses its suggested colour.
+ */
+export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColors?: Record<string, string> } = {}): StepList {
+  const colorOf = (jumper: Jumper) => options.wireColors?.[jumper.id] ?? jumper.color;
   const steps: Step[] = [];
   const partMap = partById(circuit);
   const push = (step: Omit<Step, "n">): void => {
@@ -179,7 +185,7 @@ export function buildSteps(circuit: Circuit, layout: Layout): StepList {
     kind: "rails",
     title: "Connect the top power rails",
     text: rails.length > 0
-      ? `With USB unplugged, ${rails.map((jumper) => `connect a ${jumper.color} wire from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}`).join("; then ")}. Red/black colors are aids; verify the T+ and T− labels.`
+      ? `With USB unplugged, ${rails.map((jumper) => `connect a ${wireColorName(colorOf(jumper))} wire from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}`).join("; then ")}. Wire colors are aids; verify the T+ and T− labels.`
       : "This build does not use the power rails; nothing to connect yet.",
     plug: "unplugged",
     adds: { parts: [], jumpers: rails.map((jumper) => jumper.id) },
@@ -224,7 +230,7 @@ export function buildSteps(circuit: Circuit, layout: Layout): StepList {
     push({
       kind: "jumper",
       title: `Add ${jumper.id} — ${jumper.net}`,
-      text: `${jumperText(jumper)} Keep USB unplugged.`,
+      text: `${jumperText(jumper, colorOf(jumper))} Keep USB unplugged.`,
       plug: "unplugged",
       adds: { parts: [], jumpers: [jumper.id] },
       holes: ["hole" in jumper.from ? jumper.from.hole : "", "hole" in jumper.to ? jumper.to.hole : ""].filter(Boolean),

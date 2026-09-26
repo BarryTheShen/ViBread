@@ -132,7 +132,7 @@ function ensureWorker(): ChildProcessWithoutNullStreams {
   return child;
 }
 
-function sendRender(circuit: Circuit): Promise<string> {
+function sendRender(circuit: Circuit, netColors?: Record<string, string>): Promise<string> {
   const processChild = ensureWorker();
   retainWorker(processChild);
   const id = `schematic-${requestNumber++}`;
@@ -144,7 +144,7 @@ function sendRender(circuit: Circuit): Promise<string> {
     }, 20_000);
     pending.set(id, { resolve, reject, timer });
     try {
-      processChild.stdin.write(`${JSON.stringify({ id, circuit })}\n`);
+      processChild.stdin.write(`${JSON.stringify({ id, circuit, ...(netColors ? { netColors } : {}) })}\n`);
     } catch (error) {
       clearTimeout(timer);
       pending.delete(id);
@@ -156,9 +156,11 @@ function sendRender(circuit: Circuit): Promise<string> {
 /**
  * Render ViBread IR as a schematic SVG in the isolated elkjs child process. The result is either a drawing that passed
  * `checkSchematicSvg` (`data-schematic="drawing"`) or the connection table (`data-schematic="connection-table"`).
+ * Signal nets are drawn in their build wire colours: `netColors` (from `netColors(circuit, overrides)`), else the
+ * suggested ones.
  */
-export async function renderSchematicSvg(circuit: Circuit): Promise<string> {
-  return sendRender(circuit);
+export async function renderSchematicSvg(circuit: Circuit, options: { netColors?: Record<string, string> } = {}): Promise<string> {
+  return sendRender(circuit, options.netColors);
 }
 
 /** Return a plain-language netlist table for the Schematic tab fallback. */

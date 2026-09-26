@@ -113,7 +113,7 @@ describe("LAN pairing guard", () => {
       const paired = response();
       guard.middleware()(request("/b/mission", "192.168.1.20", { query: { pair: guard.pairToken() } }), paired.value, () => { paired.next = true; });
       const cookie = paired.headers["set-cookie"].split(";")[0]!;
-      for (const [method, path] of [["GET", "/api/missions/m/build"], ["POST", "/api/missions/m/build/step"], ["POST", "/api/missions/m/photo"], ["GET", "/api/missions/m/revisions/1/artifacts/step-1.png"], ["GET", "/api/recorded/example.png"], ["GET", "/api/me"], ["GET", "/api/oauth/providers"]] as const) {
+      for (const [method, path] of [["GET", "/api/missions/m/build"], ["POST", "/api/missions/m/build/step"], ["POST", "/api/missions/m/build/wire-color"], ["GET", "/api/missions/m/build/steps/3.png"], ["GET", "/api/missions/m/build/schematic.svg"], ["POST", "/api/missions/m/photo"], ["GET", "/api/missions/m/revisions/1/artifacts/step-1.png"], ["GET", "/api/recorded/example.png"], ["GET", "/api/me"], ["GET", "/api/oauth/providers"]] as const) {
         const allowed = response();
         guard.middleware()(request(path, "192.168.1.20", { method, cookie }), allowed.value, () => { allowed.next = true; });
         expect(allowed.next, `${method} ${path}`).toBe(true);
