@@ -16,8 +16,8 @@ import { layoutHash } from "./allocator.js";
 
 function endpointText(endpoint: Jumper["from"]): string {
   if ("board" in endpoint) return `Arduino ${endpoint.board} header pin`;
-  if (endpoint.hole === "T-2" || endpoint.hole.startsWith("T-")) return "the blue − rail (GND)";
-  if (endpoint.hole === "T+2" || endpoint.hole.startsWith("T+")) return "the red + rail (5 V)";
+  if (endpoint.hole === "T-2" || endpoint.hole.startsWith("T-")) return `hole ${endpoint.hole} on the blue − rail (GND)`;
+  if (endpoint.hole === "T+2" || endpoint.hole.startsWith("T+")) return `hole ${endpoint.hole} on the red + rail (5 V)`;
   return `hole ${endpoint.hole}`;
 }
 

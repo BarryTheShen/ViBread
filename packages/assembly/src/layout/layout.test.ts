@@ -9,6 +9,55 @@ import { renderBreadboardSvg } from "./svg.js";
 function issueKinds(circuit: (typeof GOLDEN)[number]["circuit"], layout: Layout): string[] {
   return [...new Set(lvs(circuit, layout).issues.map((issue) => issue.kind))].sort();
 }
+function replayLayout(layout: Layout, steps: ReturnType<typeof buildSteps>["steps"]): Layout {
+  const placementByPart = new Map(layout.placements.map((placement) => [placement.part, placement]));
+  const jumperById = new Map(layout.jumpers.map((jumper) => [jumper.id, jumper]));
+  const placements: Layout["placements"] = [];
+  const jumpers: Layout["jumpers"] = [];
+  const seenParts = new Set<string>();
+  const seenJumpers = new Set<string>();
+  for (const step of steps) {
+    for (const partId of step.adds.parts) {
+      if (seenParts.has(partId)) throw new Error(`part ${partId} was added twice`);
+      const placement = placementByPart.get(partId);
+      if (!placement) throw new Error(`missing placement for ${partId}`);
+      seenParts.add(partId);
+      placements.push(placement);
+    }
+    for (const jumperId of step.adds.jumpers) {
+      if (seenJumpers.has(jumperId)) throw new Error(`jumper ${jumperId} was added twice`);
+      const jumper = jumperById.get(jumperId);
+      if (!jumper) throw new Error(`missing jumper ${jumperId}`);
+      seenJumpers.add(jumperId);
+      jumpers.push(jumper);
+    }
+  }
+  placements.sort((a, b) => a.part.localeCompare(b.part));
+  jumpers.sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+  return { ...layout, placements, jumpers };
+}
+
+function textHoleIds(text: string): string[] {
+  return [...new Set(text.match(/\b(?:[a-j]\d{1,2}|[TB][+-]\d{1,2})\b/g) ?? [])].sort();
+}
+
+function assertStepContract(circuit: (typeof GOLDEN)[number]["circuit"]): void {
+  const layout = layoutBoard(circuit);
+  const steps = buildSteps(circuit, layout);
+  const rebuilt = replayLayout(layout, steps.steps);
+  expect(rebuilt).toEqual(layout);
+  expect(lvs(circuit, rebuilt).ok).toBe(true);
+  for (const step of steps.steps) {
+    if (step.kind === "place" || step.kind === "jumper" || step.kind === "rails") {
+      expect(textHoleIds(step.text)).toEqual([...new Set(step.holes)].sort());
+      expect(step.plug).toBe("unplugged");
+    }
+    if (step.adds.parts.length > 0 || step.adds.jumpers.length > 0) expect(step.plug).toBe("unplugged");
+    if (step.plug === "plugged") expect(["checkpoint", "power-up"]).toContain(step.kind);
+  }
+  const pluggedBeforeFinal = steps.steps.slice(0, -1).filter((step) => step.plug === "plugged");
+  expect(pluggedBeforeFinal.every((step) => step.kind === "checkpoint")).toBe(true);
+}
 
 describe("deterministic breadboard layout", () => {
   it("keeps every golden design LVS-clean and FAO GO", () => {
@@ -21,7 +70,11 @@ describe("deterministic breadboard layout", () => {
       expect(report.summary, design.key).toBe("The breadboard fits and LVS is clean.");
     }
   });
-
+  it("replays structured steps exactly and keeps text/data/plug contracts", () => {
+    for (const design of GOLDEN) assertStepContract(design.circuit);
+    const knob = GOLDEN.find((design) => design.key === "knob-night-light")!.circuit;
+    assertStepContract({ ...knob, title: "Recorded custom knob run", assumptions: [...knob.assumptions, "Recorded non-golden verification"] });
+  });
   it("reports the exact topology mutant kinds", () => {
     const circuit = GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit;
     const clean = layoutBoard(circuit);
