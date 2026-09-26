@@ -25,6 +25,7 @@ interface Check {
   detail: string;
 }
 
+const normalize = (path: string) => path.replaceAll("\\", "/").toLowerCase();
 const GOLDEN_TITLES = ["Moon-Phase Lamp", "Knob Night-Light", "Launch Control"];
 
 function outputDir(paths: DesktopPaths): string {
@@ -98,8 +99,28 @@ export async function runSmoke(input: { window: BrowserWindow; info: ServerInfo;
       });
     }
     check("seeded firmware compiled", compiled.length === 3 && compiled.every((c) => c.ok), JSON.stringify(compiled));
-    const toolchainCli = join(paths.toolchain, "bin", process.platform === "win32" ? "arduino-cli.exe" : "arduino-cli");
-    check("compiled with the downloaded toolchain", existsSync(toolchainCli) && compiled.length === 3, toolchainCli);
+    const expectedToolchainCli = join(paths.toolchain, "bin", process.platform === "win32" ? "arduino-cli.exe" : "arduino-cli");
+    const expectedToolchainConfig = join(paths.toolchain, "arduino", "arduino-cli.yaml");
+    const childPathsMatch =
+      normalize(info.arduinoCli) === normalize(expectedToolchainCli) && normalize(info.arduinoConfig) === normalize(expectedToolchainConfig);
+    let cliVersion = "";
+    let cliError = "";
+    try {
+      cliVersion = execFileSync(info.arduinoCli, ["--config-file", info.arduinoConfig, "version"], {
+        encoding: "utf8",
+        env: { ...process.env, VIBREAD_ARDUINO_CLI: info.arduinoCli, VIBREAD_ARDUINO_CONFIG: info.arduinoConfig },
+        timeout: 30_000,
+        windowsHide: true,
+      }).trim();
+    } catch (error) {
+      cliError = error instanceof Error ? error.message : String(error);
+    }
+    const compileThroughServer = compiled.length === 3 && compiled.every((c) => c.ok && (c.flashBytes ?? 0) > 0);
+    check(
+      "compiled with the downloaded toolchain",
+      childPathsMatch && existsSync(info.arduinoCli) && existsSync(info.arduinoConfig) && cliVersion.includes("1.5.1") && compileThroughServer,
+      JSON.stringify({ cli: info.arduinoCli, config: info.arduinoConfig, version: cliVersion || cliError, compileThroughServer }),
+    );
 
     const first = golden[0];
     if (first) {

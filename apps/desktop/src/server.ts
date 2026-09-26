@@ -11,6 +11,9 @@ export interface ServerInfo {
   localUrl: string;
   /** LAN address phones use (QR codes); http://localhost:<port> when the machine has no LAN address. */
   publicUrl: string;
+  /** The exact Arduino toolchain paths passed through the server child's environment. */
+  arduinoCli: string;
+  arduinoConfig: string;
 }
 
 const READY_TIMEOUT_MS = 180_000;
@@ -45,6 +48,8 @@ export class ServerProcess extends EventEmitter {
       port,
       localUrl: `http://127.0.0.1:${port}`,
       publicUrl: lan ? `http://${lan}:${port}` : `http://localhost:${port}`,
+      arduinoCli: "",
+      arduinoConfig: "",
     };
     const env = childEnv(this.paths, {
       PORT: String(port),
@@ -56,6 +61,8 @@ export class ServerProcess extends EventEmitter {
       ANTHROPIC_API_KEY: this.apiKey() ?? process.env.ANTHROPIC_API_KEY,
       NODE_ENV: "production",
     });
+    info.arduinoCli = env.VIBREAD_ARDUINO_CLI ?? "";
+    info.arduinoConfig = env.VIBREAD_ARDUINO_CONFIG ?? "";
     this.write(`\n=== ${new Date().toISOString()} starting server on ${info.localUrl} (public ${info.publicUrl})\n`);
     const child = spawnRuntime(this.paths, "server-entry.ts", [], env);
     this.child = child;
