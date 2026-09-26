@@ -102,7 +102,7 @@ self-test ≤ 60 s including prompts. Anything slower is pre-computed for live d
 ## 4. Scope: one ranked build list
 
 Built top to bottom; **cut from the bottom up**. Items 1–9 are the MUST line (the brief's MVP plus Photon's hard requirement);
-items 10–14 are SHOULD; 15 is stretch; the rest COULD.
+items 10–14 are SHOULD; 15 is stretch; 16 is built last, after everything else (team lead's call); the rest COULD.
 
 | # | Item | Track | Tier |
 |---|---|---|---|
@@ -121,8 +121,9 @@ items 10–14 are SHOULD; 15 is stretch; the rest COULD.
 | 13 | SPICE cross-check (ngspice) of the analytic limits | Main | SHOULD |
 | 14 | Fault dictionary (single-fault layout mutants) ranking on top of the rule table | Main | SHOULD |
 | 15 | OAuth 2.1 for Claude Code (Better Auth MCP + CIMD) and A2A OAuth scheme; GitHub sign-in | Main | STRETCH |
+| 16 | **Connect your Claude account** (team lead's call, built last): the user authenticates ViBread with their Claude account through OAuth, the way omp does it, using omp's auth setup in the backend; their own account then powers their missions. ViBread's server key stays the default and the fallback | Main | LAST |
 | — | Claude Code Channel push; skill-level exposition; inventory from a kit photo; Wokwi cross-check; ArUco rectification; KiCad export | Main | COULD |
-| — | Uno R4/ESP32/Pico, PCB layout, arbitrary-part simulation, AR overlay, mains/high voltage, "sign in with Claude" | — | WON'T |
+| — | Uno R4/ESP32/Pico, PCB layout, arbitrary-part simulation, AR overlay, mains/high voltage | — | WON'T |
 
 **Team-size cuts:** ≤ 2 people → items 1–9 plus 11's bearer path, Review mode only. 3 people → through item 12. 4 people →
 through item 14, stretch if time. The brief marks instruction adaptation to variants/skill levels "out of scope for MVP" (p.5).
@@ -141,6 +142,7 @@ through item 14, stretch if time. The brief marks instruction adaptation to vari
 | Photo check | Live Claude vision | Recorded example | — |
 | Hosting | golf container behind the stable tunnel | Laptop-only setup + hotspot | Video |
 | Claude Code | MCP with bearer token | Video | — |
+| Claude account (item 16) | The user's own Claude account | ViBread's server key | — |
 
 ## 5. Architecture
 
@@ -196,9 +198,9 @@ flowchart LR
 - **Why not the Claude Agent SDK:** it runs the Claude Code binary, and Anthropic's terms for products that run Claude Code say
   the company "may not pay for, resell, or intermediate Claude usage on their end users' behalf" — each end user would need their
   own Anthropic credentials. Anthropic's Commercial Terms (§A.1) do allow using the Claude API "to power products and services
-  Customer makes available to its own customers and end users", billed to our account. So ViBread calls the Messages API with its
-  own server-side key; users never bring keys, and "sign in with your Claude account" is not offered (Anthropic prohibits it for
-  third-party apps).
+  Customer makes available to its own customers and end users", billed to our account. So by default ViBread calls the Messages
+  API with its own server-side key and users bring nothing. **Item 16, built last**, adds *Connect your Claude account* (§5.11):
+  the agent code stays the same; only the credential each call uses changes.
 - **Library:** `ai` 7.0.116 + `@ai-sdk/anthropic` 4.0.65 (Apache-2.0). `streamText`/`ToolLoopAgent` with
   `stopWhen: isStepCount(20)`; per-call `toolApproval` callbacks implement the permission modes (§5.10); output streams to the
   browser with `pipeUIMessageStreamToResponse` on Express. The Claude-Code-style modes are our own implementation of the idea —
@@ -443,6 +445,11 @@ each tool's `read-only` / `state-changing` tag:
   first reply.
 - **Anthropic:** one server-side API key (secrets only, never in the browser), per-user usage caps; data-retention disclosure in the
   README.
+- **Connect your Claude account (item 16, built last — team lead's call):** the user authenticates ViBread with their Claude
+  account through OAuth, the way omp (oh-my-pi) does, reusing omp's auth setup in the backend (`@oh-my-pi/pi-ai` 18.3.2, MIT;
+  needs Bun ≥ 1.3.14). Tokens are stored per user on the server only and refreshed there; that user's agent calls use them instead
+  of the server key. This authorizes ViBread to use the account; it is not a ViBread sign-in (sign-in stays Google). The detailed
+  design is done when the item starts.
 
 ### 5.12 Photon CAPCOM (research/08, audit/A4)
 
@@ -488,6 +495,7 @@ channel can resume a mission.
 | Bench | webserial-flasher 1.0.1 (MIT), `@types/w3c-web-serial` |
 | Rendering | `@wokwi/elements` 1.9.2 (MIT), `@resvg/resvg-js` 2.6.2 (MPL-2.0), sharp 0.35.4 (Apache-2.0) |
 | UI | `@mui/material` / `@mui/icons-material` 9.4.0, `@mui/x-chat` 9.0.0-alpha.18, `@mui/x-charts` / `x-data-grid` 9.14.0 (MIT, Community), React 19.3, Vite 8.3.1, react-router 8, `@tanstack/react-query` 5, react-markdown 10.1, react-syntax-highlighter 16.1 |
+| Claude account (item 16) | `@oh-my-pi/pi-ai` 18.3.2 (MIT; Bun ≥ 1.3.14) — omp's provider and OAuth layer |
 | Network | the chosen stable tunnel (cloudflared 2026.9.3 via Cloudflare's `any` apt repo, ngrok, or Tailscale) |
 
 Avoided on purpose: Claude Agent SDK (terms, §5.2) · MUI X Pro/Premium (commercial) · tscircuit packages without a license
@@ -553,7 +561,7 @@ vibread/
 
 ## 8. Verification strategy
 
-**Spikes (each ≤ 30 lines; pass criterion).** Container: 1–5, 9–11, 13, 14. Venue/hardware: 6 (with item 15), 7, 8, 12, 15.
+**Spikes (each ≤ 30 lines; pass criterion).** Container: 1–5, 9–11, 13, 14, 16. Venue/hardware: 6 (with item 15), 7, 8, 12, 15.
 
 1. arduino-cli compiles Blink for Uno/Nano → ELF + HEX; JSON parsed (done once in audit/A5; repeat in the repo).
 2. avr8js runs that HEX (via `parseIntelHex`) in a worker thread; PB5 toggles at 1 Hz virtual time; virtual-s per wall-s recorded.
@@ -574,6 +582,8 @@ vibread/
 14. MUI X Chat (wrapped `createAiSdkAdapter`) renders a streamed tool card; a signed approval resumes and executes exactly once; a
     missing or tampered signature is rejected.
 15. Laptop → golf connectivity from venue Wi-Fi and from the phone hotspot; laptop-only mode starts from a clean checkout.
+16. Connect your Claude account (item 16): OAuth completes in the browser, the token is stored server-side, one design-agent call
+    runs on it, and a refresh succeeds; with the token revoked, the call falls back to the server key.
 
 **Acceptance per MUST item:**
 
@@ -601,6 +611,7 @@ vibread/
 | MUI X Chat is alpha | Medium / medium | Pinned exact version; spike 14; assistant-ui fallback |
 | Approval signature bugs in custom glue | Medium / high | Server-authored approval messages; spike 14 exactly-once + tamper tests |
 | Claude Code OAuth compatibility | Medium / low | Bearer token is the demo default; OAuth is stretch behind spike 6; documented callback workaround |
+| Claude-account login (item 16) vs Anthropic's published terms: third-party developers may not "offer Claude.ai login into their own applications"; enforcement "without prior notice" ([legal and compliance](https://code.claude.com/docs/en/legal-and-compliance)) | Unknown / medium | Team lead's call; built last and optional on the Connections page; the server key stays the default and the automatic fallback, so a rejected token never stops a demo |
 | tscircuit runtime quirks (Node ESM) | Medium / low | Run under `tsx`/Bun worker (verified); pre-rendered schematic fallback |
 | No stable HTTPS hostname | Medium / high | Chosen tonight (Cloudflare domain, ngrok static domain, or Tailscale Funnel); laptop-only mode otherwise |
 | Agent designs weak or tests self-serving | Medium / high | Curated library, schema-constrained tools, deterministic checkers, independent test author + coverage rules, RETRO vote, cached runs |
@@ -623,8 +634,9 @@ vibread/
    the brief's own "main thing is tests ran through the microcontroller."
 4. *"Bypass all permissions."* Autopilot bypasses software approvals only; flashing, self-tests, rewiring, and new parts always need a
    human click at the bench.
-5. *Claude accounts.* Users can't pay with their own Claude subscription (Anthropic forbids Claude login in third-party apps);
-   ViBread's API key pays, which the Commercial Terms allow for our own product. The Claude Agent SDK is not used for this reason.
+5. *Claude accounts.* Decided by the team lead: item 16 (built last) lets a user connect their own Claude account the way omp does;
+   ViBread's API key stays the default and the fallback. The terms risk is recorded in the table above. The Claude Agent SDK is
+   still not used.
 
 ## 10. Decisions needed from the team (tonight)
 
@@ -632,11 +644,13 @@ vibread/
    one up at 10:00 if not?
 2. **Team:** members (≤ 4), who takes each role in §7, and which team-size cut applies.
 3. **Stable HTTPS hostname:** a domain on Cloudflare, an ngrok account (static domain), or Tailscale?
-4. **Anthropic API key** for the app (budget cap) and the **Google OAuth client** for the chosen host.
+4. **Anthropic API key** for the app (budget cap; the default until item 16 and the fallback after it) and the **Google OAuth
+   client** for the chosen host.
 5. **Photon:** who signs up + redeems `HACKWITHPHOTON`; which iPhones (iOS 26 for polls) to register.
 6. **Contract freeze:** who reviews and freezes the IR schema, NDJSON format, and golden fixture before the overnight build.
 7. **Theme + hero circuit:** approve Mission Control and the Moon-Phase Lamp (row layout, correct waxing/waning), or pick a fallback.
-8. **Sign-off** on the pushback points in §9 (simulation claims, "any hardware", "bypass all permissions", Claude accounts).
+8. **Sign-off** on the pushback points in §9 (simulation claims, "any hardware", "bypass all permissions"); Claude accounts are
+   decided (item 16).
 
 ## 11. Originality, licensing, submission
 
