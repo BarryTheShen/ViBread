@@ -12,7 +12,7 @@ await sharp(source).resize(192, 192).png().toFile(resolve(output, "icon-192.png"
 await sharp(source).resize(512, 512).png().toFile(resolve(output, "icon-512.png"));
 await sharp(source)
   .resize(420, 420)
-  .extend({ top: 46, bottom: 46, left: 46, right: 46, background: "#0b1118" })
+  .extend({ top: 46, bottom: 46, left: 46, right: 46, background: "#0E1719" })
   .png()
   .toFile(resolve(output, "icon-maskable-512.png"));
 await sharp(source).resize(180, 180).png().toFile(resolve(output, "apple-touch-icon.png"));

@@ -84,5 +84,5 @@ export function fallbackBreadboardSvg(parts: string[], states: Record<string, nu
     const y = 155 + Math.floor(index / 10) * 28;
     return `<circle id="hole-e${index + 1}" cx="${x}" cy="${y}" r="4" fill="#b7c7dd"/>`;
   }).join("");
-  return `<svg data-vibread="breadboard" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Virtual breadboard"><rect width="100%" height="100%" rx="18" fill="#16243b"/><text x="32" y="44" fill="#e7f0ff" font-size="21">Virtual breadboard · simulated telemetry</text>${groups}${holes}</svg>`;
+  return `<svg data-vibread="breadboard" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Virtual breadboard"><rect width="100%" height="100%" rx="18" fill="#0B171A"/><text x="32" y="44" fill="#e7f0ff" font-size="21">Virtual breadboard · simulated telemetry</text>${groups}${holes}</svg>`;
 }
