@@ -1,5 +1,4 @@
 import { createTheme, type Theme } from "@mui/material/styles";
-import type {} from "@mui/x-chat/themeAugmentation";
 import type { CSSProperties } from "react";
 
 declare module "@mui/material/styles" {
@@ -189,8 +188,8 @@ export function createMissionTheme(reducedMotion: boolean): Theme {
             borderRadius: 8,
             "& .MuiOutlinedInput-notchedOutline": { borderColor: "var(--mui-palette-input-main)" },
             "&:hover .MuiOutlinedInput-notchedOutline": { borderColor: "var(--mui-palette-input-main)" },
-            "&.Mui-focused": { outline: focusRing.outline, outlineOffset: 2 },
-            "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "var(--mui-palette-input-main)", borderWidth: 2 },
+            "&.Mui-focused": { boxShadow: "0 0 0 3px var(--mui-palette-input-main)" },
+            "&.Mui-focused .MuiOutlinedInput-notchedOutline": { borderColor: "var(--mui-palette-input-main)" },
           },
         },
       },

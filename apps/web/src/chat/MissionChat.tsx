@@ -1,105 +1,251 @@
+import { Chat, useChat, type UseChatHelpers } from "@ai-sdk/react";
+import { AssistantRuntimeProvider, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useAui, useAuiState, type EnrichedPartState } from "@assistant-ui/react";
+import { useAISDKRuntime } from "@assistant-ui/react-ai-sdk";
+import ArrowUpwardIcon from "@mui/icons-material/ArrowUpward";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import InfoOutlinedIcon from "@mui/icons-material/InfoOutlined";
+import StopIcon from "@mui/icons-material/Stop";
+import TaskAltIcon from "@mui/icons-material/TaskAlt";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
+import CircularProgress from "@mui/material/CircularProgress";
+import Collapse from "@mui/material/Collapse";
+import IconButton from "@mui/material/IconButton";
+import Link from "@mui/material/Link";
+import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import { ChatBox, ChatMessageInlineMeta, type ChatMessageInlineMetaProps } from "@mui/x-chat";
-import { useChat, useChatStore, useMessageContext, type ChatPartRendererMap } from "@mui/x-chat/headless";
-import { processStream } from "@mui/x-chat-headless/stream";
+import { useQuery } from "@tanstack/react-query";
 import type { Channel, MissionDetail, TimelineEvent } from "@vibread/core";
-import { Children, isValidElement, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import type { UIMessage } from "ai";
+import { createContext, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import Markdown from "react-markdown";
+import { Link as RouterLink } from "react-router";
+import remarkGfm from "remark-gfm";
 import { api } from "../api/client.js";
 import { RecordedChip } from "../components/RecordedChip.js";
-import { Composer } from "./Composer.js";
-import { createMissionChatAdapter, type MissionChatAdapter } from "./missionAdapter.js";
+import { INTER_FONT, LORA_FONT, MONO_FONT } from "../theme.js";
+import { AskUserCard } from "./AskUserCard.js";
+import { COMPOSER_FRAME_SX, SEND_BUTTON_SX, STOP_BUTTON_SX } from "./Composer.js";
 import { useMissionShell } from "./missionShell.js";
-import { ChatThreadContext, useChatThread, type ChatThreadValue } from "./threadContext.js";
-import { placeTimeline } from "./timeline.js";
+import { createMissionTransport, fetchChatHistory } from "./missionTransport.js";
+import { placeTimeline, type ChatTimeline } from "./timeline.js";
 import { TimelineRows } from "./TimelineRow.js";
-import { ToolPartCard } from "./ToolPartCard.js";
+import { ToolRow } from "./ToolRow.js";
 import { recordedLabelOf } from "./uiMessages.js";
-import { INTER_FONT, LORA_FONT } from "../theme.js";
 
 /** Width of the conversation column (plan §3.2). */
 export const CHAT_MAX_WIDTH = 760;
 
-const partRenderers: ChatPartRendererMap = {
-  tool: ({ part, message }) => <ToolPartCard invocation={part.toolInvocation} message={message} />,
-  "dynamic-tool": ({ part, message }) => <ToolPartCard invocation={part.toolInvocation} message={message} />,
-};
-
 const SUGGESTIONS = ["Why did you pick these resistors?", "Make the LEDs fade instead of switching", "Explain the tests in simple words"];
 
-/**
- * Streams runs this browser did not start (started from iMessage / Claude Code, or before this page loaded). Uses GET
- * chat/stream through the adapter and MUI X Chat's own stream processor, so the parts land in the same assistant
- * message as a normal send.
- */
-function ActiveRunFollower({ adapter, missionId, agentBusy }: { adapter: MissionChatAdapter; missionId: string; agentBusy: boolean }) {
-  const store = useChatStore();
-  const chat = useChat();
-  const following = useRef(false);
-  const wasBusy = useRef(agentBusy);
-  const lastAttempt = useRef(0);
+/** What the thread's message components need beyond assistant-ui's own state. */
+interface ThreadValue {
+  chat: UseChatHelpers<UIMessage>;
+  placed: ChatTimeline;
+  canChat: boolean;
+  hasDesign: boolean;
+  designChannel?: Channel;
+  emptyInventory: boolean;
+  afterMessages?: ReactNode;
+  inputRef: RefObject<HTMLTextAreaElement | null>;
+}
 
-  const follow = useMemo(
-    () => async () => {
-      if (following.current || store.state.isStreaming) return;
-      following.current = true;
-      lastAttempt.current = Date.now();
-      const abort = new AbortController();
-      try {
-        await adapter.historyLoaded;
-        if (store.state.isStreaming) return;
-        store.setStreaming(true, missionId);
-        store.setActiveStreamAbortController(abort);
-        const stream = await adapter.reconnectToStream?.({ conversationId: missionId, signal: abort.signal });
-        if (stream) await processStream(store, stream, { conversationId: missionId, signal: abort.signal });
-      } catch (error) {
-        if (!abort.signal.aborted) console.warn("Following the agent run failed", error);
-      } finally {
-        store.setActiveStreamAbortController(null);
-        store.setStreaming(false);
-        following.current = false;
-      }
-    },
-    [adapter, missionId, store],
+const ThreadContext = createContext<ThreadValue | null>(null);
+
+function useThread(): ThreadValue {
+  const value = useContext(ThreadContext);
+  if (!value) throw new Error("useThread must be used inside MissionChat");
+  return value;
+}
+
+/** Consecutive tool calls (except Claude's questions) share one collapsible "Worked on the design" row. */
+const groupTools = (part: { type: string; toolName?: string }): readonly `group-${string}`[] | null =>
+  part.type === "tool-call" && part.toolName !== "ask_user" ? ["group-tools"] : null;
+
+// ---------- parts ----------
+
+function ReplyMarkdown({ text }: { text: string }) {
+  return (
+    <Box
+      sx={{
+        fontFamily: LORA_FONT,
+        fontSize: "1.05rem",
+        lineHeight: 1.7,
+        color: "text.primary",
+        "& p": { my: 0.75 },
+        "& ul, & ol": { my: 0.75, pl: 3 },
+        "& code": { fontFamily: MONO_FONT, fontSize: "0.85em", bgcolor: "action.hover", px: 0.5, borderRadius: 0.5 },
+        "& pre": { fontFamily: MONO_FONT, fontSize: 13, bgcolor: "action.hover", p: 1.5, borderRadius: 1, overflowX: "auto" },
+        "& pre code": { bgcolor: "transparent", p: 0 },
+        "& table": { borderCollapse: "collapse", fontFamily: INTER_FONT, fontSize: 14 },
+        "& th, & td": { border: 1, borderColor: "divider", px: 1, py: 0.5 },
+      }}
+    >
+      <Markdown remarkPlugins={[remarkGfm]}>{text}</Markdown>
+    </Box>
   );
-
-  useEffect(() => {
-    if (agentBusy && !chat.isStreaming && Date.now() - lastAttempt.current > 3_000) void follow();
-    // A run finished that we did not (fully) watch: take the server's saved history as the truth.
-    if (wasBusy.current && !agentBusy && !chat.isStreaming) void chat.reloadMessages();
-    wasBusy.current = agentBusy;
-  }, [agentBusy, chat, follow]);
-
-  return null;
 }
 
-/**
- * A brand-new mission's run starts with the brief as the first user message (missions.create does not start a run).
- * Only for missions in BRIEF/CLARIFY with no revision: pre-warmed/seeded missions already have a design.
- */
-function BriefKickoff({ adapter, brief, agentBusy }: { adapter: MissionChatAdapter; brief: string; agentBusy: boolean }) {
-  const chat = useChat();
-  const [historyReady, setHistoryReady] = useState(false);
-  const sent = useRef(false);
-  useEffect(() => {
-    let live = true;
-    void adapter.historyLoaded.then(() => live && setHistoryReady(true));
-    return () => {
-      live = false;
-    };
-  }, [adapter]);
-  useEffect(() => {
-    if (!historyReady || sent.current || agentBusy || chat.isStreaming || chat.isLoadingHistory || chat.error) return;
-    if (chat.messages.length > 0 || !brief.trim()) return;
-    sent.current = true;
-    void chat.sendMessage({ parts: [{ type: "text", text: brief }] });
-  }, [historyReady, agentBusy, brief, chat]);
-  return null;
+/** `ask_user`: the run stops after it; answering (a choice or free text) sends a normal chat message. */
+function AskUserPart({ args }: { args: unknown }) {
+  const aui = useAui();
+  const isLast = useAuiState((s) => s.message.isLast);
+  const running = useAuiState((s) => s.thread.isRunning);
+  return (
+    <AskUserCard
+      input={args}
+      answerable={isLast && !running}
+      onAnswer={(text) => aui.thread().append({ role: "user", content: [{ type: "text", text }] })}
+    />
+  );
 }
+
+/** The collapsible group row for consecutive tool calls; a single call renders as its own row. */
+function ToolGroupRow({ count, running, children }: { count: number; running: boolean; children: ReactNode }) {
+  const [open, setOpen] = useState(false);
+  const id = useId();
+  if (count <= 1) return <>{children}</>;
+  return (
+    <Box sx={{ my: 0.5, fontFamily: INTER_FONT }} data-tool-group="">
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, minHeight: 32, px: 1 }}>
+        {running ? <CircularProgress size={16} aria-hidden /> : <TaskAltIcon fontSize="small" sx={{ color: "success.main" }} />}
+        <Typography variant="body2" sx={{ fontWeight: 500 }} aria-live={running ? "polite" : undefined}>
+          {running ? "Working on the design" : "Worked on the design"}
+        </Typography>
+        <Typography variant="body2" sx={{ color: "text.secondary" }}>
+          · {count} steps
+        </Typography>
+        <IconButton
+          size="small"
+          aria-label={open ? "Hide steps" : "Show steps"}
+          aria-expanded={open}
+          aria-controls={id}
+          onClick={() => setOpen((v) => !v)}
+          sx={{ minWidth: 28, minHeight: 28, color: "text.secondary" }}
+        >
+          <ChevronRightIcon fontSize="small" sx={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 120ms" }} />
+        </IconButton>
+      </Box>
+      <Collapse in={open} id={id} unmountOnExit>
+        <Box sx={{ pl: 2, borderLeft: 1, borderColor: "divider", ml: 2 }}>{children}</Box>
+      </Collapse>
+    </Box>
+  );
+}
+
+function renderAssistantPart({ part, children }: { part: EnrichedPartState | { type: `group-${string}`; counts: { running: number }; indices: readonly number[] } | { type: "indicator" }; children: ReactNode }): ReactNode {
+  switch (part.type) {
+    case "indicator":
+      return (
+        <Stack direction="row" sx={{ gap: 1, alignItems: "center", px: 1, py: 0.5, color: "text.secondary", fontFamily: INTER_FONT }}>
+          <CircularProgress size={14} aria-hidden />
+          <Typography variant="body2">Claude is working…</Typography>
+        </Stack>
+      );
+    case "text":
+      return "text" in part && part.text ? <ReplyMarkdown text={part.text} /> : <></>;
+    case "tool-call": {
+      if (!("toolName" in part)) return <></>;
+      if (part.toolName === "ask_user") return <AskUserPart args={part.args} />;
+      return (
+        <ToolRow toolName={part.toolName} toolCallId={part.toolCallId} args={part.args} result={part.result} isError={part.isError} status={part.status} approval={part.approval} />
+      );
+    }
+    default:
+      if (part.type.startsWith("group-") && "indices" in part) {
+        return (
+          <ToolGroupRow count={part.indices.length} running={part.counts.running > 0}>
+            {children}
+          </ToolGroupRow>
+        );
+      }
+      // Reasoning, sources, files, data parts: not shown in the mission chat.
+      return <></>;
+  }
+}
+
+// ---------- messages ----------
+
+function useRecordedLabel(): string | undefined {
+  const { chat } = useThread();
+  const id = useAuiState((s) => s.message.id);
+  return recordedLabelOf(chat.messages.find((m) => m.id === id)?.metadata);
+}
+
+function UserText({ text }: { text: string }) {
+  return <>{text}</>;
+}
+
+function UserMessage() {
+  const id = useAuiState((s) => s.message.id);
+  const { placed } = useThread();
+  const { openPanel } = useMissionShell();
+  const recorded = useRecordedLabel();
+  const before = placed.before[id];
+  return (
+    <>
+      {before && <TimelineRows items={before} onOpenPanel={openPanel} />}
+      <MessagePrimitive.Root>
+        <Stack sx={{ alignItems: "flex-end", my: 1.5, fontFamily: INTER_FONT }} data-role="user">
+          <Box
+            sx={{ maxWidth: "85%", bgcolor: "action.hover", color: "text.primary", borderRadius: "18px", px: 2, py: 1.25, fontSize: "1rem", lineHeight: 1.5, whiteSpace: "pre-wrap", wordBreak: "break-word" }}
+          >
+            <MessagePrimitive.Parts components={{ Text: UserText }} />
+          </Box>
+          {recorded && (
+            <Box sx={{ mt: 0.5 }}>
+              <RecordedChip label={recorded} />
+            </Box>
+          )}
+        </Stack>
+      </MessagePrimitive.Root>
+    </>
+  );
+}
+
+function AssistantMessage() {
+  const recorded = useRecordedLabel();
+  return (
+    <MessagePrimitive.Root>
+      <Box sx={{ my: 1.5 }} data-role="assistant">
+        <Typography variant="caption" sx={{ color: "text.secondary", fontFamily: INTER_FONT, px: 0 }}>
+          Claude
+        </Typography>
+        <MessagePrimitive.GroupedParts groupBy={groupTools} indicator="empty">
+          {renderAssistantPart}
+        </MessagePrimitive.GroupedParts>
+        <MessagePrimitive.Error>
+          <MessageErrorText />
+        </MessagePrimitive.Error>
+        {recorded && (
+          <Box sx={{ mt: 0.5 }}>
+            <RecordedChip label={recorded} />
+          </Box>
+        )}
+      </Box>
+    </MessagePrimitive.Root>
+  );
+}
+
+/** A reply that failed mid-way (the error belongs on Claude's reply, never under your message). */
+function MessageErrorText() {
+  const { chat } = useThread();
+  const isLast = useAuiState((s) => s.message.isLast);
+  const error = useAuiState((s) => (s.message.status?.type === "incomplete" && s.message.status.reason === "error" ? s.message.status.error : undefined));
+  const text =
+    typeof error === "string" ? error : error instanceof Error ? error.message : isLast && chat.error ? chat.error.message : "Claude's reply didn't finish.";
+  return (
+    <Alert severity="error" sx={{ mt: 1 }}>
+      {text}
+    </Alert>
+  );
+}
+
+// ---------- thread chrome ----------
 
 /** Note at the top of a chat with no messages: the design came from somewhere other than this chat. */
 function DesignOriginNotice({ channel, canChat }: { channel?: Channel; canChat: boolean }) {
@@ -113,7 +259,7 @@ function DesignOriginNotice({ channel, canChat }: { channel?: Channel; canChat: 
         ? "Another agent designed this — ask Claude anything about it."
         : "This design was prepared ahead of time — ask Claude anything about it.";
   return (
-    <Stack role="note" direction="row" sx={{ gap: 1.5, alignItems: "flex-start", py: 1.5, px: 1 }}>
+    <Stack role="note" direction="row" sx={{ gap: 1.5, alignItems: "flex-start", py: 1.5, px: 1, fontFamily: INTER_FONT }}>
       <InfoOutlinedIcon fontSize="small" sx={{ color: "text.secondary", mt: 0.25 }} />
       <Box>
         {!canChat && origin && <Typography variant="body2">{origin}</Typography>}
@@ -128,70 +274,43 @@ function DesignOriginNotice({ channel, canChat }: { channel?: Channel; canChat: 
   );
 }
 
-/**
- * Default inline message meta plus a "Recorded run · …" chip on messages replayed from a recorded real-model run.
- */
-function InlineMetaWithRecording(props: ChatMessageInlineMetaProps) {
-  const { message } = useMessageContext();
-  const recorded = recordedLabelOf(message?.metadata);
+function EmptyInventoryHint() {
   return (
-    <Stack direction="row" sx={{ gap: 1, alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", fontFamily: INTER_FONT }}>
-      {recorded && <RecordedChip label={recorded} />}
-      <ChatMessageInlineMeta {...props} />
+    <Stack role="note" direction="row" sx={{ gap: 1, alignItems: "center", px: 1, py: 0.5, color: "text.secondary", fontFamily: INTER_FONT }}>
+      <InfoOutlinedIcon fontSize="small" />
+      <Typography variant="body2">
+        Your inventory is empty, so Claude has no parts listed for this mission.{" "}
+        <Link component={RouterLink} to="/inventory">
+          Add your parts
+        </Link>
+      </Typography>
     </Stack>
   );
 }
 
-/** The thread has its own empty state (origin note + timeline rows) inside the list, so ChatBox's overlay stays empty. */
-function NoEmptyState() {
-  return null;
-}
-
-/**
- * `messageListContent` slot: the message rows (children, one per message id) with the mission's timeline rows merged
- * in between them in time order (chat/timeline.ts), then the rows after the last message and the mission-complete card.
- */
-function ThreadContent({ children, ownerState: _ownerState, ...rest }: { children?: ReactNode; ownerState?: unknown } & Record<string, unknown>) {
-  const { messages } = useChat();
-  const { events, hasDesign, designChannel, canChat, afterMessages } = useChatThread();
-  const { openPanel } = useMissionShell();
-  const placed = useMemo(() => placeTimeline(messages, events), [messages, events]);
-  const rows = Children.toArray(children);
-  return (
-    <Box {...rest} sx={{ maxWidth: CHAT_MAX_WIDTH, mx: "auto", px: 2, pt: 2, pb: 3, width: "100%", boxSizing: "border-box" }}>
-      {rows.length === 0 && hasDesign && <DesignOriginNotice channel={designChannel} canChat={canChat} />}
-      {rows.map((row) => {
-        const id = isValidElement<{ id?: unknown }>(row) && typeof row.props.id === "string" ? row.props.id : undefined;
-        const before = id ? placed.before[id] : undefined;
-        return (
-          <Box key={isValidElement(row) ? row.key : undefined}>
-            {before && <TimelineRows items={before} onOpenPanel={openPanel} />}
-            {row}
-          </Box>
-        );
-      })}
-      <TimelineRows items={placed.end} onOpenPanel={openPanel} />
-      {afterMessages}
-    </Box>
-  );
-}
-
-/** `composerRoot` slot: ViBread's own chat box (chat/Composer.tsx) wired to the MUI X Chat runtime. */
-function ComposerSlot() {
-  const chat = useChat();
+function ThreadComposer() {
+  const aui = useAui();
   const { missionId, detail } = useMissionShell();
-  const { canChat, hasDesign, draft, setDraft, inputRef } = useChatThread();
-  const running = chat.isStreaming || detail.agentBusy;
-  const send = (text: string) => void chat.sendMessage({ parts: [{ type: "text", text }] });
+  const { chat, canChat, hasDesign, inputRef } = useThread();
+  const empty = useAuiState((s) => s.composer.isEmpty);
+  // A failed reply shows its error on the reply itself; only an error with no reply to hang it on shows here.
+  const lastIsAssistant = useAuiState((s) => s.thread.messages.at(-1)?.role === "assistant");
+  const streaming = chat.status === "submitted" || chat.status === "streaming";
+  const running = streaming || detail.agentBusy;
+  const disabledReason = canChat ? undefined : "Claude isn't connected, so it can't reply. Connect it in Settings — checks, tests and building still work.";
+  const stop = () => {
+    if (streaming) void chat.stop();
+    api.stopAgent(missionId).catch((error: unknown) => console.warn("Stop request failed", error));
+  };
   return (
-    <Box sx={{ maxWidth: CHAT_MAX_WIDTH, mx: "auto", width: "100%", px: 2, pb: 2, boxSizing: "border-box" }}>
-      {chat.error && (
-        <Alert severity="error" sx={{ mb: 1 }} onClose={() => chat.setError(null)}>
+    <Box sx={{ maxWidth: CHAT_MAX_WIDTH, mx: "auto", width: "100%", px: 2, pb: 2, boxSizing: "border-box", bgcolor: "background.default", fontFamily: INTER_FONT }}>
+      {chat.error && !lastIsAssistant && (
+        <Alert severity="error" sx={{ mb: 1 }} onClose={() => chat.clearError()}>
           {chat.error.message}
         </Alert>
       )}
-      {hasDesign && canChat && !running && !draft && (
-        <Stack direction="row" sx={{ display: "flex", flexDirection: "row", gap: 1, flexWrap: "wrap", mb: 1 }} aria-label="Suggestions">
+      {hasDesign && canChat && !running && empty && (
+        <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap", mb: 1 }} aria-label="Suggestions">
           {SUGGESTIONS.map((s) => (
             <Chip
               key={s}
@@ -199,101 +318,217 @@ function ComposerSlot() {
               variant="outlined"
               clickable
               onClick={() => {
-                setDraft(s);
+                aui.composer().setText(s);
                 inputRef.current?.focus();
               }}
             />
           ))}
         </Stack>
       )}
-      <Composer
-        placeholder={hasDesign ? "Reply to Claude — ask why, or say what to change…" : "Reply to Claude…"}
-        label="Message Claude"
-        running={running}
-        disabled={!canChat}
-        disabledReason={canChat ? undefined : "Claude isn't connected, so it can't reply. Connect it in Settings — checks, tests and building still work."}
-        onSend={send}
-        onStop={() => {
-          if (chat.isStreaming) chat.stopStreaming();
-          else api.stopAgent(missionId).catch((error: unknown) => console.warn("Stop agent request failed", error));
-        }}
-        value={draft}
-        onValueChange={setDraft}
-        inputRef={inputRef}
-      />
+      <ComposerPrimitive.Root>
+        <Paper variant="outlined" sx={COMPOSER_FRAME_SX}>
+          <Box
+            sx={{
+              "& textarea": {
+                width: "100%",
+                resize: "none",
+                border: 0,
+                outline: "none",
+                bgcolor: "transparent",
+                color: "text.primary",
+                font: "inherit",
+                fontSize: "1rem",
+                lineHeight: 1.5,
+                p: 0,
+                "&::placeholder": { color: "text.secondary", opacity: 1 },
+              },
+            }}
+          >
+            <ComposerPrimitive.Input
+              ref={inputRef}
+              placeholder={hasDesign ? "Reply to Claude — ask why, or say what to change…" : "Reply to Claude…"}
+              aria-label="Message Claude"
+              disabled={!canChat}
+              minRows={1}
+              maxRows={12}
+              maxLength={4000}
+            />
+          </Box>
+          <Stack direction="row" sx={{ alignItems: "center", gap: 1, mt: 1 }}>
+            <Box sx={{ flex: 1 }} />
+            {running ? (
+              <Tooltip title="Stop Claude">
+                <IconButton aria-label="Stop Claude" onClick={stop} sx={STOP_BUTTON_SX}>
+                  <StopIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+            ) : (
+              <Tooltip title={disabledReason ?? "Send (Enter) · new line: Shift+Enter"}>
+                <span>
+                  <ComposerPrimitive.Send asChild>
+                    <IconButton aria-label="Send" sx={SEND_BUTTON_SX}>
+                      <ArrowUpwardIcon fontSize="small" />
+                    </IconButton>
+                  </ComposerPrimitive.Send>
+                </span>
+              </Tooltip>
+            )}
+          </Stack>
+        </Paper>
+      </ComposerPrimitive.Root>
+      {disabledReason && (
+        <Typography variant="caption" component="p" sx={{ mt: 0.75, px: 1, color: "text.secondary" }}>
+          {disabledReason}
+        </Typography>
+      )}
     </Box>
   );
 }
 
+function Thread() {
+  const { placed, hasDesign, designChannel, canChat, emptyInventory, afterMessages } = useThread();
+  const { openPanel } = useMissionShell();
+  const messageCount = useAuiState((s) => s.thread.messages.length);
+  return (
+    <ThreadPrimitive.Root style={{ height: "100%", display: "flex", flexDirection: "column", minHeight: 0 }}>
+      <ThreadPrimitive.Viewport style={{ flex: 1, minHeight: 0, overflowY: "auto", display: "flex", flexDirection: "column" }}>
+        <Box sx={{ maxWidth: CHAT_MAX_WIDTH, mx: "auto", px: 2, pt: 2, pb: 3, width: "100%", boxSizing: "border-box", flex: 1 }} role="log" aria-label="Mission chat">
+          {emptyInventory && <EmptyInventoryHint />}
+          {messageCount === 0 && hasDesign && <DesignOriginNotice channel={designChannel} canChat={canChat} />}
+          <ThreadPrimitive.Messages components={{ UserMessage, AssistantMessage }} />
+          <TimelineRows items={placed.end} onOpenPanel={openPanel} />
+          {afterMessages}
+        </Box>
+        <ThreadPrimitive.ViewportFooter style={{ position: "sticky", bottom: 0 }}>
+          <ThreadComposer />
+        </ThreadPrimitive.ViewportFooter>
+      </ThreadPrimitive.Viewport>
+    </ThreadPrimitive.Root>
+  );
+}
+
+/** Buttons elsewhere (panel: "Ask Claude to redesign without it", "Fix and retest") prefill the chat box. */
+function AskAgentListener({ inputRef }: { inputRef: RefObject<HTMLTextAreaElement | null> }) {
+  const aui = useAui();
+  useEffect(() => {
+    const onAsk = (e: Event) => {
+      const text = e instanceof CustomEvent && typeof e.detail?.text === "string" ? e.detail.text : "";
+      if (!text) return;
+      aui.composer().setText(text);
+      requestAnimationFrame(() => inputRef.current?.focus());
+    };
+    window.addEventListener("vibread:ask-agent", onAsk);
+    return () => window.removeEventListener("vibread:ask-agent", onAsk);
+  }, [aui, inputRef]);
+  return null;
+}
+
+// ---------- runtime ----------
+
 export interface MissionChatProps {
   missionId: string;
   detail: MissionDetail;
-  adapter: MissionChatAdapter;
   events: TimelineEvent[];
   canChat: boolean;
-  /** Composer text, owned by the page so buttons elsewhere ("Ask Claude to redesign…") can prefill it. */
-  draft: string;
-  setDraft(text: string): void;
-  inputRef: ChatThreadValue["inputRef"];
+  /** Focus target for "tell Claude" buttons (mission-complete card). */
+  inputRef: RefObject<HTMLTextAreaElement | null>;
   afterMessages?: ReactNode;
 }
 
-/** The mission conversation: MUI X Chat thread + timeline rows + ViBread's chat box. */
-export function MissionChat({ missionId, detail, adapter, events, canChat, draft, setDraft, inputRef, afterMessages }: MissionChatProps) {
+export interface MissionThreadProps extends Omit<MissionChatProps, "missionId"> {
+  /** The AI SDK chat for this mission (its transport speaks the mission chat contract; see missionTransport.ts). */
+  chat: Chat<UIMessage>;
+  /** Messages the chat was created with (the saved history). */
+  history: UIMessage[];
+  reloadHistory(): Promise<UIMessage[] | undefined>;
+}
+
+/** The mission thread over an existing AI SDK chat: runtime, run following, brief kickoff, messages and chat box. */
+export function MissionThread({ chat: instance, history, reloadHistory, detail, events, canChat, inputRef, afterMessages }: MissionThreadProps) {
+  // `resume`: after a refresh during a run, pick up the active run's stream (the server answers 204 when none runs).
+  const chat = useChat<UIMessage>({ chat: instance, resume: true });
+  const runtime = useAISDKRuntime(chat);
   const m = detail.mission;
-  const hasDesign = m.currentRevision !== undefined;
+  const busy = detail.agentBusy;
+  const streaming = chat.status === "submitted" || chat.status === "streaming";
+
+  // Runs this browser did not start (iMessage, Claude Code): follow the active stream while the server says busy, and
+  // take the saved history as the truth once such a run ends.
+  const wasBusy = useRef(busy);
+  const lastFollow = useRef(0);
+  useEffect(() => {
+    if (busy && !streaming && Date.now() - lastFollow.current > 3_000) {
+      lastFollow.current = Date.now();
+      void chat.resumeStream();
+    }
+    if (wasBusy.current && !busy && !streaming) {
+      void reloadHistory().then((saved) => saved && chat.setMessages(saved));
+    }
+    wasBusy.current = busy;
+  }, [busy, streaming, chat, reloadHistory]);
+
+  // A brand-new mission's run starts with the brief as the first message (creating a mission does not start a run).
   // The server moves a fresh mission BRIEF → CLARIFY on creation; either way no design exists yet.
+  const kickedOff = useRef(false);
   const isNewMission = (m.phase === "BRIEF" || m.phase === "CLARIFY") && m.currentRevision === undefined;
-  const thread = useMemo<ChatThreadValue>(
-    () => ({ adapter, events, canChat, hasDesign, designChannel: detail.revision?.author.channel, afterMessages, draft, setDraft, inputRef }),
-    [adapter, events, canChat, hasDesign, detail.revision?.author.channel, afterMessages, draft, setDraft, inputRef],
+  useEffect(() => {
+    if (kickedOff.current || !isNewMission || history.length > 0 || busy || !m.brief.trim()) return;
+    kickedOff.current = true;
+    void chat.sendMessage({ text: m.brief });
+  }, [isNewMission, history.length, busy, m.brief, chat]);
+
+  const placed = useMemo(() => placeTimeline(chat.messages, events), [chat.messages, events]);
+  const thread = useMemo<ThreadValue>(
+    () => ({
+      chat,
+      placed,
+      canChat,
+      hasDesign: m.currentRevision !== undefined,
+      designChannel: detail.revision?.author.channel,
+      emptyInventory: m.inventory.length === 0 && (m.inventoryNotes?.length ?? 0) === 0,
+      afterMessages,
+      inputRef,
+    }),
+    [chat, placed, canChat, m.currentRevision, detail.revision?.author.channel, m.inventory.length, m.inventoryNotes?.length, afterMessages, inputRef],
   );
   return (
-    <ChatThreadContext.Provider value={thread}>
-      <ChatBox
-        adapter={adapter}
-        initialActiveConversationId={missionId}
-        initialConversations={[{ id: missionId, title: "Mission chat" }]}
-        partRenderers={partRenderers}
-        features={{ conversationList: false, conversationHeader: false, attachments: false, suggestions: false, scrollToBottom: true }}
-        slots={{ messageAvatar: null, messageInlineMeta: InlineMetaWithRecording, emptyState: NoEmptyState, composerRoot: ComposerSlot }}
-        slotProps={{ messageList: { slots: { messageListContent: ThreadContent } } }}
-        sx={{
-          height: "100%",
-          minHeight: 0,
-          bgcolor: "transparent",
-          border: 0,
-          "& .MuiChatMessage-root": { maxWidth: "100%" },
-          // Claude's replies: no bubble, the serif reading font (theme typography variant `reply`).
-          "& .MuiChatMessage-roleAssistant .MuiChatMessage-bubble": { bgcolor: "transparent", color: "text.primary", px: 0, fontFamily: LORA_FONT, fontSize: "1.05rem", lineHeight: 1.7, maxWidth: "100%" },
-          // Yours: a soft rounded bubble on the right.
-          "& .MuiChatMessage-roleUser .MuiChatMessage-bubble": {
-            bgcolor: "action.hover",
-            color: "text.primary",
-            borderRadius: "18px",
-            px: 2,
-            py: 1.25,
-            fontSize: "1rem",
-            lineHeight: 1.5,
-          },
-          "& .MuiChatMessage-roleUser .MuiChatMessage-inlineMeta": { color: "text.secondary" },
-        }}
-        localeText={{
-          composerInputPlaceholder: "Reply to Claude…",
-          composerInputAriaLabel: "Message Claude",
-          messageAuthorAssistantLabel: "Claude",
-          messageAuthorUserLabel: "You",
-          threadNoMessagesLabel: "No conversation yet",
-          threadNoMessagesHelperText: "Claude explains each step here. Ask it anything about your circuit.",
-        }}
-      >
-        <ActiveRunFollower adapter={adapter} missionId={missionId} agentBusy={detail.agentBusy} />
-        {isNewMission && <BriefKickoff adapter={adapter} brief={m.brief} agentBusy={detail.agentBusy} />}
-      </ChatBox>
-    </ChatThreadContext.Provider>
+    <AssistantRuntimeProvider runtime={runtime}>
+      <ThreadContext.Provider value={thread}>
+        <AskAgentListener inputRef={inputRef} />
+        <Thread />
+      </ThreadContext.Provider>
+    </AssistantRuntimeProvider>
   );
 }
 
-export function useMissionChatAdapter(missionId: string): MissionChatAdapter {
-  return useMemo(() => createMissionChatAdapter(missionId), [missionId]);
+/** The mission conversation: assistant-ui thread over the AI SDK chat, with timeline rows merged in and our MUI chat box. */
+export function MissionChat(props: MissionChatProps) {
+  const history = useQuery({
+    queryKey: ["mission", props.missionId, "chat"],
+    queryFn: ({ signal }) => fetchChatHistory(props.missionId, signal),
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+  });
+  if (history.isPending) {
+    return (
+      <Box sx={{ display: "grid", placeItems: "center", height: "100%" }}>
+        <CircularProgress aria-label="Loading the conversation" />
+      </Box>
+    );
+  }
+  if (history.isError) {
+    return (
+      <Box sx={{ p: 3 }}>
+        <Alert severity="error" action={<Button onClick={() => void history.refetch()}>Retry</Button>}>
+          Couldn't load the conversation: {history.error.message}
+        </Alert>
+      </Box>
+    );
+  }
+  return <ChatRuntime key={props.missionId} {...props} history={history.data} reloadHistory={async () => (await history.refetch()).data} />;
+}
+
+function ChatRuntime({ missionId, history, ...props }: MissionChatProps & { history: UIMessage[]; reloadHistory(): Promise<UIMessage[] | undefined> }) {
+  const [chat] = useState(() => new Chat<UIMessage>({ id: missionId, transport: createMissionTransport(missionId), messages: history }));
+  return <MissionThread chat={chat} history={history} {...props} />;
 }

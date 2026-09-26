@@ -1,12 +1,15 @@
-import { ChatStore } from "@mui/x-chat-headless/store";
-import { processStream } from "@mui/x-chat-headless/stream";
-import type { ChatMessage } from "@mui/x-chat/types";
+import { Chat } from "@ai-sdk/react";
+import { createTheme, ThemeProvider } from "@mui/material/styles";
+import type { MissionDetail } from "@vibread/core";
 import type { UIMessage } from "ai";
-import { createElement } from "react";
+import { createElement, createRef } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AskUserCard } from "./AskUserCard.js";
-import { createMissionChatAdapter } from "./missionAdapter.js";
+import type { MissionShellValue } from "../contracts.js";
+import { MissionThread } from "./MissionChat.js";
+import { MissionShellContext } from "./missionShell.js";
+import { createMissionTransport } from "./missionTransport.js";
 
 /**
  * GitHub issue #2: the first ask_user card showed "Claude has a question for you" without the question or choices.
@@ -49,26 +52,41 @@ function sse(chunks: unknown[]): Response {
   return new Response(text, { headers: { "content-type": "text/event-stream" } });
 }
 
-const USER: ChatMessage = { id: "u1", conversationId: "m1", role: "user", parts: [{ type: "text", text: "Make me a dish washer that has 4 modes" }] };
+const DETAIL = {
+  mission: { id: "m1", title: "Dish washer", brief: "Make me a dish washer that has 4 modes", phase: "CLARIFY", inventory: [{ module: "led", count: 4 }] },
+  consoles: [],
+  pendingApprovals: [],
+  agentBusy: false,
+} as unknown as MissionDetail;
 
-/** Sends the brief through the mission adapter against a server that answers with `chunks`; returns the chat state. */
-async function firstTurn(chunks: unknown[]): Promise<ChatStore> {
-  vi.stubGlobal("fetch", async () => sse(chunks));
-  const adapter = createMissionChatAdapter("m1");
-  const store = new ChatStore({ initialActiveConversationId: "m1" });
-  const stream = await adapter.sendMessage({ conversationId: "m1", message: USER, messages: [USER], signal: new AbortController().signal });
-  await processStream(store, stream, { conversationId: "m1" });
-  return store;
+const SHELL: MissionShellValue = { missionId: "m1", detail: DETAIL, panel: { open: false, view: "schematic" }, openPanel: () => undefined, closePanel: () => undefined };
+
+/** The mission thread exactly as the page renders it, for the chat's current messages. */
+function renderThread(chat: Chat<UIMessage>): string {
+  const thread = createElement(MissionThread, {
+    chat,
+    history: chat.messages,
+    reloadHistory: async () => undefined,
+    detail: DETAIL,
+    events: [],
+    canChat: true,
+    inputRef: createRef<HTMLTextAreaElement>(),
+  });
+  return renderToStaticMarkup(
+    createElement(ThemeProvider, { theme: createTheme() }, createElement(MemoryRouter, null, createElement(MissionShellContext.Provider, { value: SHELL }, thread))),
+  );
 }
 
-function askUserInput(store: ChatStore): unknown {
-  const parts = Object.values(store.state.messagesById).flatMap((m) => m.parts);
-  const tool = parts.find((p) => (p.type === "tool" || p.type === "dynamic-tool") && p.toolInvocation.toolName === "ask_user");
-  return tool && (tool.type === "tool" || tool.type === "dynamic-tool") ? tool.toolInvocation.input : undefined;
+function missionChat(messages: UIMessage[] = []): Chat<UIMessage> {
+  return new Chat<UIMessage>({ id: "m1", transport: createMissionTransport("m1"), messages });
 }
 
-function renderCard(input: unknown): string {
-  return renderToStaticMarkup(createElement(AskUserCard, { input, answerable: true, onAnswer: () => undefined }));
+function expectQuestionCard(html: string) {
+  expect(html.match(/data-ask-user/g)).toHaveLength(1);
+  expect(html).toContain(QUESTION);
+  for (const choice of CHOICES) expect(html).toContain(`>${choice}</button>`);
+  expect(html).toContain('aria-label="Your answer"');
+  expect(html).not.toContain("writing a question");
 }
 
 afterEach(() => vi.unstubAllGlobals());
@@ -79,32 +97,24 @@ describe("first streamed ask_user card (issue #2)", () => {
     ["question the tool schema rejected", REJECTED],
   ] as const) {
     it(`shows the question, every choice and a free-text answer right away (${name})`, async () => {
-      const html = renderCard(askUserInput(await firstTurn(chunks)));
-      expect(html).toContain(QUESTION);
-      for (const choice of CHOICES) expect(html).toContain(`>${choice}</button>`);
-      expect(html).toContain('aria-label="Your answer"');
-      expect(html).not.toContain("writing a question");
+      vi.stubGlobal("fetch", async () => sse(chunks));
+      const chat = missionChat();
+      await chat.sendMessage({ text: "Make me a dish washer that has 4 modes" });
+      expectQuestionCard(renderThread(chat));
     });
   }
 
-  it("keeps one card with the same question after a refresh (GET chat) and a resumed stream of the same run", async () => {
+  it("keeps one card with the same question after a refresh (saved history) and a resumed stream of the same run", async () => {
     const saved: UIMessage[] = [
       { id: "u1", role: "user", parts: [{ type: "text", text: "Make me a dish washer that has 4 modes" }] },
       { id: "a1", role: "assistant", parts: [{ type: "tool-ask_user", toolCallId: "c1", state: "output-error", input: INPUT, errorText: "Invalid input" }] },
     ];
-    let call = 0;
-    vi.stubGlobal("fetch", async () => (call++ === 0 ? new Response(JSON.stringify(saved)) : sse(REJECTED)));
-    const adapter = createMissionChatAdapter("m1");
-    const store = new ChatStore({ initialActiveConversationId: "m1" });
-    const history = await adapter.listMessages?.({ conversationId: "m1" });
-    store.setMessages(history?.messages ?? []);
-    expect(renderCard(askUserInput(store))).toContain(QUESTION);
+    const chat = missionChat(saved);
+    expectQuestionCard(renderThread(chat));
 
-    const resumed = await adapter.reconnectToStream?.({ conversationId: "m1", signal: new AbortController().signal });
-    if (!resumed) throw new Error("expected the active run's stream");
-    await processStream(store, resumed, { conversationId: "m1" });
-    const cards = Object.values(store.state.messagesById).flatMap((m) => m.parts.filter((p) => p.type === "tool" || p.type === "dynamic-tool"));
-    expect(cards).toHaveLength(1);
-    expect(renderCard(askUserInput(store))).toContain(QUESTION);
+    vi.stubGlobal("fetch", async () => sse(REJECTED));
+    await chat.resumeStream();
+    expect(chat.messages.filter((m) => m.role === "assistant")).toHaveLength(1);
+    expectQuestionCard(renderThread(chat));
   });
 });

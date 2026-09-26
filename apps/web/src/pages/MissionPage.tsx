@@ -14,7 +14,7 @@ import { api } from "../api/client.js";
 import { queryKeys, useConnections, useMission, useRevisions } from "../api/hooks.js";
 import { isSignInRequired, SignInRequired } from "../components/SignIn.js";
 import type { MissionShellValue, PanelView } from "../contracts.js";
-import { MissionChat, useMissionChatAdapter } from "../chat/MissionChat.js";
+import { MissionChat } from "../chat/MissionChat.js";
 import { MissionShellContext } from "../chat/missionShell.js";
 import { withRevisionEvents } from "../chat/timeline.js";
 import { isRecord } from "../lib/guards.js";
@@ -65,13 +65,11 @@ export default function MissionPage() {
     () => withRevisionEvents(timeline.data ?? EMPTY_EVENTS, revisions.data ?? [], missionId),
     [timeline.data, revisions.data, missionId],
   );
-  const adapter = useMissionChatAdapter(missionId);
   const connections = useConnections();
   // Nothing powers the agent: no connected Claude account and no server key.
   const claudeMissing = connections.data?.claude?.using === "none";
   const phone = useMediaQuery("(max-width: 699.95px)");
   const roomy = useMediaQuery("(min-width: 1200px)");
-  const [draft, setDraft] = useState("");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [panel, setPanel] = useState<PanelState>({ open: false, view: "schematic" });
   const panelTouched = useRef(false);
@@ -92,18 +90,6 @@ export default function MissionPage() {
   useEffect(() => {
     if (hasDesign && roomy && !panelTouched.current) setPanel((p) => (p.open ? p : { ...p, open: true }));
   }, [hasDesign, roomy]);
-
-  // Buttons elsewhere (panel: "Ask Claude to redesign without it", "Fix and retest") prefill the chat box.
-  useEffect(() => {
-    const onAsk = (e: Event) => {
-      const text = e instanceof CustomEvent && typeof e.detail?.text === "string" ? e.detail.text : "";
-      if (!text) return;
-      setDraft(text);
-      requestAnimationFrame(() => inputRef.current?.focus());
-    };
-    window.addEventListener("vibread:ask-agent", onAsk);
-    return () => window.removeEventListener("vibread:ask-agent", onAsk);
-  }, []);
 
   const shell = useMemo<MissionShellValue | null>(
     () =>
@@ -162,11 +148,8 @@ export default function MissionPage() {
             <MissionChat
               missionId={missionId}
               detail={detail}
-              adapter={adapter}
               events={events}
               canChat={!claudeMissing}
-              draft={draft}
-              setDraft={setDraft}
               inputRef={inputRef}
               afterMessages={<MissionCompleteCard missionId={missionId} detail={detail} onTellAgent={() => inputRef.current?.focus()} />}
             />
