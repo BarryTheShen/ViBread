@@ -236,7 +236,7 @@ function isBuildComplete(build: BuildState): boolean {
   );
 }
 
-function FinishedBuild({ total }: { total: number }) {
+function FinishedBuild({ total, onReview }: { total: number; onReview: () => void }) {
   return (
     <Paper
       component="section"
@@ -252,6 +252,15 @@ function FinishedBuild({ total }: { total: number }) {
         <Typography variant="body2" color="text.secondary">
           Open Bench on your laptop to run the safe checks.
         </Typography>
+        <Button
+          type="button"
+          variant="outlined"
+          fullWidth
+          onClick={onReview}
+          sx={{ minHeight: 52, width: "100%", borderRadius: 2.5, fontWeight: 800 }}
+        >
+          Review steps
+        </Button>
       </Stack>
     </Paper>
   );
@@ -438,6 +447,7 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
   const initialStep = useMemo(() => currentStepIndex(steps, build.current), [build.current, steps]);
   const [activeStep, setActiveStep] = useState(initialStep);
   const [finished, setFinished] = useState(() => isBuildComplete(build));
+  const [reviewing, setReviewing] = useState(false);
   const [photoResult, setPhotoResult] = useState<PhotoCheckResult | null>(null);
   const [photoStep, setPhotoStep] = useState<number | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
@@ -457,8 +467,8 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
   }, [safeActiveStep]);
 
   useEffect(() => {
-    setFinished(isBuildComplete(build));
-  }, [build.headline, build.revision, build.steps.length]);
+    if (!reviewing) setFinished(isBuildComplete(build));
+  }, [build.headline, build.revision, build.steps.length, reviewing]);
 
   useEffect(() => {
     if (photoResult && photoStep === currentStepNumber) {
@@ -495,7 +505,18 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
     );
   }
 
-  if (finished) return <FinishedBuild total={steps.length} />;
+  if (finished) {
+    return (
+      <FinishedBuild
+        total={steps.length}
+        onReview={() => {
+          setReviewing(true);
+          setActiveStep(0);
+          setFinished(false);
+        }}
+      />
+    );
+  }
 
   const step = steps[safeActiveStep];
   const handlePhotoChange = (event: ChangeEvent<HTMLInputElement>) => {
