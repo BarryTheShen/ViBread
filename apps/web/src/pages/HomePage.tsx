@@ -26,7 +26,7 @@ import Toolbar from "@mui/material/Toolbar";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { LED_COLORS, MODE_LABELS, formatOhms, type InventoryItem, type MissionPhase, type ModuleKey, type ModuleSummary } from "@vibread/core";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router";
 import { useCreateMission, useMissions, useModules } from "../api/hooks.js";
 import { ErrorOrSignIn } from "../components/SignIn.js";
@@ -52,6 +52,18 @@ function releasedLabel(phase: MissionPhase, n: number): string {
   if (phase === "LAUNCH") return `Launched · r${n}`;
   if (phase === "VERIFY" || phase === "DEBUG") return `Testing r${n}`;
   return `Building r${n}`;
+}
+
+const DRAFT_BRIEF = "vibread.draft.brief";
+const DRAFT_ROWS = "vibread.draft.rows";
+
+function readDraftRows(): Row[] {
+  try {
+    const parsed: unknown = JSON.parse(sessionStorage.getItem(DRAFT_ROWS) ?? "[]");
+    return Array.isArray(parsed) ? (parsed as Row[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 function defaultParams(module: ModuleKey): Record<string, unknown> {
@@ -95,7 +107,8 @@ function ParamPicker({ row, onChange }: { row: Row; onChange(params: Record<stri
 }
 
 function PartsPicker({ modules, rows, setRows }: { modules: ModuleSummary[]; rows: Row[]; setRows(rows: Row[]): void }) {
-  const [nextKey, setNextKey] = useState(1);
+  // Rows may come back from the saved draft: keep new keys unique.
+  const [nextKey, setNextKey] = useState(() => rows.reduce((max, r) => Math.max(max, r.key), 0) + 1);
   const add = (m: ModuleSummary) => {
     // Tapping the same part again adds one more of it (a different color/value stays a separate row).
     const params = defaultParams(m.key);
@@ -155,8 +168,13 @@ export default function HomePage() {
   const create = useCreateMission();
   const [defaultMode] = useDefaultMode();
   const [mode, setMode] = useState(defaultMode);
-  const [brief, setBrief] = useState("");
-  const [rows, setRows] = useState<Row[]>([]);
+  // The draft survives a sign-in round trip (Sign in → provider → back here): kept in this tab's sessionStorage.
+  const [brief, setBrief] = useState(() => sessionStorage.getItem(DRAFT_BRIEF) ?? "");
+  const [rows, setRows] = useState<Row[]>(() => readDraftRows());
+  useEffect(() => {
+    sessionStorage.setItem(DRAFT_BRIEF, brief);
+    sessionStorage.setItem(DRAFT_ROWS, JSON.stringify(rows));
+  }, [brief, rows]);
   const now = useNow(60_000);
 
   const start = () => {
@@ -165,7 +183,16 @@ export default function HomePage() {
       count: r.count,
       ...(Object.keys(r.params).length ? { params: r.params } : {}),
     }));
-    create.mutate({ brief: brief.trim(), inventory, mode }, { onSuccess: (m) => navigate(`/m/${m.id}`) });
+    create.mutate(
+      { brief: brief.trim(), inventory, mode },
+      {
+        onSuccess: (m) => {
+          sessionStorage.removeItem(DRAFT_BRIEF);
+          sessionStorage.removeItem(DRAFT_ROWS);
+          navigate(`/m/${m.id}`);
+        },
+      },
+    );
   };
 
   return (
@@ -221,7 +248,12 @@ export default function HomePage() {
                 {MODE_HELP[mode]} Anything that touches the board always waits for you.
               </Typography>
             </Stack>
-            {create.isError && <Alert severity="error">Couldn't start the mission: {create.error.message}</Alert>}
+            {create.isError && (
+              // Signed out on a multi-user server: offer sign-in; the typed brief and parts stay in this form.
+              <ErrorOrSignIn error={create.error} message="Sign in to start this mission. What you typed stays here.">
+                <Alert severity="error">Couldn't start the mission: {create.error.message}</Alert>
+              </ErrorOrSignIn>
+            )}
             <Box>
               <Button variant="contained" size="large" startIcon={<RocketLaunchIcon />} disabled={!brief.trim() || create.isPending} onClick={start}>
                 {create.isPending ? "Starting…" : "Start the mission"}

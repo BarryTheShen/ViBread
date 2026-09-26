@@ -172,3 +172,17 @@ export function usePhoneOrigin(): string {
   }
   return here;
 }
+
+/**
+ * Build Mode link for a phone: phone origin + `/b/<id>`, plus the laptop's one-time LAN pairing query
+ * (`phonePairQuery`, e.g. "pair=<token>") when the server hands one out. Works without the field.
+ */
+export function usePhoneBuildLink(missionId: string): string {
+  const origin = usePhoneOrigin();
+  const connections = useConnections();
+  const data: unknown = connections.data;
+  // Read defensively: servers without LAN pairing (and the core type until it lands) don't send the field.
+  const pair = typeof data === "object" && data !== null && "phonePairQuery" in data && typeof data.phonePairQuery === "string" ? data.phonePairQuery : "";
+  const query = pair.replace(/^\?/, "");
+  return `${origin}/b/${encodeURIComponent(missionId)}${query ? `?${query}` : ""}`;
+}

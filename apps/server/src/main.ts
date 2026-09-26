@@ -40,6 +40,8 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   const { ctx, auth } = context;
   const app = express();
   app.disable("x-powered-by");
+  app.use(ctx.lanGuard.middleware());
+  if (ctx.lanGuard.active) log.info(`Phones and other computers: open ${config.phoneUrl}/?pair=${ctx.lanGuard.pairToken()}`);
   app.use(pinoHttp({
     logger: log,
     redact: {

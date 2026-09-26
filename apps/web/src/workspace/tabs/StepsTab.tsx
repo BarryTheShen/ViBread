@@ -17,12 +17,12 @@ import Typography from "@mui/material/Typography";
 import type { RevisionDetail } from "@vibread/core";
 import { QRCodeSVG } from "qrcode.react";
 import { useEffect, useState } from "react";
-import { useBuildState, usePhoneOrigin } from "../../api/hooks.js";
+import { useBuildState, usePhoneBuildLink } from "../../api/hooks.js";
 
 export function StepsTab({ missionId, revision, released }: { missionId: string; revision: RevisionDetail; released: boolean }) {
   const steps = revision.results.steps?.steps ?? [];
   const [index, setIndex] = useState(0);
-  const phoneUrl = `${usePhoneOrigin()}/b/${missionId}`;
+  const phoneUrl = usePhoneBuildLink(missionId);
   // Follow the builder: Build Mode's "I did this" moves BuildState.current; jump there whenever it changes.
   const build = useBuildState(missionId, released);
   const current = released && build.data?.revision === revision.n ? build.data.current : undefined;

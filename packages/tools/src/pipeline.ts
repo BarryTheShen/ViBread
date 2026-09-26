@@ -123,7 +123,7 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
       return;
     }
     const compile: CompileResult = compiled.value;
-    const { hex, elfPath: _elf, ...stored } = compile;
+    const { hex, ...stored } = compile;
     run.patch.compile = stored;
 
     let pinModes: PinModeObservation[] = [];

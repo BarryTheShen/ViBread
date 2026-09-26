@@ -114,7 +114,8 @@ export function mountApi(app: Express, ctx: AppContext): void {
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
     const artifactUrls: Record<string, string> = {};
     for (const key of Object.keys(revision.results.artifacts)) artifactUrls[key] = artifactUrl(missionId, n, key);
-    res.json({ n: revision.n, hash: revision.hash, circuit: revision.circuit, suite: revision.suite, results: revision.results, artifactUrls });
+    const fallbackUpload = uploadCommand({ hexPath: "<downloaded .hex file>", port: "<port>", board: revision.circuit.board.profile });
+    res.json({ n: revision.n, hash: revision.hash, circuit: revision.circuit, suite: revision.suite, results: revision.results, artifactUrls, fallbackUpload });
   });
   router.get("/missions/:id/revisions/:n/artifacts/:key", async (req, res) => {
     const missionId = String(req.params.id);
@@ -150,6 +151,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const released = mission.releasedRevision === undefined ? null : await ctx.store.getRevision(missionId, mission.releasedRevision);
     const latestBench = released?.results.bench?.at(-1);
     if (!latestBench) throw httpError(409, "bench_run_required", "Run the bench test with your Arduino first.");
+    if (latestBench.verdict === "incomplete") throw httpError(409, "bench_run_incomplete", "The last bench test didn't finish. Run it again and answer each question on the bench screen.");
     if (latestBench.verdict !== "pass") throw httpError(409, "bench_run_failed", "The last bench test didn't pass. Fix the wiring and run it again.");
     if (latestBench.runId.startsWith("virtual-")) {
       throw httpError(409, "real_board_required", "The virtual board passed. Run the bench with your real Arduino to complete the mission.");
@@ -325,12 +327,12 @@ export function mountApi(app: Express, ctx: AppContext): void {
       });
     }
     if (!compile.ok || !compile.hex) {
-      const { hex: _hex, elfPath: _elfPath, ...withoutBinary } = compile;
+      const { hex: _hex, ...withoutBinary } = compile;
       await ctx.store.saveResults(missionId, revision.n, { compile: withoutBinary, ...(body.kind === "bench" && plan ? { selftest: plan } : {}) });
       return res.status(422).json({ error: { code: "COMPILE_FAILED", message: compile.log || "firmware compilation failed" }, diagnostics: compile.diagnostics });
     }
     const artifactHash = await ctx.store.putArtifact(compile.hex, "text/plain; charset=utf-8");
-    const { hex: _hex, elfPath: _elfPath, ...withoutBinary } = compile;
+    const { hex: _hex, ...withoutBinary } = compile;
     const resultPatch: Partial<RevisionResults> = {
       compile: withoutBinary,
       artifacts: { [key]: artifactHash },
@@ -403,13 +405,14 @@ export function mountApi(app: Express, ctx: AppContext): void {
     await ctx.store.appendEvent({ missionId, channel: "web", actor: actorFor(res, ctx), kind: "photo.checked", text: `Photo check for step ${step}`, revision: revision.n, data: photo });
     res.json(photo);
   });
-  router.get("/connections", async (_req, res) => {
+  router.get("/connections", async (req, res) => {
     const user = actorUser(res, ctx);
     res.json({
       imessage: { linked: Boolean(await ctx.links.handleForUser(user.id)), handle: await ctx.links.handleForUser(user.id), capcomNumber: ctx.config.capcom.number },
       claudeCode: { tokens: await ctx.tokens.list(user.id) },
       mcpUrl: `${ctx.config.publicUrl}/mcp`,
       phoneUrl: ctx.config.phoneUrl,
+      ...(ctx.lanGuard.phonePairQuery(req) ? { phonePairQuery: ctx.lanGuard.phonePairQuery(req) } : {}),
       claude: await ctx.claudeAccounts.view(user.id),
     });
   });
