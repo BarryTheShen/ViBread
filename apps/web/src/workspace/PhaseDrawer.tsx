@@ -46,9 +46,21 @@ export function plainEventText(e: TimelineEvent): string {
   return text;
 }
 
-export function PhaseDrawer({ missionId, phase, timeline }: { missionId: string; phase: MissionPhase; timeline: TimelineEvent[] }) {
+export function PhaseDrawer({
+  missionId,
+  phase,
+  timeline,
+  bench = "none",
+}: {
+  missionId: string;
+  phase: MissionPhase;
+  timeline: TimelineEvent[];
+  /** Best bench result on the build target: a real Arduino pass, only a virtual-board pass, or neither. */
+  bench?: "real-pass" | "virtual-pass" | "none";
+}) {
   const now = useNow(30_000);
   const currentIndex = MISSION_PHASES.indexOf(phase);
+  const verifyIndex = MISSION_PHASES.indexOf("VERIFY");
   const recent = [...timeline].sort((x, y) => y.at.localeCompare(x.at)).slice(0, 8);
   return (
     <Box component="nav" aria-label="Mission steps" sx={{ display: "flex", flexDirection: "column", height: "100%", overflow: "auto" }}>
@@ -58,7 +70,14 @@ export function PhaseDrawer({ missionId, phase, timeline }: { missionId: string;
       <List dense>
         {MISSION_PHASES.map((p, i) => {
           if (p === "DEBUG" && phase !== "DEBUG") return null;
-          const state = i < currentIndex || phase === "DONE" ? "done" : i === currentIndex ? "current" : "next";
+          let state: "done" | "current" | "next" = i < currentIndex || phase === "DONE" ? "done" : i === currentIndex ? "current" : "next";
+          // "Test the real board" stays open until a real Arduino passes, even if the phase moved on (older servers
+          // advanced it on a virtual pass); a virtual pass only counts as practice.
+          const realTestOpen = bench !== "real-pass" && currentIndex >= verifyIndex && phase !== "DONE" && phase !== "DEBUG";
+          if (p === "VERIFY" && state === "done" && realTestOpen) state = "current";
+          // Anything after the real-board test waits for it (only reachable here through an older server's virtual pass).
+          if (i > verifyIndex && state === "current" && realTestOpen) state = "next";
+          const practised = p === "VERIFY" && state !== "done" && bench === "virtual-pass";
           return (
             <ListItem key={p} aria-current={state === "current" ? "step" : undefined} sx={{ py: 0.25 }}>
               <ListItemIcon sx={{ minWidth: 34 }}>
@@ -72,7 +91,15 @@ export function PhaseDrawer({ missionId, phase, timeline }: { missionId: string;
               </ListItemIcon>
               <ListItemText
                 primary={PHASE_COPY[p].label}
-                secondary={state === "current" ? `Now · ${PHASE_COPY[p].hint}` : state === "done" ? "Done" : undefined}
+                secondary={
+                  practised
+                    ? "Practised on the virtual board · now test with your Arduino"
+                    : state === "current"
+                      ? `Now · ${PHASE_COPY[p].hint}`
+                      : state === "done"
+                        ? "Done"
+                        : undefined
+                }
                 slotProps={{
                   primary: { sx: { fontWeight: state === "current" ? 700 : 500, color: state === "next" ? "text.secondary" : "text.primary" } },
                 }}

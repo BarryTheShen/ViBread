@@ -853,7 +853,7 @@ export default function BenchPage(): ReactElement | null {
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography variant="subtitle2" sx={{ mb: 1 }}>Highlighted breadboard artifact</Typography>
-                  <Box sx={{ "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3, filter: "drop-shadow(0 0 5px rgba(255,107,107,.8))" } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
+                  <Box sx={{ "@keyframes vb-wire-pulse": { to: { strokeDashoffset: -32 } }, "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3, filter: "drop-shadow(0 0 5px rgba(255,107,107,.8))" }, "& .vb-hl path, & .vb-hl .wire-path": { stroke: "#ff6b6b !important", strokeWidth: 6, strokeDasharray: "14 8", animation: reducedMotion ? "none" : "vb-wire-pulse 1s linear infinite" } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
                 </Box>
               </Stack>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>

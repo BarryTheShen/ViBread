@@ -12,7 +12,6 @@ import {
   Chip,
   CircularProgress,
   Divider,
-  Link,
   MobileStepper,
   Paper,
   Stack,
@@ -35,8 +34,15 @@ import {
   UsbOff,
   WifiOff,
 } from "@mui/icons-material";
-import { useParams } from "react-router";
-import { BuildApiError, fetchBuildState, postBuildStep, postPhotoCheck } from "./api.js";
+import { useNavigate, useParams } from "react-router";
+import {
+  BuildApiError,
+  fetchBuildState,
+  fetchPhoneMissions,
+  postBuildStep,
+  postPhotoCheck,
+  type PhoneMission,
+} from "./api.js";
 
 type BuildStep = BuildState["steps"][number] & { focusImageUrl?: string };
 type ImageView = "focused" | "whole";
@@ -394,9 +400,9 @@ function RecordedPhotoResult({ example }: { example: RecordedPhoto }) {
         <Typography variant="body2">
           Your photo wasn't checked. Below is a recorded Claude example, not a verdict on your photo.
         </Typography>
-        <Link href="/settings" underline="hover" sx={{ display: "inline-block", mt: 0.75, py: 0.25 }}>
-          Connect Claude in Settings
-        </Link>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>
+          Connect Claude on the laptop (Settings)
+        </Typography>
       </Alert>
       <Chip label={example.label} variant="outlined" sx={{ alignSelf: "flex-start", minHeight: 36 }} />
       <Typography variant="subtitle1" sx={{ fontWeight: 800 }}>
@@ -628,6 +634,79 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
   );
 }
 
+function PhoneBuildChooser({
+  missions,
+  loading,
+  error,
+  onSelect,
+}: {
+  missions?: PhoneMission[];
+  loading: boolean;
+  error: unknown;
+  onSelect: (missionId: string) => void;
+}) {
+  return (
+    <Box
+      component="main"
+      sx={{ minHeight: "100svh", width: "100%", px: { xs: 1.5, sm: 3 }, py: { xs: 2, sm: 3 }, display: "flex", justifyContent: "center" }}
+    >
+      <Box sx={{ width: "100%", maxWidth: 520 }}>
+        <Stack spacing={1.5}>
+          <Typography variant="overline" color="primary.main" sx={{ fontWeight: 800, letterSpacing: "0.12em" }}>
+            Mission Control · Build Mode
+          </Typography>
+          <Typography component="h1" variant="h4" sx={{ fontWeight: 900 }}>
+            Choose a build
+          </Typography>
+          {loading && (
+            <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 3 }}>
+              <Stack spacing={1.25} sx={{ alignItems: "center" }}>
+                <CircularProgress aria-label="Loading available builds" />
+                <Typography color="text.secondary">Finding released builds…</Typography>
+              </Stack>
+            </Paper>
+          )}
+          {!loading && error !== undefined && error !== null && (
+            <Alert severity="error" icon={<CloudOffOutlined />}>
+              <AlertTitle>Builds unavailable</AlertTitle>
+              {errorMessage(error)}
+            </Alert>
+          )}
+          {!loading && !error && missions?.length === 0 && (
+            <Alert severity="info" icon={<FactCheckOutlined />}>
+              Nothing to build yet — press GO for build on the laptop.
+            </Alert>
+          )}
+          {!loading && !error && missions && missions.length > 1 && (
+            <Stack component="ul" spacing={1.25} sx={{ p: 0, m: 0, listStyle: "none" }}>
+              {missions.map((mission) => (
+                <Paper component="li" key={mission.id} variant="outlined" sx={{ p: 2, borderRadius: 3 }}>
+                  <Stack spacing={1.25}>
+                    <Typography component="h2" variant="h6" sx={{ fontWeight: 800 }}>
+                      {mission.title}
+                    </Typography>
+                    <Typography variant="body2" color="text.secondary">
+                      Step {Math.max(1, mission.currentStep)} is ready
+                    </Typography>
+                    <Button
+                      type="button"
+                      variant="contained"
+                      onClick={() => onSelect(mission.id)}
+                      sx={{ minHeight: 48, borderRadius: 2.5, fontWeight: 800 }}
+                    >
+                      Open build
+                    </Button>
+                  </Stack>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+        </Stack>
+      </Box>
+    </Box>
+  );
+}
+
 export interface BuildModePageProps {
   missionId?: string;
 }
@@ -635,6 +714,7 @@ export interface BuildModePageProps {
 export default function BuildModePage({ missionId: missionIdProp }: BuildModePageProps = {}) {
   const { missionId: routeMissionId } = useParams<{ missionId: string }>();
   const missionId = missionIdProp ?? routeMissionId ?? "";
+  const navigate = useNavigate();
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)", { noSsr: true });
   const [now, setNow] = useState(() => Date.now());
   const [showPwaTip, setShowPwaTip] = useState(false);
@@ -646,6 +726,12 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
     refetchIntervalInBackground: true,
     retry: false,
   });
+  const phoneMissionsQuery = useQuery({
+    queryKey: ["phone-builds"],
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchPhoneMissions(signal),
+    enabled: missionId.length === 0,
+    retry: false,
+  });
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
@@ -654,6 +740,12 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
   useEffect(() => {
     setShowPwaTip(shouldShowPwaTip());
   }, []);
+  useEffect(() => {
+    const onlyMission = phoneMissionsQuery.data?.length === 1 ? phoneMissionsQuery.data[0] : undefined;
+    if (!missionId && onlyMission) {
+      navigate(`/b/${encodeURIComponent(onlyMission.id)}`, { replace: true });
+    }
+  }, [missionId, navigate, phoneMissionsQuery.data]);
 
   const dismissPwaTip = () => {
     try {
@@ -665,14 +757,16 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
   };
   if (isUnauthorized(query.error)) return null;
 
+  if (!missionId && phoneMissionsQuery.data?.length === 1) return null;
+
   if (!missionId) {
     return (
-      <Box component="main" sx={{ minHeight: "100svh", p: 2 }}>
-        <Alert severity="error" icon={<ErrorOutlined />}>
-          <AlertTitle>Build link is incomplete</AlertTitle>
-          This page needs a mission id. Open Build Mode again from Mission Control.
-        </Alert>
-      </Box>
+      <PhoneBuildChooser
+        missions={phoneMissionsQuery.data}
+        loading={phoneMissionsQuery.isPending}
+        error={phoneMissionsQuery.error}
+        onSelect={(id) => navigate(`/b/${encodeURIComponent(id)}`)}
+      />
     );
   }
 

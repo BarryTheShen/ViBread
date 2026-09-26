@@ -96,9 +96,12 @@ function BriefKickoff({ adapter, brief, agentBusy }: { adapter: MissionChatAdapt
 }
 
 /** Empty-chat card for a mission whose design came from somewhere other than this chat. */
-function DesignOriginNotice({ channel }: { channel?: Channel }) {
-  const text =
-    channel === "mcp"
+function DesignOriginNotice({ channel, canChat = true }: { channel?: Channel; canChat?: boolean }) {
+  const origin = channel === "mcp" ? "Claude Code designed this over MCP." : channel === "a2a" ? "Another agent designed this." : undefined;
+  // Without a Claude credential the agent can't answer, so never invite questions it can't take.
+  const text = !canChat
+    ? "Its checks, tests and build steps are ready — connect Claude in Settings to ask about it."
+    : channel === "mcp"
       ? "Claude Code designed this over MCP — ask ViBread's agent anything about it, or keep working from Claude Code."
       : channel === "a2a"
         ? "Another agent designed this — ask ViBread's agent anything about it."
@@ -111,10 +114,13 @@ function DesignOriginNotice({ channel }: { channel?: Channel }) {
           ViBread
         </Typography>
       </Stack>
+      {!canChat && origin && <Typography sx={{ mb: 0.5 }}>{origin}</Typography>}
       <Typography sx={{ fontWeight: 600 }}>{text}</Typography>
-      <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
-        Its checks, tests, and build steps are ready in the panel on the right.
-      </Typography>
+      {canChat && (
+        <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
+          Its checks, tests, and build steps are ready in the panel on the right.
+        </Typography>
+      )}
     </Paper>
   );
 }
@@ -180,7 +186,7 @@ export function MissionChat({
       suggestions={hasDesign && canChat ? SUGGESTIONS : []}
       slots={{ messageAvatar: null, messageInlineMeta: InlineMetaWithRecording, ...(hasDesign ? { emptyState: DesignOriginNotice } : {}) }}
       slotProps={{
-        emptyState: { channel: designChannel },
+        emptyState: { channel: designChannel, canChat },
         // Wrap follow-up suggestions onto more lines instead of a clipped sideways-scrolling row.
         suggestions: { sx: { "&:not([data-empty])": { flexWrap: "wrap", overflowX: "visible" } } },
       }}

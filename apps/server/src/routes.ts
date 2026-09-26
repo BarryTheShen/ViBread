@@ -175,7 +175,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
 
   router.post("/missions/:id/release", async (req, res) => {
     const user = actorUser(res, ctx);
-    const body = req.body as Partial<ReleaseRequest>;
+    const body = (req.body ?? {}) as Partial<ReleaseRequest>;
     const revision = parsePositiveInt(body.revision);
     if (body.acknowledgeMissingReview !== undefined && typeof body.acknowledgeMissingReview !== "boolean") {
       throw httpError(400, "INVALID_ACKNOWLEDGEMENT", "acknowledgeMissingReview must be a boolean");
@@ -275,6 +275,8 @@ export function mountApi(app: Express, ctx: AppContext): void {
 
   router.post("/missions/:id/build/step", async (req, res) => {
     const missionId = String(req.params.id);
+    const mission = await ctx.store.getMission(missionId);
+    if (!mission || mission.releasedRevision === undefined) throw httpError(409, "not_released", "Press GO for build first.");
     const n = parsePositiveInt((req.body as { n?: unknown }).n);
     const before = await ctx.missions.build(missionId);
     const events = await ctx.store.listEvents(missionId);
@@ -364,20 +366,23 @@ export function mountApi(app: Express, ctx: AppContext): void {
     });
     await ctx.store.saveResults(missionId, revision.n, { bench: [...(revision.results.bench ?? []), result] });
     await ctx.db.insert(runs).values({ id: result.runId, missionId, revision: revision.n, kind: result.kind, result: JSON.stringify(result), createdAt: new Date() });
+    const virtual = result.runId.startsWith("virtual-");
     await ctx.store.appendEvent({
       missionId,
       channel: "web",
       actor: actorFor(res, ctx),
       kind: "bench.run",
-      text: `Bench ${result.kind}: ${result.verdict}`,
+      text: virtual && result.kind === "selftest" ? `Virtual board self-test: ${result.verdict} (practice run)` : `Bench ${result.kind}: ${result.verdict}`,
       revision: revision.n,
       data: result,
     });
-    const phase = await ctx.machine.phase(missionId);
-    if (body.kind === "selftest" && (phase === "ASSEMBLE" || phase === "DEBUG")) {
-      await ctx.machine.send(missionId, { type: "VERIFY_STARTED" });
+    if (!virtual) {
+      const phase = await ctx.machine.phase(missionId);
+      if (body.kind === "selftest" && (phase === "ASSEMBLE" || phase === "DEBUG")) {
+        await ctx.machine.send(missionId, { type: "VERIFY_STARTED" });
+      }
+      await ctx.machine.send(missionId, result.verdict === "pass" ? { type: "VERIFY_PASSED" } : { type: "VERIFY_FAILED" });
     }
-    await ctx.machine.send(missionId, result.verdict === "pass" ? { type: "VERIFY_PASSED" } : { type: "VERIFY_FAILED" });
     res.json(result);
   });
   router.post("/missions/:id/photo", upload.single("photo"), async (req, res) => {
@@ -414,6 +419,19 @@ export function mountApi(app: Express, ctx: AppContext): void {
     ctx.lanGuard.unpairAll();
     res.json({ ok: true });
   });
+  router.get("/phone/missions", async (_req, res) => {
+    const missions = await ctx.store.listMissions("operator");
+    const result: { id: string; title: string; currentStep: number }[] = [];
+    for (const mission of missions) {
+      try {
+        const build = await ctx.missions.build(mission.id);
+        result.push({ id: mission.id, title: mission.title, currentStep: build.current });
+      } catch {
+        result.push({ id: mission.id, title: mission.title, currentStep: 1 });
+      }
+    }
+    res.json(result);
+  });
   router.get("/connections", async (req, res) => {
     const user = actorUser(res, ctx);
     res.json({
@@ -427,7 +445,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.post("/connections/tokens", async (req, res) => {
     const user = actorUser(res, ctx);
-    const body = req.body as { scopes?: unknown; ttlMinutes?: unknown };
+    const body = (req.body ?? {}) as { scopes?: unknown; ttlMinutes?: unknown };
     if (!Array.isArray(body.scopes) || body.scopes.some((scope) => typeof scope !== "string")) throw httpError(400, "INVALID_SCOPES", "scopes must be strings");
     const scopes = body.scopes as string[];
     const allowed = ["circuits:read", "circuits:write", "bench:request"];

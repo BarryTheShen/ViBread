@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import http from "node:http";
-import express, { type ErrorRequestHandler, type Express } from "express";
+import express, { type ErrorRequestHandler, type Express, type NextFunction, type Request, type RequestHandler, type Response } from "express";
 import rateLimit from "express-rate-limit";
 import pino from "pino";
 import type { Logger } from "pino";
@@ -34,12 +34,50 @@ export function createApiErrorHandler(log: Logger): ErrorRequestHandler {
   };
 }
 
+export function createHostOriginGuard(config: ServerConfig, env: NodeJS.ProcessEnv = process.env): RequestHandler {
+  const allowedHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+  for (const origin of [config.publicUrl, config.phoneUrl, ...(env.VIBREAD_ALLOWED_HOSTS?.split(",") ?? [])]) {
+    const host = hostName(origin);
+    if (host) allowedHosts.add(host);
+  }
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const host = hostName(req.headers.host);
+    if (!host || !allowedHosts.has(host)) {
+      res.status(421).json({ error: { code: "host_not_allowed", message: "This Host is not a ViBread origin." } });
+      return;
+    }
+    if (req.path.startsWith("/api/") && ["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
+      if (req.headers["sec-fetch-site"] === "cross-site") {
+        res.status(403).json({ error: { code: "origin_not_allowed", message: "Cross-site requests are not allowed." } });
+        return;
+      }
+      const origin = req.headers.origin;
+      if (origin && !allowedHosts.has(hostName(origin))) {
+        res.status(403).json({ error: { code: "origin_not_allowed", message: "This Origin is not a ViBread origin." } });
+        return;
+      }
+    }
+    next();
+  };
+}
+
+function hostName(value: string | undefined): string {
+  if (!value) return "";
+  try {
+    const parsed = new URL(value.includes("://") ? value : `http://${value}`);
+    return parsed.hostname.toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
 export async function startServer(config: ServerConfig = loadConfig()): Promise<RunningServer> {
   const log = pino({ level: process.env.LOG_LEVEL ?? "info" });
   const context = createAppContext({ config, log });
   const { ctx, auth } = context;
   const app = express();
   app.disable("x-powered-by");
+  app.use(createHostOriginGuard(config));
   app.use(ctx.lanGuard.middleware());
   if (ctx.lanGuard.active) log.info(`Phones and other computers: open ${config.phoneUrl}/?pair=${ctx.lanGuard.pairToken()}`);
   app.use(pinoHttp({
