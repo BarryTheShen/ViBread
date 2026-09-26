@@ -19,7 +19,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { BuildState, InventoryItem, RevisionDetail } from "@vibread/core";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { sendJson } from "../../api/client.js";
 import { queryKeys, useBuildState } from "../../api/hooks.js";
 import { needVsHave } from "../../inventory/PartsView.js";
@@ -90,9 +90,15 @@ export function BuildStepsView({
   const qc = useQueryClient();
   const steps = revision.results.steps?.steps ?? [];
   const [index, setIndex] = useState(0);
+  const stepCard = useRef<HTMLDivElement>(null);
   const build = useBuildState(missionId, released);
   const current = released && build.data?.revision === revision.n ? build.data.current : undefined;
   useEffect(() => setIndex(current !== undefined ? Math.max(0, current - 1) : 0), [revision.n, current]);
+  const step = steps.length > 0 ? steps[Math.min(index, steps.length - 1)] : undefined;
+  useEffect(() => {
+    if (!step) return;
+    stepCard.current?.scrollIntoView({ block: "start" });
+  }, [step?.n]);
 
   const didThis = useMutation({
     mutationFn: (n: number) => sendJson<BuildState>("POST", `/api/missions/${encodeURIComponent(missionId)}/build/step`, { n }),
@@ -113,7 +119,7 @@ export function BuildStepsView({
   if (steps.length === 0) {
     return <Alert severity="info">Build steps appear here once the design passes its checks and is laid out on the breadboard.</Alert>;
   }
-  const step = steps[Math.min(index, steps.length - 1)];
+  if (!step) return null;
   const image = revision.artifactUrls[`step-${step.n}.svg`] ?? revision.artifactUrls[`step-${step.n}.png`];
   const canMark = released && current !== undefined && step.n >= current;
   return (
@@ -139,7 +145,7 @@ export function BuildStepsView({
           Next
         </Button>
       </Stack>
-      <Paper variant="outlined" sx={{ p: 2 }}>
+      <Paper ref={stepCard} variant="outlined" sx={{ p: 2 }}>
         <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap", mb: 1 }}>
           <Typography variant="h6" component="h2" sx={{ flex: 1 }}>
             {step.title}

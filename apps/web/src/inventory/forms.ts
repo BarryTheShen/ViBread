@@ -1,4 +1,4 @@
-import type { FieldValue, PartField, PartType, ScanItem } from "@vibread/core";
+import { formatOhms, type FieldValue, type PartField, type PartType, type ScanItem } from "@vibread/core";
 
 export type FieldValues = Record<string, FieldValue>;
 
@@ -14,7 +14,7 @@ export function valuesForFields(fields: PartField[], existing: FieldValues = {})
     if (field.kind === "boolean") {
       values[field.key] = false;
     } else if (field.kind === "number") {
-      values[field.key] = field.min ?? 0;
+      values[field.key] = "";
     } else {
       values[field.key] = field.options?.[0] ?? "";
     }
@@ -26,8 +26,9 @@ export function valuesForFields(fields: PartField[], existing: FieldValues = {})
 export function parseFieldValue(field: PartField, raw: string | boolean): FieldValue {
   if (field.kind === "boolean") return Boolean(raw);
   if (field.kind === "number") {
+    if (raw === "") return "";
     const number = Number(raw);
-    return Number.isFinite(number) ? number : 0;
+    return Number.isFinite(number) ? number : "";
   }
   return String(raw);
 }
@@ -36,6 +37,7 @@ export function parseFieldValue(field: PartField, raw: string | boolean): FieldV
 export function formatFieldValue(field: PartField, value: FieldValue | undefined): string {
   if (value === undefined || value === "") return "—";
   if (field.kind === "boolean") return value ? "Yes" : "No";
+  if (field.kind === "number" && field.unit === "Ω" && typeof value === "number") return formatOhms(value);
   return `${String(value)}${field.unit ? ` ${field.unit}` : ""}`;
 }
 

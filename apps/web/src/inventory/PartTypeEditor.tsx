@@ -92,6 +92,17 @@ function pinsForTemplate(template: string): ModulePin[] {
   }
   return [];
 }
+function normalizedPinout(pins: ModulePin[]): ModulePin[] {
+  const used = new Set<string>();
+  return pins.map((pin, index) => {
+    const base = pin.name.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `pin-${index + 1}`;
+    let id = base;
+    let suffix = 2;
+    while (used.has(id)) id = `${base}-${suffix++}`;
+    used.add(id);
+    return { ...pin, id };
+  });
+}
 
 function modulePinCount(type: PartType): number {
   if (type.pinout) return type.pinout.length;
@@ -187,16 +198,16 @@ export function PartTypeEditor({ open, catalog, onClose, onSaved, source }: Part
     }
     const seen = new Set<string>();
     const normalizedFields: PartField[] = [];
-    for (const field of fields) {
-      const key = field.key.trim().replace(/[^a-zA-Z0-9_-]/g, "-");
-      if (!key || seen.has(key)) {
-        setValidation("Each field needs a unique key.");
-        return;
-      }
+    for (const [index, field] of fields.entries()) {
+      const label = field.label.trim() || `Field ${index + 1}`;
+      const base = label.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || `field-${index + 1}`;
+      let key = base;
+      let suffix = 2;
+      while (seen.has(key)) key = `${base}-${suffix++}`;
       seen.add(key);
       normalizedFields.push({
         key,
-        label: field.label.trim() || key,
+        label,
         kind: field.kind,
         ...(field.unit?.trim() ? { unit: field.unit?.trim() } : {}),
         ...(field.kind === "choice" && field.optionsText.trim() ? { options: field.optionsText.split(",").map((option) => option.trim()).filter(Boolean) } : {}),
@@ -218,6 +229,7 @@ export function PartTypeEditor({ open, catalog, onClose, onSaved, source }: Part
         : treat === "basic"
           ? { kind: "generic" as const, role }
           : { kind: "note" as const };
+    const normalizedPins = normalizedPinout(pinout);
     const payload: Omit<PartType, "id" | "builtIn"> = {
       name: trimmedName,
       category,
@@ -227,7 +239,7 @@ export function PartTypeEditor({ open, catalog, onClose, onSaved, source }: Part
       fields: normalizedFields,
       support: treat,
       mapping,
-      ...(treat === "basic" && pinout.length > 0 ? { pinout } : {}),
+      ...(treat === "basic" && normalizedPins.length > 0 ? { pinout: normalizedPins } : {}),
     };
     create.mutate(payload, {
       onSuccess: (saved) => {
@@ -289,7 +301,6 @@ export function PartTypeEditor({ open, catalog, onClose, onSaved, source }: Part
               {fields.map((field, index) => (
                 <Box key={`${field.key}-${index}`} sx={{ border: 1, borderColor: "divider", borderRadius: 1, p: 1.5 }}>
                   <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ alignItems: { md: "center" } }}>
-                    <TextField label="Key" value={field.key} size="small" onChange={(event) => updateField(index, { key: event.target.value })} sx={{ minWidth: 110 }} />
                     <TextField label="Name" value={field.label} size="small" onChange={(event) => updateField(index, { label: event.target.value })} sx={{ minWidth: 150, flex: 1 }} />
                     <FormControl size="small" sx={{ minWidth: 140 }}>
                       <InputLabel id={`field-kind-${index}`}>Kind</InputLabel>
@@ -349,6 +360,7 @@ export function PartTypeEditor({ open, catalog, onClose, onSaved, source }: Part
                       <MenuItem value="custom">Custom pin list</MenuItem>
                     </Select>
                   </FormControl>
+                  {template === "custom" ? <Button size="small" startIcon={<AddIcon />} onClick={() => setPinout((current) => [...current, { id: `pin-${current.length + 1}`, name: `Pin ${current.length + 1}`, etype: "passive" }])}>Add pin</Button> : null}
                   {pinout.map((pin, index) => (
                     <Stack key={pin.id} direction={{ xs: "column", sm: "row" }} spacing={1}>
                       <TextField label="Pin name" value={pin.name} size="small" onChange={(event) => setPinout((current) => current.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />

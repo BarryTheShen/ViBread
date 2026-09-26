@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { GOLDEN } from "@vibread/fixtures";
+import type { PartType } from "@vibread/core";
 import { loadConfig, derivePhoneUrl } from "./config.js";
 import { openDatabase, type OpenDatabase } from "./db/index.js";
 import { createMissionStore } from "./store/missions.js";
@@ -296,6 +297,8 @@ describe("server core persistence", () => {
     const { dir, opened } = makeDatabase();
     try {
       const catalog = createCatalogService({ db: opened.db, sqlite: opened.sqlite });
+      const custom = await catalog.upsert("operator", { name: "Unknown", category: "other", aliases: [], photoHint: "unknown", description: "unknown", fields: [], support: "list-only", mapping: { kind: "note" }, builtIn: false } as unknown as PartType);
+      expect(custom.id.startsWith("u-")).toBe(true);
       const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
       const inventory = createInventoryService({ db: opened.db, sqlite: opened.sqlite, catalog, store });
       const scans = createScanService({ db: opened.db, sqlite: opened.sqlite, store });
@@ -305,7 +308,8 @@ describe("server core persistence", () => {
       await inventory.upsert("operator", { items: [{ typeId: resistor.id, values: { ohms: 220 }, quantity: 3, mode: "add", source: "typed" }] });
       expect((await inventory.entries("operator")).find((entry) => entry.id === first[0]?.id)?.quantity).toBe(5);
       const scan = await scans.create("operator");
-      await scans.addPhoto("operator", scan.id, "photo-hash");
+      const withPhoto = await scans.addPhoto("operator", scan.id, "photo-hash");
+      expect(withPhoto.photos).toBe(1);
       const ready = await scans.analyze("operator", scan.id, { observations: [{ photoIndex: 0, typeId: resistor.id, label: "220 ohm resistor", count: 1, confidence: "high", box: [0, 0, 10, 10] }], analyzed: [{ hash: "analyzed-hash", width: 100, height: 100 }] }, await catalog.types("operator"), await inventory.entries("operator"));
       expect(ready.status).toBe("ready");
       expect(ready.items[0]?.cropUrl).toContain("/crops/0");

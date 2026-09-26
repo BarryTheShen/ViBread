@@ -58,6 +58,7 @@ function timedOutPrompt(run: BenchRunResult): string | undefined {
 }
 
 function RunCard({ run }: { run: BenchRunResult }) {
+  const practice = run.runId.startsWith("virtual-");
   const verdict =
     run.verdict === "pass"
       ? { label: "Passed", color: "success" as const, icon: <CheckCircleIcon /> }
@@ -70,6 +71,7 @@ function RunCard({ run }: { run: BenchRunResult }) {
         <Typography variant="h6" component="h3" sx={{ flex: 1 }}>
           {KIND[run.kind]} · design r{run.revision}
         </Typography>
+        {practice && <Chip size="small" variant="outlined" label="Virtual board · self-test (practice)" />}
         <Chip icon={verdict.icon} color={verdict.color} label={verdict.label} />
       </Stack>
       {run.verdict === "incomplete" ? (

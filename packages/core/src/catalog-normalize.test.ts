@@ -96,7 +96,34 @@ describe("typed inventory parsing", () => {
     expect(parsePartsText("5x220 ohm resistors", BUILT_IN_PART_TYPES)[0]).toMatchObject({ typeId: "resistor", quantity: 5, values: { ohms: 220 }, status: "ready" });
     expect(parsePartsText("2x 4k7 resistors", BUILT_IN_PART_TYPES)[0]).toMatchObject({ quantity: 2, values: { ohms: 4700 } });
   });
+  it("handles grouped parenthetical lists, variants, and board aliases", () => {
+    const lines = parsePartsText("9x led (Red, green, yellow, 3 each), 6 buttons, active & passive buzzer, arduino uno", BUILT_IN_PART_TYPES);
+    expect(lines).toMatchObject([
+      { typeId: "led", quantity: 3, values: { color: "red" }, status: "ready" },
+      { typeId: "led", quantity: 3, values: { color: "green" }, status: "ready" },
+      { typeId: "led", quantity: 3, values: { color: "yellow" }, status: "ready" },
+      { typeId: "button", quantity: 6, status: "ready" },
+      { typeId: "buzzer-active", quantity: 1, status: "ready" },
+      { typeId: "buzzer-passive", quantity: 1, status: "ready" },
+      { typeId: "arduino", quantity: 1, values: { board: "uno-r3" }, status: "ready" },
+    ]);
+  });
+
+  it("splits natural conjunctions and preserves ambiguous unequal lists for review", () => {
+    expect(parsePartsText("2 red and 2 green LEDs", BUILT_IN_PART_TYPES)).toMatchObject([
+      { typeId: "led", quantity: 2, values: { color: "red" }, status: "ready" },
+      { typeId: "led", quantity: 2, values: { color: "green" }, status: "ready" },
+    ]);
+    expect(parsePartsText("10 resistors (220, 1k, 10k)", BUILT_IN_PART_TYPES)).toMatchObject([
+      { typeId: "resistor", quantity: 10, values: {}, status: "needs-look" },
+    ]);
+    expect(parsePartsText("LEDs x5 (blue)", BUILT_IN_PART_TYPES)).toMatchObject([
+      { typeId: "led", quantity: 5, values: { color: "blue" }, status: "ready" },
+    ]);
+    expect(parsePartsText("red green LEDs", BUILT_IN_PART_TYPES)[0]).toMatchObject({ typeId: "led", quantity: 1, values: {}, status: "needs-look" });
+  });
 });
+
 
 describe("mission inventory conversion", () => {
   it("maps full, modelled, basic, list-only, and supply entries", () => {

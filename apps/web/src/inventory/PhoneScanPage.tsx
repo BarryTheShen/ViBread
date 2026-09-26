@@ -3,7 +3,6 @@ import CheckCircleOutlineOutlinedIcon from "@mui/icons-material/CheckCircleOutli
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import CircularProgress from "@mui/material/CircularProgress";
 import LinearProgress from "@mui/material/LinearProgress";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
@@ -57,12 +56,6 @@ export function PhoneScanPage() {
   if (!scanId) {
     return <Box sx={{ minHeight: "100vh", display: "grid", placeItems: "center", p: 2 }}><Alert severity="error">This scan link is missing its scan id.</Alert></Box>;
   }
-  if (scan.isLoading) {
-    return <PhoneFrame><CircularProgress aria-label="Loading scan" /></PhoneFrame>;
-  }
-  if (scan.error || !scan.data) {
-    return <PhoneFrame><Alert severity="error">{scan.error instanceof Error ? scan.error.message : "Could not open this scan."}</Alert></PhoneFrame>;
-  }
 
   const current = scan.data;
   return (
@@ -91,12 +84,14 @@ export function PhoneScanPage() {
             </Stack>
 </Stack>
         ) : null}
-        {current.status === "waiting" ? <Alert severity="info">{current.photos > 0 ? "Photos uploaded. When you're ready, read the list." : "Take at least one photo to continue."}</Alert> : null}
-        {current.status === "analyzing" ? <Alert severity="info">Reading your parts… keep this page open.</Alert> : null}
-        {current.status === "failed" ? <Alert severity="error">{current.error || "The scan failed. Try another photo."}</Alert> : null}
-        {current.claude === "missing" ? <Alert severity="warning">Claude is not connected for this scan. <Button onClick={() => navigate("/inventory")}>Type parts instead</Button></Alert> : null}
-        {current.status === "waiting" ? <Button variant="contained" onClick={analyzeNow} disabled={current.photos === 0 || photos.some((photo) => photo.status === "uploading") || analyze.isPending}>{analyze.isPending ? "Reading…" : "Done — read my parts"}</Button> : null}
-        {current.status === "ready" ? (
+        {scan.isLoading ? <LinearProgress aria-label="Loading scan status" /> : null}
+        {scan.error ? <Alert severity="error">{scan.error instanceof Error ? scan.error.message : "Could not load this scan yet."}</Alert> : null}
+        {current?.status === "waiting" ? <Alert severity="info">{current.photos > 0 ? `${current.photos} photo${current.photos === 1 ? "" : "s"} ready — when you're ready, read the list.` : "Take at least one photo to continue."}</Alert> : null}
+        {current?.status === "analyzing" ? <Alert severity="info">Reading your parts… keep this page open.</Alert> : null}
+        {current?.status === "failed" ? <Alert severity="error">{current.error || "The scan failed. Try another photo."}</Alert> : null}
+        {current?.claude === "missing" ? <Alert severity="warning">Claude is not connected for this scan. <Button onClick={() => navigate("/inventory")}>Type parts instead</Button></Alert> : null}
+        {current?.status === "waiting" ? <Button variant="contained" onClick={analyzeNow} disabled={current.photos === 0 || photos.some((photo) => photo.status === "uploading") || analyze.isPending}>{analyze.isPending ? "Reading…" : "Done — read my parts"}</Button> : null}
+        {current?.status === "ready" ? (
           <>
             <Alert severity="success">Check the list on your laptop (or here).</Alert>
             <ScanReview

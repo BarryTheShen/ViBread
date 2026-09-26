@@ -11,7 +11,7 @@ const fields: PartField[] = [
 
 describe("inventory field form helpers", () => {
   it("generates useful defaults for every PartField kind and preserves values", () => {
-    expect(valuesForFields(fields)).toEqual({ color: "red", ohms: 1, polarized: false, brand: "" });
+    expect(valuesForFields(fields)).toEqual({ color: "red", ohms: "", polarized: false, brand: "" });
     expect(valuesForFields(fields, { color: "blue", ohms: 220 })).toEqual({ color: "blue", ohms: 220, polarized: false, brand: "" });
   });
 });

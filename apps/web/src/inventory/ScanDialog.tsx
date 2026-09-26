@@ -65,6 +65,7 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
   const [uploading, setUploading] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraReady, setCameraReady] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -81,10 +82,12 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
     if (!cameraOpen) {
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
+      setCameraReady(false);
       return;
     }
     let disposed = false;
     setCameraError(null);
+    setCameraReady(false);
     void navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false }).then((stream) => {
       if (disposed) {
         stream.getTracks().forEach((track) => track.stop());
@@ -92,11 +95,13 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
       }
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
+      setCameraReady(true);
     }).catch(() => setCameraError("Camera access was blocked. You can upload a photo instead."));
     return () => {
       disposed = true;
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
+      setCameraReady(false);
     };
   }, [cameraOpen]);
 
@@ -107,6 +112,7 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
   }, [connections.data]);
   const scanLink = scanId ? phoneLink(connections.data?.phoneUrl, scanId, pairing) : "";
   const cameraAvailable = isCameraContextAvailable();
+  const claudeUnavailable = Boolean(connections.data?.claude && connections.data.claude.using === "none" && !connections.data.claude.connected);
 
   const ensureScan = () => {
     if (scanId) return;
@@ -157,7 +163,8 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
         {!scanId ? (
           <Stack spacing={2} sx={{ alignItems: "flex-start" }}>
             <Typography>Take photos on this computer or scan the QR code with your phone. The review list stays shared between both.</Typography>
-            <Button variant="contained" startIcon={create.isPending ? <CircularProgress size={18} /> : <QrCode2OutlinedIcon />} onClick={ensureScan} disabled={create.isPending}>{create.isPending ? "Starting scan…" : "Start a scan"}</Button>
+            {claudeUnavailable ? <Alert severity="warning" sx={{ width: "100%" }}>Claude is not connected, so camera scans are unavailable. Type parts instead.</Alert> : null}
+            <Button variant="contained" startIcon={create.isPending ? <CircularProgress size={18} /> : <QrCode2OutlinedIcon />} onClick={ensureScan} disabled={create.isPending || claudeUnavailable}>{create.isPending ? "Starting scan…" : "Start a scan"}</Button>
             {create.error ? <Alert severity="error">{create.error instanceof Error ? create.error.message : "Could not start a scan."}</Alert> : null}
             <Alert severity="info" sx={{ width: "100%" }}>
               Capture on white paper, one kind per group, no more than 10 in a pile, spaced apart, in good light. Photograph each pile once.
@@ -179,22 +186,24 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
               <input ref={inputRef} hidden type="file" accept="image/*" multiple onChange={(event) => void uploadFiles(Array.from(event.target.files ?? []))} />
               {cameraAvailable ? <Button variant="outlined" startIcon={<CameraAltOutlinedIcon />} onClick={() => setCameraOpen((value) => !value)}>{cameraOpen ? "Hide camera" : "Use this computer's camera"}</Button> : null}
             </Stack>
-            {cameraOpen ? (
+            {cameraOpen && cameraReady ? (
               <Stack spacing={1}>
                 <Box component="video" ref={videoRef} autoPlay muted playsInline sx={{ width: "100%", maxHeight: 360, objectFit: "cover", bgcolor: "background.paper", borderRadius: 1 }} />
                 <Button variant="contained" onClick={() => void capturePhoto()} disabled={!streamRef.current || uploading}>Capture photo</Button>
                 {cameraError ? <Alert severity="warning">{cameraError}</Alert> : null}
               </Stack>
-            ) : null}
+            ) : cameraOpen && cameraError ? <Alert severity="warning">{cameraError}</Alert> : null}
             {uploading ? <LinearProgress aria-label="Uploading photos" /> : null}
             {uploadedFiles.length > 0 ? <Typography variant="body2" color="text.secondary">Uploaded: {uploadedFiles.join(", ")}</Typography> : null}
-            {scan.data?.status === "waiting" ? <Alert severity="info">Waiting for photos…</Alert> : null}
+            {scan.error ? <Alert severity="error" action={<Button onClick={() => void scan.refetch()}>Retry</Button>}>{scan.error instanceof Error ? scan.error.message : "Could not refresh this scan."}</Alert> : null}
+            {scan.data?.status === "waiting" ? <Alert severity="info">{scan.data.photos > 0 ? `${scan.data.photos} photo${scan.data.photos === 1 ? "" : "s"} ready` : "Waiting for photos…"}</Alert> : null}
             {scan.data?.status === "analyzing" ? <Alert severity="info">Reading your parts…</Alert> : null}
             {scan.data?.status === "failed" ? <Alert severity="error">{scan.data.error || "The scan failed."}</Alert> : null}
             {scan.data?.claude === "missing" ? <Alert severity="warning">Claude is not connected, so camera scans cannot be read yet. <Button onClick={onTypeParts}>Type parts instead</Button></Alert> : null}
             {scan.data?.status === "waiting" ? (
-              <Button variant="contained" onClick={() => analyze.mutate()} disabled={(scan.data.photos ?? 0) === 0 || analyze.isPending}>{analyze.isPending ? "Reading…" : "Read my parts"}</Button>
+              <Button variant="contained" onClick={() => analyze.mutate()} disabled={(scan.data.photos ?? 0) === 0 || analyze.isPending || scan.data.claude === "missing"}>{analyze.isPending ? "Reading…" : "Read my parts"}</Button>
             ) : null}
+            {analyze.error ? <Alert severity="error">{analyze.error instanceof Error ? analyze.error.message : "Could not read this scan."}</Alert> : null}
             {scan.data?.status === "ready" ? <ScanReview scan={scan.data} catalog={catalog} onAccept={(request) => accept.mutate(request, { onSuccess: onClose })} onCreateType={onCreateType} /> : null}
             {accept.error ? <Alert severity="error">{accept.error instanceof Error ? accept.error.message : "Could not save this scan."}</Alert> : null}
             <Button color="inherit" onClick={reset}>Start another scan</Button>

@@ -15,12 +15,14 @@ import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
-import type { CatalogView, FieldValue, ParsedPartLine } from "@vibread/core";
+import { inventoryIdentity, type CatalogView, type FieldValue, type InventoryEntry, type ParsedPartLine } from "@vibread/core";
 import { useEffect, useState } from "react";
-import { useParseInventory, useUpsertInventory } from "../api/inventory.js";
+import { useInventory, useParseInventory, useUpsertInventory } from "../api/inventory.js";
 import { FieldValuesForm } from "./FieldValuesForm.js";
-import { valuesForFields } from "./forms.js";
+import { reviewQuantityLabel, valuesForFields } from "./forms.js";
 
 export interface TypePartsDialogProps {
   open: boolean;
@@ -29,9 +31,15 @@ export interface TypePartsDialogProps {
   onSaved(): void;
 }
 
-type EditableLine = ParsedPartLine & { id: number };
+type EditableLine = ParsedPartLine & { id: number; existing?: InventoryEntry; mode: "add" | "replace" };
+
+function valuesComplete(type: CatalogView["types"][number] | undefined, values: Record<string, FieldValue>): boolean {
+  if (!type) return false;
+  return type.fields.every((field) => !field.required || (values[field.key] !== undefined && values[field.key] !== ""));
+}
 
 export function TypePartsDialog({ open, catalog, onClose, onSaved }: TypePartsDialogProps) {
+  const inventory = useInventory();
   const parse = useParseInventory();
   const save = useUpsertInventory();
   const [text, setText] = useState("");
@@ -45,21 +53,49 @@ export function TypePartsDialog({ open, catalog, onClose, onSaved }: TypePartsDi
     }
   }, [open]);
 
+  const existingFor = (typeId: string | null, values: Record<string, FieldValue>): InventoryEntry | undefined => {
+    const type = catalog?.types.find((candidate) => candidate.id === typeId);
+    if (!type) return undefined;
+    const identity = inventoryIdentity(type, values);
+    return inventory.data?.entries.find((entry) => entry.typeId === type.id && inventoryIdentity(type, entry.values) === identity);
+  };
+
+  const statusFor = (typeId: string | null, values: Record<string, FieldValue>, candidates?: EditableLine["candidates"]): EditableLine["status"] => {
+    const type = catalog?.types.find((candidate) => candidate.id === typeId);
+    if (!type) return "unknown";
+    return valuesComplete(type, values) && !(candidates && candidates.length > 0) ? "ready" : "needs-look";
+  };
+
   const runParse = () => {
     if (!text.trim()) return;
-    parse.mutate(text, { onSuccess: (response) => setLines(response.lines.map((line, id) => ({ ...line, id }))) });
+    parse.mutate(text, {
+      onSuccess: (response) =>
+        setLines(response.lines.map((line, id) => {
+          const existing = existingFor(line.typeId, line.values);
+          return { ...line, id, existing, mode: existing ? "replace" : "add" };
+        })),
+    });
   };
 
   const updateLine = (id: number, patch: Partial<EditableLine>) => {
     setLines((current) => current.map((line) => (line.id === id ? { ...line, ...patch } : line)));
   };
 
+  const updateValues = (line: EditableLine, values: Record<string, FieldValue>) => {
+    const existing = existingFor(line.typeId, values);
+    updateLine(line.id, { values, status: statusFor(line.typeId, values, line.candidates), existing, mode: existing ? line.mode : "add" });
+  };
+
   const chooseType = (line: EditableLine, typeId: string) => {
     const type = catalog?.types.find((candidate) => candidate.id === typeId);
-    updateLine(line.id, { typeId, values: valuesForFields(type?.fields ?? [], line.values), status: type ? "ready" : "unknown" });
+    const values = valuesForFields(type?.fields ?? [], line.values);
+    const existing = existingFor(typeId, values);
+    updateLine(line.id, { typeId, values, existing, mode: existing ? "replace" : "add", status: statusFor(typeId, values) });
   };
 
   const saveLines = () => {
+    const unknownCount = lines.filter((line) => !line.typeId).length;
+    if (unknownCount > 0) return;
     const valid = lines.filter((line) => line.typeId && line.quantity > 0);
     save.mutate(
       {
@@ -67,14 +103,22 @@ export function TypePartsDialog({ open, catalog, onClose, onSaved }: TypePartsDi
           typeId: line.typeId as string,
           values: line.values,
           quantity: Math.max(1, Math.trunc(line.quantity)),
-          mode: "add" as const,
+          mode: line.mode,
           source: "typed" as const,
           ...(line.status === "needs-look" ? { status: "needs-look" as const, candidates: line.candidates } : {}),
         })),
       },
-      { onSuccess: onSaved },
+      {
+        onSuccess: () => {
+          setText("");
+          setLines([]);
+          onSaved();
+        },
+      },
     );
   };
+  const unknownCount = lines.filter((line) => !line.typeId).length;
+
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth maxWidth="md" scroll="paper" aria-labelledby="type-parts-title">
@@ -106,21 +150,30 @@ export function TypePartsDialog({ open, catalog, onClose, onSaved }: TypePartsDi
                         </Select>
                       </FormControl>
                       <TextField size="small" label="Count" type="number" value={line.quantity} onChange={(event) => updateLine(line.id, { quantity: Math.max(0, Math.trunc(Number(event.target.value) || 0)) })} slotProps={{ htmlInput: { min: 0 } }} sx={{ width: 100 }} />
+                      {line.existing ? (
+                        <>
+                          <ToggleButtonGroup size="small" exclusive value={line.mode} onChange={(_, mode: "add" | "replace" | null) => mode && updateLine(line.id, { mode })} aria-label="Add or replace">
+                            <ToggleButton value="replace">Replace</ToggleButton>
+                            <ToggleButton value="add">Add</ToggleButton>
+                          </ToggleButtonGroup>
+                          <Typography variant="caption" color="text.secondary">{reviewQuantityLabel(line.existing.quantity, line.quantity, line.mode)}</Typography>
+                        </>
+                      ) : null}
                       <IconButton aria-label={`Remove ${line.text}`} color="error" onClick={() => setLines((current) => current.filter((candidate) => candidate.id !== line.id))}><DeleteOutlineOutlinedIcon /></IconButton>
                     </Stack>
-                    {type ? <Box sx={{ mt: 1.5 }}><FieldValuesForm fields={type.fields} values={line.values} onChange={(values: Record<string, FieldValue>) => updateLine(line.id, { values })} compact /></Box> : null}
-                    {line.status === "needs-look" ? <Alert severity="warning" sx={{ mt: 1 }}>This value needs a look before it can be used in a design.</Alert> : null}
+                    {type ? <Box sx={{ mt: 1.5 }}><FieldValuesForm fields={type.fields} values={line.values} onChange={(values: Record<string, FieldValue>) => updateValues(line, values)} compact /></Box> : null}
+                    {line.status === "needs-look" ? <Alert severity="warning" sx={{ mt: 1 }}>Fill the highlighted values before adding this part.</Alert> : null}
                   </Box>
                 );
               })}
             </Stack>
           ) : null}
-          {save.error ? <Alert severity="error">{save.error instanceof Error ? save.error.message : "Could not save these parts."}</Alert> : null}
+          {unknownCount > 0 ? <Alert severity="warning">{unknownCount} row{unknownCount === 1 ? "" : "s"} still need a part type. Choose a type or remove the row before saving.</Alert> : null}
         </Stack>
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>Cancel</Button>
-        <Button variant="contained" onClick={saveLines} disabled={lines.length === 0 || lines.every((line) => !line.typeId || line.quantity <= 0) || save.isPending}>{save.isPending ? "Saving…" : "Add these parts"}</Button>
+        <Button variant="contained" onClick={saveLines} disabled={unknownCount > 0 || lines.length === 0 || lines.every((line) => !line.typeId || line.quantity <= 0) || save.isPending}>{save.isPending ? "Saving…" : "Add these parts"}</Button>
       </DialogActions>
     </Dialog>
   );
