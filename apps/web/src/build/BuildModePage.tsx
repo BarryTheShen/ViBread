@@ -44,6 +44,28 @@ type PhotoVariables = { step: number; file: File };
 const BUILD_QUERY_KEY = "mission-build";
 const POLL_INTERVAL_MS = 1_500;
 const STALE_AFTER_MS = 5_000;
+const PWA_TIP_STORAGE_KEY = "vibread:pwa-install-tip-dismissed";
+
+function isIosSafariBrowser(): boolean {
+  const userAgent = navigator.userAgent;
+  const iosDevice =
+    /iPhone|iPad|iPod/i.test(userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+  const otherIosBrowser = /CriOS|FxiOS|EdgiOS|OPiOS|GSA/i.test(userAgent);
+  return iosDevice && !otherIosBrowser && /Safari/i.test(userAgent);
+}
+
+function shouldShowPwaTip(): boolean {
+  if (!isIosSafariBrowser()) return false;
+  const standalone =
+    Boolean((navigator as Navigator & { standalone?: boolean }).standalone) ||
+    window.matchMedia("(display-mode: standalone)").matches;
+  if (standalone) return false;
+  try {
+    return window.localStorage.getItem(PWA_TIP_STORAGE_KEY) !== "1";
+  } catch {
+    return true;
+  }
+}
 
 function buildQueryKey(missionId: string): readonly [string, string] {
   return [BUILD_QUERY_KEY, missionId];
@@ -538,6 +560,7 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
   const missionId = missionIdProp ?? routeMissionId ?? "";
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)", { noSsr: true });
   const [now, setNow] = useState(() => Date.now());
+  const [showPwaTip, setShowPwaTip] = useState(false);
   const query = useQuery({
     queryKey: buildQueryKey(missionId),
     queryFn: ({ signal }: { signal: AbortSignal }) => fetchBuildState(missionId, signal),
@@ -551,6 +574,18 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
     const timer = window.setInterval(() => setNow(Date.now()), 1_000);
     return () => window.clearInterval(timer);
   }, []);
+  useEffect(() => {
+    setShowPwaTip(shouldShowPwaTip());
+  }, []);
+
+  const dismissPwaTip = () => {
+    try {
+      window.localStorage.setItem(PWA_TIP_STORAGE_KEY, "1");
+    } catch {
+      // Private browsing can deny storage; dismiss for this view regardless.
+    }
+    setShowPwaTip(false);
+  };
 
   if (!missionId) {
     return (
@@ -610,6 +645,16 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
               />
             )}
           </Stack>
+          {showPwaTip && (
+            <Alert
+              severity="info"
+              onClose={dismissPwaTip}
+              closeText="Dismiss Add to Home Screen tip"
+              sx={{ alignItems: "center", "& .MuiAlert-message": { fontSize: "0.875rem", lineHeight: 1.45 } }}
+            >
+              Add to Home Screen: tap Share, then Add to Home Screen — the build opens like an app.
+            </Alert>
+          )}
 
           <Alert severity={stale ? "warning" : "info"} icon={stale ? <WifiOff /> : <FactCheckOutlined />} role="status">
             <AlertTitle>{headline}</AlertTitle>

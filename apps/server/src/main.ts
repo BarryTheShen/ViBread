@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 import http from "node:http";
 import express, { type ErrorRequestHandler, type Express } from "express";
 import rateLimit from "express-rate-limit";
@@ -19,6 +20,18 @@ export interface RunningServer {
   server: http.Server;
   context: AppContextHandle;
   close(): Promise<void>;
+}
+
+export function createApiErrorHandler(log: Logger): ErrorRequestHandler {
+  return (error, _req, res, next) => {
+    if (res.headersSent) return next(error);
+    const deliberate = typeof error?.status === "number" && typeof error?.code === "string";
+    const status = deliberate ? error.status : 500;
+    const code = deliberate ? error.code : "INTERNAL_ERROR";
+    const message = deliberate && error instanceof Error ? error.message : "internal server error";
+    if (!deliberate || status >= 500) log.error({ err: error }, "request failed");
+    res.status(status).json({ error: { code, message } });
+  };
 }
 
 export async function startServer(config: ServerConfig = loadConfig()): Promise<RunningServer> {
@@ -93,16 +106,7 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
     app.get("*splat", (_req, res) => res.sendFile(indexPath));
   }
 
-  const apiErrorHandler: ErrorRequestHandler = (error, _req, res, next) => {
-    if (res.headersSent) return next(error);
-    const deliberate = typeof error?.status === "number" && typeof error?.code === "string";
-    const status = deliberate ? error.status : 500;
-    const code = deliberate ? error.code : "INTERNAL_ERROR";
-    const message = deliberate && error instanceof Error ? error.message : "internal server error";
-    if (!deliberate || status >= 500) log.error({ err: error }, "request failed");
-    res.status(status).json({ error: { code, message } });
-  };
-  app.use(apiErrorHandler);
+  app.use(createApiErrorHandler(log));
 
   const capcom = await startCapcom(ctx);
   const server = await new Promise<http.Server>((resolveServer, reject) => {
@@ -122,7 +126,8 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   return { app, server, context, close };
 }
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+// Run directly (`tsx src/main.ts`); compared as URLs so Windows paths and paths with spaces match too.
+if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
   const config = loadConfig();
   const running = await startServer(config);
   const shutdown = (): void => {

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import type { Request, Response } from "express";
+import type { Logger } from "pino";
 import { GOLDEN } from "@vibread/fixtures";
 import { policyFor } from "@vibread/core";
 import { openDatabase, type OpenDatabase } from "./db/index.js";
@@ -14,6 +15,7 @@ import { createLinkService } from "./services/links.js";
 import { createCapcomSpaceStore } from "./services/capcom-spaces.js";
 import { createBenchAskStore } from "./services/bench-asks.js";
 import { approvalOwnerMiddleware, missionOwnerMiddleware } from "./routes.js";
+import { createApiErrorHandler } from "./main.js";
 
 function makeDatabase(): { dir: string; opened: OpenDatabase } {
   const dir = `/tmp/vb-vitest-${randomUUID()}`;
@@ -110,6 +112,27 @@ describe("server core persistence", () => {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+  it("sanitizes unexpected filesystem errors in API responses", () => {
+    let statusCode = 0;
+    let payload: unknown;
+    const response = {
+      headersSent: false,
+      status(value: number) {
+        statusCode = value;
+        return response;
+      },
+      json(value: unknown) {
+        payload = value;
+        return response;
+      },
+    } as unknown as Response;
+    const handler = createApiErrorHandler({ error: () => undefined } as unknown as Logger);
+    const fsError = Object.assign(new Error("ENOENT: open /secret/server.sqlite"), { code: "ENOENT", errno: -2 });
+    handler(fsError, {} as Request, response, () => undefined);
+    expect(statusCode).toBe(500);
+    expect(payload).toEqual({ error: { code: "INTERNAL_ERROR", message: "internal server error" } });
+  });
+
 
 
   it("enforces policy, expiry, first decision, one-shot consume, and remote/physical boundaries", async () => {

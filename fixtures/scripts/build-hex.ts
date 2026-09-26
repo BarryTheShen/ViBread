@@ -4,13 +4,14 @@ import { execFileSync } from "node:child_process";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BOARD_PROFILES } from "@vibread/core";
 import { GOLDEN } from "../src/index.js";
 
-const root = new URL("../..", import.meta.url).pathname;
+const root = fileURLToPath(new URL("../..", import.meta.url));
 const cli = join(root, ".toolchain/bin/arduino-cli");
 const config = join(root, ".toolchain/arduino/arduino-cli.yaml");
-const outDir = new URL("../hex", import.meta.url).pathname;
+const outDir = fileURLToPath(new URL("../hex", import.meta.url));
 mkdirSync(outDir, { recursive: true });
 
 for (const design of GOLDEN) {
