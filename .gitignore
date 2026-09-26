@@ -1,6 +1,6 @@
 node_modules/
 dist/
-build/
+/build/
 .vite/
 coverage/
 *.log
@@ -11,9 +11,9 @@ coverage/
 *.db
 *.db-journal
 *.sqlite
-tmp/
+/tmp/
 .toolchain/
-data/
+/data/
 *.db-wal
 *.db-shm
 .jobs/
