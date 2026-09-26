@@ -6,6 +6,8 @@ import { Engine, type RuleProperties } from "json-rules-engine";
 import {
   BOARD_PROFILES,
   boardPin,
+  ledVf,
+  ledVfAssumed,
   modulePins,
   netIndex,
   pinKey,
@@ -14,12 +16,14 @@ import {
   type ConsoleReport,
   type Finding,
   type FindingRefs,
+  type LedVf,
+  type ModulePin,
   type Part,
   type PinMode,
   type PinModeObservation,
   type PinRef,
 } from "@vibread/core";
-import { MODULES, type ModulePin } from "@vibread/core";
+import { MODULES } from "@vibread/core";
 import type { ElectricalType } from "@vibread/core";
 import { verdictOf } from "@vibread/core";
 
@@ -28,13 +32,6 @@ const VCC_MAX = 5.25;
 const MAX_BRIGHTNESS_CURRENT_MA = 4;
 const SPICE_LOW_CURRENT_FLOOR_MA = 5;
 const SPICE_TIMEOUT_MS = 2_000;
-const SPICE_TYPICAL_VF: Record<string, number> = {
-  red: 2.05,
-  yellow: 2.10,
-  green: 2.20,
-  blue: 3.10,
-  white: 3.10,
-};
 
 interface ResistorInfo {
   part: Part;
@@ -182,6 +179,13 @@ export const ELECTRICAL_RULES: readonly RuleSpec[] = [
     severity: "warning",
     title: "This LED may be too dim at the conservative voltage corner.",
     fix: "Use a lower-value resistor only within the pin-current limit, or use a transistor/LED driver.",
+  },
+  {
+    ruleId: "LED-VF-ASSUMED",
+    fact: "ledVfAssumed",
+    severity: "info",
+    title: "This LED colour has no forward-voltage data, so a conservative assumption is being used.",
+    fix: "Add Vf min, typical, and max values for this colour to make the current and brightness checks more precise.",
   },
   {
     ruleId: "BTN-PULLUP",
@@ -431,9 +435,7 @@ function ledBranches(
   for (const led of circuit.parts.filter((part) => part.module === "led")) {
     const anodeNet = partPinNet(pinNets, led.id, "A");
     const cathodeNet = partPinNet(pinNets, led.id, "K");
-    const color = typeof led.params.color === "string" ? led.params.color : "red";
-    const vf = MODULES.led.electrical.vf?.[color as keyof NonNullable<typeof MODULES.led.electrical.vf>] ?? MODULES.led.electrical.vf?.red;
-    if (!vf) continue;
+    const vf = ledVf(led.params);
     let selected: LedBranch | undefined;
     for (const source of sources) {
       const forwardPath = mergeResistorPaths(
@@ -449,7 +451,7 @@ function ledBranches(
           resistorPath: forwardPath,
           reverse: false,
           maxMa: forwardPath.length ? currentMa(VCC_MAX, vf.min, minResistance(forwardPath)) : 0,
-          typicalMa: forwardPath.length ? currentMa(source.volts, SPICE_TYPICAL_VF[color] ?? vf.typ, sumResistance(forwardPath)) : 0,
+          typicalMa: forwardPath.length ? currentMa(source.volts, vf.typ, sumResistance(forwardPath)) : 0,
           brightMa: forwardPath.length ? currentMa(VCC_MIN, vf.max, maxResistance(forwardPath) + BOARD_PROFILES[circuit.board.profile].driverOhms.effective) : 0,
         };
         break;
@@ -671,6 +673,15 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
     };
     findings.set(ruleId, { ...previous, detail: detail.join("; "), refs });
   };
+  for (const led of circuit.parts.filter((part) => part.module === "led")) {
+    if (ledVfAssumed(led.params)) {
+      addFinding("LED-VF-ASSUMED", {
+        severity: "info",
+        detail: `${led.id} uses the conservative assumed Vf range 1.8–2.6–3.4 V.`,
+        refs: { parts: [led.id] },
+      });
+    }
+  }
   const addPinCurrent = (pin: string | undefined, current: number, refs: FindingRefs): void => {
     if (!pin) return;
     currentByPin.set(pin, (currentByPin.get(pin) ?? 0) + current);
@@ -1076,14 +1087,42 @@ const SPICE_MODELS: Record<string, Record<SpiceModelCorner, SpiceDiodeModel>> = 
     typ: { is: "8.714002e-27", n: 2, rs: 10 },
     max: { is: "2.631077e-29", n: 2, rs: 10 },
   },
+  orange: {
+    min: { is: "7.254071e-16", n: 2, rs: 10 },
+    typ: { is: "1.515395e-17", n: 2, rs: 10 },
+    max: { is: "3.165700e-19", n: 2, rs: 10 },
+  },
+  pink: {
+    min: { is: "7.254071e-16", n: 2, rs: 10 },
+    typ: { is: "3.165700e-19", n: 2, rs: 10 },
+    max: { is: "1.381522e-22", n: 2, rs: 10 },
+  },
+  purple: {
+    min: { is: "6.613232e-21", n: 2, rs: 10 },
+    typ: { is: "6.029005e-26", n: 2, rs: 10 },
+    max: { is: "2.631077e-29", n: 2, rs: 10 },
+  },
+  "warm-white": {
+    min: { is: "2.886036e-24", n: 2, rs: 10 },
+    typ: { is: "8.714002e-27", n: 2, rs: 10 },
+    max: { is: "2.631077e-29", n: 2, rs: 10 },
+  },
 };
 
-function spiceModel(color: string, corner: SpiceModelCorner): SpiceDiodeModel {
-  return (SPICE_MODELS[color] ?? SPICE_MODELS.red)[corner];
+function spiceModelFromVf(vf: number): SpiceDiodeModel {
+  const n = 2;
+  const rs = 10;
+  const thermalV = 0.02585;
+  const is = 0.02 / (Math.exp((vf - 0.02 * rs) / (n * thermalV)) - 1);
+  return { is: is.toExponential(6), n, rs };
 }
 
-function spiceDeck(color: string, corner: SpiceModelCorner, resistance: number, volts: number): string {
-  const model = spiceModel(color, corner);
+function spiceModel(color: string, corner: SpiceModelCorner, vf: LedVf, useFixedModel: boolean): SpiceDiodeModel {
+  return useFixedModel && SPICE_MODELS[color] ? SPICE_MODELS[color][corner] : spiceModelFromVf(vf[corner]);
+}
+
+function spiceDeck(color: string, corner: SpiceModelCorner, resistance: number, volts: number, vf: LedVf, useFixedModel: boolean): string {
+  const model = spiceModel(color, corner, vf, useFixedModel);
   return `* ViBread server-owned LED branch cross-check
 VVB source 0 ${volts}
 RLED source led ${resistance}
@@ -1140,6 +1179,8 @@ function runNgspice(deckPath: string, cwd: string, rawPath: string): Promise<str
 interface SpiceBranch {
   part: Part;
   color: string;
+  vf: LedVf;
+  useFixedModel: boolean;
   resistance: number;
   minResistance: number;
   maxResistance: number;
@@ -1172,9 +1213,8 @@ function spiceBranches(circuit: Circuit, options: SpiceCrossCheckOptions): Spice
     if (!sourcePath?.path) continue;
     const path = sourcePath.path;
     const color = typeof led.params.color === "string" ? led.params.color : "red";
-    const vfCorners = MODULES.led.electrical.vf?.[color as keyof NonNullable<typeof MODULES.led.electrical.vf>] ?? MODULES.led.electrical.vf?.red;
-    if (!vfCorners) continue;
-    const nominalVf = options.analyticVf?.[color] ?? SPICE_TYPICAL_VF[color] ?? vfCorners.typ;
+    const vfCorners = ledVf(led.params);
+    const nominalVf = options.analyticVf?.[color] ?? vfCorners.typ;
     const maximumCurrentVf = options.analyticVf?.[color] ?? vfCorners.min;
     const minimumCurrentVf = options.analyticVf?.[color] ?? vfCorners.max;
     const resistance = sumResistance(path);
@@ -1183,6 +1223,8 @@ function spiceBranches(circuit: Circuit, options: SpiceCrossCheckOptions): Spice
     branches.push({
       part: led,
       color,
+      vf: vfCorners,
+      useFixedModel: !Object.hasOwn(led.params, "vf"),
       resistance,
       minResistance: minimumResistance,
       maxResistance: maximumResistance,
@@ -1238,7 +1280,7 @@ export async function spiceCrossCheck(circuit: Circuit, options: SpiceCrossCheck
       for (const corner of corners) {
         const deckPath = join(work, `${branch.part.id}-${corner.name}.cir`);
         const rawPath = join(work, `${branch.part.id}-${corner.name}.raw`);
-        await writeFile(deckPath, spiceDeck(branch.color, corner.model, corner.resistance, corner.volts), "utf8");
+        await writeFile(deckPath, spiceDeck(branch.color, corner.model, corner.resistance, corner.volts, branch.vf, branch.useFixedModel), "utf8");
         try {
           const output = await runNgspice(deckPath, work, rawPath);
           const spiceMa = parseSpiceCurrent(output);
