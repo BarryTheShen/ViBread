@@ -111,6 +111,38 @@ describe("avr8js golden simulation", () => {
     const outcome = await runScenario({ circuit: moon.circuit, hex: blink25Hex, scenario });
     expect(outcome.result.ok, outcome.result.steps.map((step) => step.message).join("; ")).toBe(true);
   }, 30_000);
+  it("reports expect-part time in the requested state", async () => {
+    const design = GOLDEN.find((entry) => entry.key === "knob-night-light");
+    if (!design) throw new Error("knob fixture is required");
+    const off = await runScenario({ circuit: design.circuit, hex: readFileSync(design.hexFile, "utf8"), scenario: design.suite.scenarios[0] });
+    const on = await runScenario({ circuit: design.circuit, hex: readFileSync(design.hexFile, "utf8"), scenario: design.suite.scenarios[1] });
+    const offMessage = off.result.steps.find((step) => "expect-part" in step.step)?.message ?? "";
+    const onMessage = on.result.steps.find((step) => "expect-part" in step.step)?.message ?? "";
+    expect(offMessage).toContain("LED1 was off for 100%");
+    expect(offMessage).toContain("needed ≤ 10%");
+    expect(onMessage).toContain("LED1 was on for 100%");
+    expect(onMessage).toContain("needed ≥ 90%");
+  }, 30_000);
+  it("reports LED partState as lit-window duty", () => {
+    const knob = GOLDEN.find((entry) => entry.key === "knob-night-light");
+    if (!knob) throw new Error("knob fixture is required");
+    const half = new SimSession({ circuit: knob.circuit, hex: readFileSync(knob.hexFile, "utf8"), analog: { POT1: 0.5 } });
+    half.run(200);
+    expect(half.partState("LED1")).toBeGreaterThanOrEqual(0.45);
+    expect(half.partState("LED1")).toBeLessThanOrEqual(0.55);
+    const full = new SimSession({ circuit: knob.circuit, hex: readFileSync(knob.hexFile, "utf8"), analog: { POT1: 1 } });
+    full.run(200);
+    expect(full.partState("LED1")).toBeGreaterThanOrEqual(0.97);
+    const moonSession = new SimSession({ circuit: moon.circuit, hex: readFileSync(moon.hexFile, "utf8"), light: { LDR1: 0.05 } });
+    moonSession.run(300);
+    for (let press = 0; press < 4; press += 1) {
+      moonSession.setDigital("BTN1", true);
+      moonSession.run(120);
+      moonSession.setDigital("BTN1", false);
+      moonSession.run(150);
+    }
+    for (const part of ["LED1", "LED2", "LED3", "LED4"]) expect(moonSession.partState(part), part).toBeGreaterThanOrEqual(0.97);
+  }, 30_000);
 
   it("supports a SimSession serial round trip without RX overrun", () => {
     const session = new SimSession({ circuit: moon.circuit, hex: echoHex });

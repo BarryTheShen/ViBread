@@ -383,6 +383,22 @@ export class SimMachine {
   partState(part: string): number {
     this.accountTo(this.cpu.cycles);
     const windowStart = Math.max(0, this.cpu.cycles - Math.round((TRACE_PERIOD_MS / 1000) * CLOCK_HZ));
+    const definition = this.partsById.get(part);
+    if (definition?.module === "led") {
+      const segments = this.partSegments.get(part) ?? [];
+      let litCycles = 0;
+      let duration = 0;
+      for (const segment of segments) {
+        const overlapStart = Math.max(windowStart, segment.start);
+        const overlapEnd = Math.min(this.cpu.cycles, segment.end);
+        if (overlapEnd > overlapStart) {
+          if (segment.on) litCycles += overlapEnd - overlapStart;
+          duration += overlapEnd - overlapStart;
+        }
+      }
+      if (duration > 0) return litCycles / duration;
+      return this.partReadings.get(part)?.on ? 1 : 0;
+    }
     const segments = this.partValueSegments.get(part) ?? [];
     let weighted = 0;
     let duration = 0;
@@ -839,9 +855,12 @@ function executeStep(machine: SimMachine, step: ScenarioStep): { ok: boolean; me
     const { part, state, windowMs } = step["expect-part"];
     const start = machine.currentCycle;
     machine.run(windowMs);
-    const fraction = machine.partOnFraction(part, start);
-    const ok = state === "on" ? fraction >= 0.9 : fraction <= 0.1;
-    return ok ? { ok: true, message: `${part} was ${state} for ${(fraction * 100).toFixed(0)}% of the window` } : { ok: false, message: `${part} was ${state === "on" ? "on" : "off"} for ${(fraction * 100).toFixed(0)}% of the window` };
+    const onFraction = machine.partOnFraction(part, start);
+    const requestedFraction = state === "on" ? onFraction : 1 - onFraction;
+    const threshold = state === "on" ? "≥ 90%" : "≤ 10%";
+    const ok = state === "on" ? onFraction >= 0.9 : onFraction <= 0.1;
+    const message = `${part} was ${state} for ${(requestedFraction * 100).toFixed(0)}% of the window (needed ${threshold})`;
+    return { ok, message };
   }
   if ("expect-pwm" in step) {
     const { pin, min, max, windowMs } = step["expect-pwm"];
