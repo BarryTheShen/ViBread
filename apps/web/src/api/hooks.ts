@@ -153,17 +153,22 @@ export function useImessageCode() {
 }
 
 /**
- * Origin for links a phone will open (Build Mode QR codes). Phones can't open `localhost`: when the laptop is on
- * localhost, use the server's public URL (the MCP URL's origin from GET /api/connections) instead.
+ * Origin for links a phone will open (Build Mode QR codes). Phones can't open `localhost`, so prefer the server's
+ * `phoneUrl` (its LAN address, from GET /api/connections), then the public URL (the MCP URL's origin), then this page.
  */
 export function usePhoneOrigin(): string {
   const connections = useConnections();
   const here = window.location.origin;
+  const data: unknown = connections.data;
+  const phoneUrl = typeof data === "object" && data !== null && "phoneUrl" in data && typeof data.phoneUrl === "string" ? data.phoneUrl : undefined;
   const local = /^(localhost|127\.|\[::1\])/.test(window.location.hostname);
-  if (!local || !connections.data?.mcpUrl) return here;
-  try {
-    return new URL(connections.data.mcpUrl).origin;
-  } catch {
-    return here;
+  for (const candidate of [phoneUrl, local ? connections.data?.mcpUrl : undefined]) {
+    if (!candidate) continue;
+    try {
+      return new URL(candidate).origin;
+    } catch {
+      // not a URL: try the next source
+    }
   }
+  return here;
 }

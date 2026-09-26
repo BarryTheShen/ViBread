@@ -1,10 +1,11 @@
 import type { MissionStore, PhotoCheckResult } from "@vibread/core";
-import { ToolInputError } from "@vibread/tools";
+import { ToolInputError, isClaudeNotConnected } from "@vibread/tools";
 import { Output, generateText } from "ai";
 import type { Logger } from "pino";
 import sharp from "sharp";
 import { z } from "zod";
-import type { AgentModels } from "./models.js";
+import type { AgentModels, ResolvedModel } from "./models.js";
+import { loadRecordedRun, recordedPhotoExample } from "./recorded.js";
 import { PHOTO_SYSTEM } from "./prompts.js";
 
 const PhotoAnswerSchema = z.object({
@@ -30,7 +31,16 @@ export function createPhotoChecker(deps: { models: AgentModels; store: MissionSt
     async check(input: { missionId: string; step: number; jpeg: Uint8Array }): Promise<PhotoCheckResult> {
       const mission = await deps.store.getMission(input.missionId);
       if (!mission) throw new ToolInputError(`Mission ${input.missionId} does not exist.`, 404);
-      const { model, modelId } = await deps.models.fast(mission.ownerId);
+      let resolved: ResolvedModel;
+      try {
+        resolved = await deps.models.fast(mission.ownerId);
+      } catch (error) {
+        if (!isClaudeNotConnected(error)) throw error;
+        // PLAN §4 named fallback: no credential → the user's photo is NOT analyzed; show a clearly labeled recorded example.
+        const recordedExample = recordedPhotoExample(loadRecordedRun());
+        return { step: input.step, answers: [], summary: "Photo check needs Claude, and Claude isn't connected — your photo was not checked. Here's a recorded example of what a check looks like.", advisory: true, model: "none", recordedExample };
+      }
+      const { model, modelId } = resolved;
       const n = mission.releasedRevision ?? mission.currentRevision;
       const revision = n === undefined ? null : await deps.store.getRevision(input.missionId, n);
       if (!revision) throw new ToolInputError("This mission has no design to compare the photo with.");

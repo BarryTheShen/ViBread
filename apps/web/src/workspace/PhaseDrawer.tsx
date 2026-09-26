@@ -40,6 +40,7 @@ const CHANNEL_SUFFIX: Record<TimelineEvent["channel"], string> = {
 /** Timeline text in beginner words: no console codes, no doubled verdicts, no internal jargon. */
 export function plainEventText(e: TimelineEvent): string {
   if (e.kind === "faults.ready") return "Ready to diagnose wiring mistakes if a test fails.";
+  if (e.kind === "release.review-recorded") return "Released using the recorded independent review.";
   let text = e.text.replace(/\s\((EECOM|GUIDO|FIDO|FAO|RETRO)\)/g, "");
   text = text.replace(/\b(GO|NO-GO) — \1:?\s*/g, "$1 — ");
   return text;

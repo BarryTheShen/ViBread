@@ -17,13 +17,14 @@ import { useChat } from "@mui/x-chat/headless";
 import type { ChatDynamicToolInvocation, ChatMessage, ChatToolInvocation } from "@mui/x-chat/types";
 import { CONSOLE_IDS, CONSOLE_LABELS, type Verdict } from "@vibread/core";
 import { useId, useState } from "react";
+import { RecordedChip } from "../components/RecordedChip.js";
 import { VerdictChip } from "../components/VerdictChip.js";
 import { isRecord } from "../lib/guards.js";
 import { MONO_FONT } from "../theme.js";
 import { useMissionContext } from "../workspace/missionContext.js";
 import { ApprovalCard } from "./ApprovalCard.js";
 import { toolLabel } from "./toolLabels.js";
-import { approvalMetaOf, approvalResponse, decisionOf, toolSummaryOf } from "./uiMessages.js";
+import { approvalMetaOf, approvalResponse, decisionOf, recordedLabelOf, toolSummaryOf } from "./uiMessages.js";
 
 type Invocation = ChatToolInvocation | ChatDynamicToolInvocation;
 
@@ -79,6 +80,7 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
     );
   }
 
+  const recorded = recordedLabelOf(message.metadata);
   const running = invocation.state === "input-streaming" || invocation.state === "input-available";
   const summary = invocation.state === "output-available" ? toolSummaryOf(invocation.output) : undefined;
   // One source of truth: when the tool reports on the revision the mission detail describes, show the live console
@@ -117,6 +119,11 @@ export function ToolPartCard({ invocation, message }: { invocation: Invocation; 
           {open ? "Hide details" : "Details"}
         </Button>
       </Stack>
+      {recorded && (
+        <Box sx={{ mt: 0.5 }}>
+          <RecordedChip label={recorded} />
+        </Box>
+      )}
       {summary && (
         <Typography variant="body2" sx={{ mt: 0.5, color: "text.secondary" }}>
           {summary}

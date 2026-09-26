@@ -20,6 +20,8 @@ import { createMissionTheme } from "./theme.js";
 const HomePage = lazy(() => import("./pages/HomePage.js"));
 const MissionPage = lazy(() => import("./pages/MissionPage.js"));
 const SettingsPage = lazy(() => import("./pages/SettingsPage.js"));
+const OAuthLoginPage = lazy(() => import("./pages/OAuthLoginPage.js"));
+const OAuthConsentPage = lazy(() => import("./pages/OAuthConsentPage.js"));
 const BenchPage = lazy(() => import("./bench/BenchPage.js"));
 const BuildModePage = lazy(() => import("./build/BuildModePage.js"));
 
@@ -59,6 +61,8 @@ const router = createBrowserRouter([
       { path: "/m/:missionId/bench", element: <BenchPage /> },
       { path: "/b/:missionId", element: <BuildModePage /> },
       { path: "/settings", element: <SettingsPage /> },
+      { path: "/login", element: <OAuthLoginPage /> },
+      { path: "/consent", element: <OAuthConsentPage /> },
       { path: "*", element: <RouteError notFound /> },
     ],
   },
