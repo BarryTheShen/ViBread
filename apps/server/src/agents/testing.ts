@@ -18,6 +18,7 @@ import type { UIMessage } from "ai";
 import { MockLanguageModelV4, simulateReadableStream } from "ai/test";
 import pino from "pino";
 import type { ClaudeAccountService, ClaudeEndpoint } from "../claude/accounts.js";
+import { loadConfig } from "../config.js";
 import type { AgentDeps, MissionEvent, MissionMachine } from "./deps.js";
 import type { AgentModels } from "./models.js";
 
@@ -317,19 +318,17 @@ export function fakeClaudeAccounts(accounts: Record<string, { endpoint: ClaudeEn
 export function testDeps(): AgentDeps & { broker: MemoryBroker; machine: RecordingMachine } {
   const store = memoryStore();
   return {
-    config: {
-      port: 0,
-      host: "127.0.0.1",
-      publicUrl: "http://localhost",
-      dataDir: "/tmp/vb-agents/data",
-      singleOperator: true,
-      authSecret: "test-auth-secret-000000000000000000000000",
-      model: "mock-design",
-      fastModel: "mock-fast",
-      approvalSecret: "test-approval-secret-0000000000000000000000",
-      capcom: { provider: "off" },
-      claudeAccounts: { ompBin: "omp-not-installed", home: "/tmp/vb-agents/omp-home", brokerPort: 1 },
-    },
+    // Built by the server's own loadConfig from a fixed env, so the test config always has the current shape.
+    config: loadConfig({
+      PORT: "8802",
+      HOST: "127.0.0.1",
+      DATA_DIR: "/tmp/vb-agents/test-data",
+      BETTER_AUTH_SECRET: "test-auth-secret-000000000000000000000000",
+      VIBREAD_APPROVAL_SECRET: "test-approval-secret-0000000000000000000000",
+      VIBREAD_MODEL: "mock-design",
+      VIBREAD_FAST_MODEL: "mock-fast",
+      VIBREAD_OMP_BIN: "omp-not-installed",
+    }),
     log: pino({ level: process.env.LOG_LEVEL ?? "silent" }),
     store,
     broker: memoryBroker(),

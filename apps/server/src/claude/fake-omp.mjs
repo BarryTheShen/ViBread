@@ -55,10 +55,19 @@ if (args[0] === "--version") {
   if (!process.env.OMP_AUTH_BROKER_URL || !process.env.OMP_AUTH_BROKER_TOKEN) process.exit(2);
   console.log("\nOpen this URL in your browser:");
   console.log("https://claude.ai/oauth/authorize?client_id=fake&response_type=code&state=abc&code=true");
-  process.stdout.write("Paste the authorization code (or full redirect URL): ");
-  createInterface({ input: process.stdin }).once("line", (line) => {
-    if (line.trim() !== "good-code") {
-      console.log("Login failed: invalid authorization code");
+  const prompt = "Paste the authorization code (or full redirect URL): ";
+  const input = createInterface({ input: process.stdin });
+  const finish = (line) => {
+    const value = line.trim();
+    const state = /[#&]state=([^&#\s]+)/.exec(value)?.[1];
+    if (state && decodeURIComponent(state) !== "abc") {
+      process.stdout.write(prompt);
+      return;
+    }
+    const code = value === "good-code" ? value : /[?&]code=([^&#\s]+)/.exec(value)?.[1];
+    if (code !== "good-code") {
+      console.log("Exchanging authorization code for tokens...");
+      console.log('Login failed: anthropic token exchange failed: 400 {"error":"invalid_grant"}');
       process.exit(1);
     }
     const all = rows();
@@ -66,7 +75,9 @@ if (args[0] === "--version") {
     saveRows(all);
     console.log("Logged in");
     process.exit(0);
-  });
+  };
+  process.stdout.write(prompt);
+  input.on("line", finish);
 } else if (args[0] === "auth-gateway" && args[1] === "serve") {
   const bearer = `Bearer ${token("auth-gateway.token")}`;
   const pool = JSON.parse(readFileSync(process.env.OMP_AUTH_BROKER_ACCOUNT_POOL_FILE, "utf8")).anthropic;
