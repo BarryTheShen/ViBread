@@ -26,7 +26,7 @@ hardware, a Claude credential, and accounts (Google/GitHub/Photon) — see "Need
 | 9, 15 | Sign-in, OAuth 2.1, A2A | Built | Single-operator mode live. OAuth 2.1 (DCR + PKCE + consent + token → MCP tools) end to end in a regression test; real Claude Code 2.1.283 connects with the bearer command. Google/GitHub are config-gated (redirects tested, no real client yet) |
 | 11 | Claude Code MCP + A2A | Built | `claude mcp list` → Connected; A2A ask-back → completed artifact |
 | 13 | SPICE cross-check | Built | Part of EECOM's evidence: fixed per-color diode models at three corners; red LED 13.99 mA SPICE vs 13.41 mA analytic; goldens show no deviation, a wrong Vf assumption is flagged |
-| 16 | Connect your Claude account | Built | oh-my-pi `login anthropic` + auth-broker (random loopback port) + per-user auth-gateway; real claude.ai sign-in page reached from Settings; with the real omp a stale code fails in 0.17 s and a wrong code in ~1 s; fallback to server key tested with a protocol fake. **Real sign-in needs you** |
+| 16 | Connect your Claude account | Built | pi-ai's Anthropic OAuth (paste-back of the code/redirect address, or its local callback) or an API key; credential stored per user in the database; every agent call runs on it through pi-ai. Tested with a stand-in token endpoint (paste, `code#state`, state mismatch, rejected code, local callback, one sign-in at a time, API key, refresh failure → server key). **Real sign-in needs you** |
 | — | Desktop app (Electron) | Built | Release `desktop-v0.1.0`: Linux x64 AppImage + .deb, Windows x64 installer, macOS arm64/x64 dmg. Each packaged app smoke-tested on its own OS on GitHub Actions (Arduino compiler download + seed + compile + screenshots; first run 161 s Linux, 177 s Windows, 232–386 s macOS); .deb install-tested with apt. Real Arduino over USB untested |
 | — | Phone as a home-screen web app | Built | Manifest + icons; iPhone "Add to Home Screen" tip in Build Mode |
 
@@ -198,7 +198,7 @@ flowchart LR
     API["Express 5<br/>UI message stream (SSE) · REST · static web"]
     AUTH["Better Auth<br/>Google sign-in · sessions (OAuth AS in stretch)"]
     ORCH["Mission machine (XState)<br/>+ ApprovalBroker"]
-    AG["Agents (pi agent-core + Vercel AI SDK)<br/>design · test author · RETRO · vision"]
+    AG["Agents (pi agent-core + pi-ai)<br/>design · test author · RETRO · vision"]
     TOOLS["Tool registry<br/>circuit · checks · firmware · sim · assembly · bench"]
     MCP["MCP server /mcp<br/>(MCP SDK 1.30.1, bearer)"]
     A2A["A2A server /a2a<br/>(@a2a-js/sdk, bearer)"]
@@ -240,10 +240,11 @@ flowchart LR
   the agent code stays the same; only the credential each call uses changes.
 - **Library:** the design agent runs on **pi** in-process: `@earendil-works/pi-agent-core` 0.87.1 (`Agent`, sequential tool
   execution, `beforeToolCall` caps design attempts at 4 per turn, `finishTurn` ends the turn after `ask_user` or 20 model turns)
-  + `@earendil-works/pi-ai` 0.87.1 (Anthropic Messages provider built per run for the owner's credential). Each run rebuilds
+  + `@earendil-works/pi-ai` 0.87.1 (Claude through the owner's credential, §5.11). Each run rebuilds
   the pi transcript from the server-held UI history (`agents/pi-ui.ts`) and translates pi events into AI SDK UI message chunks
   (`createUIMessageStream` from `ai` 7.0.116), streamed with `pipeUIMessageStreamToResponse` on Express, so the web chat
-  contract is unchanged. The single-shot calls (test author, RETRO, photo check, scan) stay on `ai` + `@ai-sdk/anthropic` 4.0.65.
+  contract is unchanged. The single-shot calls (test author, RETRO, photo check, scan) also run on pi-ai: one request whose
+  only tool is the answer schema, required via `toolChoice`, validated by the zod schema (`agents/pi-object.ts`).
 - **Approvals are server-authored:** the chat history lives on the server (`messages` table). The browser sends only
   `{approvalId, decision}`; the ApprovalBroker validates it and writes the approval response into the stored history with the
   signature from `experimental_toolApprovalSecret` before the agent resumes. Spike 14 proves a signed approval resumes and executes
@@ -486,14 +487,16 @@ each tool's `read-only` / `state-changing` tag:
 - **Anthropic:** one server-side API key (secrets only, never in the browser), per-user usage caps; data-retention disclosure in the
   README.
 - **Connect your Claude account (item 16, built last — team lead's call):** the user authenticates ViBread with their Claude
-  account through OAuth, the way omp (oh-my-pi) does, by running omp's own auth setup in the backend (the `omp` 18.3.2 CLI, MIT;
-  no auth code of ours): `omp login anthropic` performs the Claude account OAuth (the Connections page shows the sign-in URL; the
-  user pastes the code or final redirect address, or the local :54545 callback completes it when the browser is on the server
-  machine) and saves the grant into an `omp auth-broker` that holds and refreshes it; one `omp auth-gateway` per connected user,
-  restricted to that user's account with an account-pool file, serves an Anthropic Messages endpoint that the AI SDK provider
-  calls (`baseURL` + bearer). All omp state lives under `DATA_DIR/claude-accounts` (its own HOME), never the operator's `~/.omp`.
-  Per mission: the owner's connected account first, else the server key (automatic fallback when the account can't serve the
-  model), else "Claude is not connected". This authorizes ViBread to use the account; it is not a ViBread sign-in.
+  account through pi-ai's own Anthropic OAuth (`@earendil-works/pi-ai` 0.87.1, MIT; no auth code of ours, no helper process):
+  `Models.login("anthropic", "oauth")` produces the claude.ai sign-in URL (the Connections page shows it); the user pastes the
+  code or the final redirect address (`localhost:53692/callback?code=…&state=…`, or `code#state`) — so a browser on another
+  machine works — or pi-ai's local callback completes it when the browser is on the server machine. An Anthropic API key is
+  the other way to connect (`POST /api/connections/claude/key`). The credential is stored per user in the `claude_accounts`
+  table behind pi-ai's `CredentialStore` contract (serialized writes; pi-ai refreshes the OAuth token inside them), and every
+  model call — design agent, test author, RETRO, photo check, scan — goes through pi-ai with it. No files, HOME or USERPROFILE
+  are involved, so it behaves the same on Windows. Per mission: the owner's credential first, else the server key (also when
+  the owner's sign-in can't be refreshed), else "Claude is not connected". This authorizes ViBread to use the account; it is
+  not a ViBread sign-in.
 
 ### 5.12 Photon CAPCOM (research/08, audit/A4)
 
@@ -539,7 +542,7 @@ channel can resume a mission.
 | Bench | webserial-flasher 1.0.1 (MIT), `@types/w3c-web-serial` |
 | Rendering | `@resvg/resvg-js` 2.6.2 (MPL-2.0), sharp 0.35.4 (Apache-2.0); breadboard/part drawings are our own SVG |
 | UI | `@mui/material` / `@mui/icons-material` 9.4.0, `@mui/x-chat` 9.0.0-alpha.18 (MIT), React 19.3, Vite 8.3.1, react-router 8, `@tanstack/react-query` 5, react-markdown 10.1, react-syntax-highlighter 16.1, qrcode.react 4.2 |
-| Claude account (item 16) | `omp` 18.3.2 CLI (MIT): `login anthropic`, `auth-broker serve`, `auth-gateway serve` |
+| Claude account (item 16) | `@earendil-works/pi-ai` 0.87.1 (MIT): Anthropic OAuth + API-key auth, `CredentialStore` |
 | Network | the chosen stable tunnel (cloudflared 2026.9.3 via Cloudflare's `any` apt repo, ngrok, or Tailscale) |
 
 Avoided on purpose: Claude Agent SDK (terms, §5.2) · MUI X Pro/Premium (commercial) · tscircuit packages without a license

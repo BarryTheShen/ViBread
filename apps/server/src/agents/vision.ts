@@ -1,10 +1,10 @@
 import type { MissionStore, PhotoCheckResult } from "@vibread/core";
 import { ToolInputError, isClaudeNotConnected } from "@vibread/tools";
-import { Output, generateText } from "ai";
 import type { Logger } from "pino";
 import sharp from "sharp";
 import { z } from "zod";
-import type { AgentModels, ResolvedModel } from "./models.js";
+import type { AgentModels, ClaudeModel } from "./models.js";
+import { completeObject } from "./pi-object.js";
 import { loadRecordedRun, recordedPhotoExample } from "./recorded.js";
 import { PHOTO_SYSTEM } from "./prompts.js";
 
@@ -31,16 +31,15 @@ export function createPhotoChecker(deps: { models: AgentModels; store: MissionSt
     async check(input: { missionId: string; step: number; jpeg: Uint8Array }): Promise<PhotoCheckResult> {
       const mission = await deps.store.getMission(input.missionId);
       if (!mission) throw new ToolInputError(`Mission ${input.missionId} does not exist.`, 404);
-      let resolved: ResolvedModel;
+      let claude: ClaudeModel;
       try {
-        resolved = await deps.models.fast(mission.ownerId, { missionId: mission.id, purpose: "photo-check" });
+        claude = await deps.models.fast(mission.ownerId, { missionId: mission.id, purpose: "photo-check" });
       } catch (error) {
         if (!isClaudeNotConnected(error)) throw error;
         // PLAN §4 named fallback: no credential → the user's photo is NOT analyzed; show a clearly labeled recorded example.
         const recordedExample = recordedPhotoExample(loadRecordedRun());
         return { step: input.step, answers: [], summary: "Photo check needs Claude, and Claude isn't connected — your photo was not checked. Here's a recorded example of what a check looks like.", advisory: true, model: "none", recordedExample };
       }
-      const { model, modelId } = resolved;
       const n = mission.releasedRevision ?? mission.currentRevision;
       const revision = n === undefined ? null : await deps.store.getRevision(input.missionId, n);
       if (!revision) throw new ToolInputError("This mission has no design to compare the photo with.");
@@ -64,27 +63,22 @@ export function createPhotoChecker(deps: { models: AgentModels; store: MissionSt
       const pngKey = revision.results.artifacts[`step-${step.n}.png`];
       const reference = pngKey ? await deps.store.getArtifact(pngKey) : null;
 
-      const result = await generateText({
-        model,
+      const output = await completeObject(claude, {
         system: PHOTO_SYSTEM,
-        output: Output.object({ schema: PhotoAnswerSchema, name: "photo_check" }),
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: `Expected state after this step:\n${JSON.stringify(expected, null, 2)}` },
-              ...(reference ? [{ type: "text" as const, text: "Expected picture:" }, { type: "file" as const, data: reference.data, mediaType: "image/png" }] : []),
-              { type: "text", text: "The builder's photo:" },
-              { type: "file", data: new Uint8Array(photo), mediaType: "image/jpeg" },
-            ],
-          },
+        schema: PhotoAnswerSchema,
+        name: "photo_check",
+        content: [
+          { type: "text", text: `Expected state after this step:\n${JSON.stringify(expected, null, 2)}` },
+          ...(reference ? [{ type: "text" as const, text: "Expected picture:" }, { type: "image" as const, data: Buffer.from(reference.data).toString("base64"), mimeType: "image/png" }] : []),
+          { type: "text", text: "The builder's photo:" },
+          { type: "image", data: photo.toString("base64"), mimeType: "image/jpeg" },
         ],
       });
 
       const known = new Set(expected.parts.map((p) => p.id));
-      const answers = result.output.answers.filter((a) => known.has(a.part));
+      const answers = output.answers.filter((a) => known.has(a.part));
       for (const id of known) if (!answers.some((a) => a.part === id)) answers.push({ part: id, status: "unknown", note: "Not assessed in the photo." });
-      const check: PhotoCheckResult = { step: step.n, answers, summary: result.output.summary, advisory: true, model: modelId };
+      const check: PhotoCheckResult = { step: step.n, answers, summary: output.summary, advisory: true, model: claude.modelId };
       // Persisting (results.photos + "photo.checked" timeline event) is the photo route's job (ServerCore).
       deps.log.info({ missionId: input.missionId, step: step.n, revision: revision.n }, "photo checked");
       return check;

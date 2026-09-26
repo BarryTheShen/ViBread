@@ -16,13 +16,12 @@ export interface ServerConfig {
   github?: { clientId: string; clientSecret: string };
   authSecret: string;
   anthropicApiKey?: string;
-  /** Anthropic Messages API base (AI SDK convention, ends in /v1): ANTHROPIC_BASE_URL, e.g. a proxy or a local bridge. */
+  /** Anthropic API origin every Claude call uses (ANTHROPIC_BASE_URL, e.g. a proxy or a local bridge); no trailing /v1. */
   anthropicBaseUrl: string;
   model: string;
   fastModel: string;
   approvalSecret: string;
   capcom: { provider: "cloud" | "terminal" | "off"; projectId?: string; projectSecret?: string; number?: string };
-  claudeAccounts: { ompBin: string; home: string };
 }
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
   const port = parsePort(env.PORT);
@@ -53,7 +52,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
     github,
     authSecret: env.BETTER_AUTH_SECRET?.trim() || readOrCreateSecret(dataDir, "better-auth-secret"),
     anthropicApiKey: env.ANTHROPIC_API_KEY?.trim() || undefined,
-    anthropicBaseUrl: trimUrl(env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com/v1"),
+    // The Anthropic SDK convention (origin, no /v1); a trailing /v1 (the AI SDK convention) is tolerated.
+    anthropicBaseUrl: trimUrl(env.ANTHROPIC_BASE_URL?.trim() || "https://api.anthropic.com").replace(/\/v1$/, ""),
     model: env.VIBREAD_MODEL?.trim() || "claude-opus-5-5",
     fastModel: env.VIBREAD_FAST_MODEL?.trim() || "claude-sonnet-5",
     approvalSecret: env.VIBREAD_APPROVAL_SECRET?.trim() || readOrCreateSecret(dataDir, "approval-secret"),
@@ -62,10 +62,6 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
       projectId: env.PHOTON_PROJECT_ID?.trim() || undefined,
       projectSecret: env.PHOTON_PROJECT_SECRET?.trim() || undefined,
       number: env.CAPCOM_NUMBER?.trim() || undefined,
-    },
-    claudeAccounts: {
-      ompBin: env.VIBREAD_OMP_BIN?.trim() || "omp",
-      home: resolve(dataDir, "claude-accounts"),
     },
   };
 }

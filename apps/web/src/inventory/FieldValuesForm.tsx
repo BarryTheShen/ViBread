@@ -2,6 +2,7 @@ import AddIcon from "@mui/icons-material/Add";
 import RemoveIcon from "@mui/icons-material/Remove";
 import FormControl from "@mui/material/FormControl";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import FormHelperText from "@mui/material/FormHelperText";
 import FormLabel from "@mui/material/FormLabel";
 import InputAdornment from "@mui/material/InputAdornment";
 import InputLabel from "@mui/material/InputLabel";
@@ -22,6 +23,21 @@ export interface FieldValuesFormProps {
   compact?: boolean;
 }
 
+/** Render a choice's unit wherever the option is shown, while preserving its raw stored value. */
+export function choiceOptionLabel(field: PartField, option: string): string {
+  return `${option}${field.unit ? ` ${field.unit}` : ""}`;
+}
+
+/** Explain package/appearance fields without implying they change the circuit. */
+export function fieldHelperText(field: PartField): string | undefined {
+  if (field.electrical) return undefined;
+  if (field.kind === "choice" && field.options?.length) {
+    const common = field.options.find((option) => option === "5") ?? field.options[0];
+    return `${field.label} — ${choiceOptionLabel(field, common)} is the most common; doesn't change the circuit`;
+  }
+  return `${field.label} doesn't change the circuit`;
+}
+
 export function FieldValuesForm({ fields, values, onChange, disabled = false, compact = false }: FieldValuesFormProps) {
   if (fields.length === 0) {
     return <FormLabel sx={{ color: "text.secondary" }}>This type has no fields.</FormLabel>;
@@ -31,20 +47,22 @@ export function FieldValuesForm({ fields, values, onChange, disabled = false, co
       {fields.map((field) => {
         const value = values[field.key];
         const id = `part-field-${field.key}`;
+        const helper = fieldHelperText(field);
         if (field.kind === "boolean") {
           return (
-            <FormControlLabel
-              key={field.key}
-              control={
-                <Switch
-                  id={id}
-                  checked={Boolean(value)}
-                  disabled={disabled}
-                  onChange={(event) => onChange({ ...values, [field.key]: parseFieldValue(field, event.target.checked) })}
-                />
-              }
-              label={field.label}
-            />
+            <FormControl key={field.key} disabled={disabled}>
+              <FormControlLabel
+                control={
+                  <Switch
+                    id={id}
+                    checked={Boolean(value)}
+                    onChange={(event) => onChange({ ...values, [field.key]: parseFieldValue(field, event.target.checked) })}
+                  />
+                }
+                label={field.label}
+              />
+              {helper ? <FormHelperText>{helper}</FormHelperText> : null}
+            </FormControl>
           );
         }
         if (field.kind === "choice") {
@@ -62,10 +80,11 @@ export function FieldValuesForm({ fields, values, onChange, disabled = false, co
                 {options.length === 0 ? <MenuItem value="">No values yet</MenuItem> : null}
                 {options.map((option) => (
                   <MenuItem key={option} value={option}>
-                    {option}
+                    {choiceOptionLabel(field, option)}
                   </MenuItem>
                 ))}
               </Select>
+              {helper ? <FormHelperText>{helper}</FormHelperText> : null}
             </FormControl>
           );
         }
@@ -80,6 +99,7 @@ export function FieldValuesForm({ fields, values, onChange, disabled = false, co
             fullWidth
             size={compact ? "small" : "medium"}
             type={field.kind === "number" ? "number" : "text"}
+            helperText={helper}
             slotProps={{
               input: field.unit ? { endAdornment: <InputAdornment position="end">{field.unit}</InputAdornment> } : undefined,
               htmlInput: {

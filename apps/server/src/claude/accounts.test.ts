@@ -1,27 +1,50 @@
-import { chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
 import { join } from "node:path";
+import { setImmediate as yieldTurn } from "node:timers/promises";
 import pino from "pino";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { loadConfig } from "../config.js";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { openDatabase, type OpenDatabase } from "../db/index.js";
-import { createClaudeAccountService, ompEnvironment, pickLoginCredential, type ClaudeAccountService } from "./accounts.js";
+import { createClaudeAccountService, type ClaudeAccountService } from "./accounts.js";
 
-const fakeOmp = fileURLToPath(new URL("./fake-omp.mjs", import.meta.url));
+/** Claude's token endpoint and profile, stood in for: records the token exchanges, answers like Anthropic does. */
+function stubAnthropicAuth(): { exchanges: Record<string, string>[] } {
+  const exchanges: Record<string, string>[] = [];
+  const realFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input);
+    if (url === "https://platform.claude.com/v1/oauth/token") {
+      const body = JSON.parse(String(init?.body)) as Record<string, string>;
+      exchanges.push(body);
+      if (body.code === "rejected-code") return new Response(JSON.stringify({ error: "invalid_grant" }), { status: 400 });
+      return Response.json({ access_token: `sk-ant-oat01-${body.code}`, refresh_token: `sk-ant-ort01-${body.code}`, expires_in: 28_800 });
+    }
+    if (url === "https://api.anthropic.com/api/oauth/profile") return Response.json({ account: { email: "flight@example.com" }, organization: { name: "Mission Control" } });
+    return realFetch(input, init);
+  });
+  return { exchanges };
+}
 
-describe("Claude account connection (oh-my-pi broker + gateway)", () => {
+const stateOf = (url: string) => new URL(url).searchParams.get("state")!;
+
+describe("Claude account connection (pi-ai sign-in, credentials in the database)", () => {
   let dir: string;
   let opened: OpenDatabase;
   let service: ClaudeAccountService;
 
   beforeAll(() => {
-    chmodSync(fakeOmp, 0o755);
     dir = mkdtempSync(join(tmpdir(), "vb-claude-"));
-    const config = loadConfig({ DATA_DIR: dir, PORT: "8999" });
-    config.claudeAccounts = { ompBin: fakeOmp, home: join(dir, "claude-accounts") };
-    opened = openDatabase(config.dataDir);
-    service = createClaudeAccountService({ config, db: opened.db, log: pino({ level: "silent" }) });
+    opened = openDatabase(dir);
+    service = createClaudeAccountService({ config: {}, db: opened.db, log: pino({ level: "silent" }) });
+  });
+
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    for (const user of ["alice", "bob"]) {
+      const pending = (await service.view(user)).pending;
+      if (pending) await service.cancel(user, pending.loginId);
+      await service.disconnect(user);
+    }
   });
 
   afterAll(async () => {
@@ -30,99 +53,81 @@ describe("Claude account connection (oh-my-pi broker + gateway)", () => {
     rmSync(dir, { recursive: true, force: true });
   });
 
-  it("connects with a pasted code, routes the user's agents to their own gateway, and disconnects", async () => {
-    expect(await service.view("alice")).toMatchObject({ available: true, connected: false, using: "none" });
+  it("a browser on another machine pastes the redirect address back; the sign-in is saved for that user only", async () => {
+    const { exchanges } = stubAnthropicAuth();
+    const { loginId, url } = await service.start("alice");
+    expect(url.startsWith("https://claude.ai/oauth/authorize?")).toBe(true);
+    expect((await service.view("alice")).pending).toMatchObject({ loginId, url });
 
-    const mismatch = await service.start("alice");
-    const mismatchStarted = Date.now();
-    await expect(service.complete("alice", mismatch.loginId, "http://localhost:54545/?code=wrong#state=other")).rejects.toMatchObject({ code: "login_state_mismatch" });
-    expect(Date.now() - mismatchStarted).toBeLessThan(2_000);
+    const pasted = `http://localhost:53692/callback?code=pasted-code&state=${stateOf(url)}`;
+    const view = await service.complete("alice", loginId, pasted);
+    expect(view).toMatchObject({ connected: true, using: "claude-account", email: "flight@example.com", orgName: "Mission Control" });
+    expect(view.pending).toBeUndefined();
+    expect(exchanges).toEqual([expect.objectContaining({ grant_type: "authorization_code", code: "pasted-code", state: stateOf(url), code_verifier: stateOf(url) })]);
+    expect(await service.credentials("alice").read("anthropic")).toMatchObject({ type: "oauth", access: "sk-ant-oat01-pasted-code", refresh: "sk-ant-ort01-pasted-code" });
+    expect(await service.credentials("bob").read("anthropic")).toBeUndefined();
+    expect((await service.view("bob")).connected).toBe(false);
+  });
 
-    const bad = await service.start("alice");
-    expect(bad.url).toMatch(/^https:\/\/claude\.ai\/oauth\/authorize\?/);
-    const badStarted = Date.now();
-    await expect(service.complete("alice", bad.loginId, "http://localhost:54545/?code=wrong#state=abc")).rejects.toMatchObject({ code: "login_failed" });
-    expect(Date.now() - badStarted).toBeLessThan(2_000);
+  it("accepts the code#state form, and refuses a code from a different sign-in with a clear error", async () => {
+    stubAnthropicAuth();
+    const first = await service.start("alice");
+    await expect(service.complete("alice", first.loginId, "some-code#not-this-sign-in")).rejects.toMatchObject({ status: 400, code: "login_state_mismatch" });
     expect((await service.view("alice")).connected).toBe(false);
 
-    const good = await service.start("alice");
-    expect((await service.view("alice")).pending?.loginId).toBe(good.loginId);
-    await expect(service.start("bob")).rejects.toMatchObject({ code: "login_busy" });
-    const connected = await service.complete("alice", good.loginId, "good-code");
-    expect(connected).toMatchObject({ connected: true, email: "user1@example.com", using: "claude-account" });
-    expect(connected.pending).toBeUndefined();
-
-    const endpoint = await service.endpointFor("alice", "claude-opus-5-5");
-    expect(endpoint?.baseURL).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/v1$/);
-    const models = await fetch(`${endpoint!.baseURL}/models`, { headers: { authorization: `Bearer ${endpoint!.authToken}` } });
-    expect(models.status).toBe(200);
-    expect(await service.endpointFor("alice", "claude-not-a-model")).toBeUndefined();
-    expect(await service.endpointFor("bob", "claude-opus-5-5")).toBeUndefined();
-
-    expect(await service.disconnect("alice")).toMatchObject({ connected: false });
-    expect(await service.endpointFor("alice", "claude-opus-5-5")).toBeUndefined();
-  }, 60_000);
-});
-
-describe("pickLoginCredential", () => {
-  const entry = (id: number, identityKey: string | null) => ({ id, provider: "anthropic", identityKey, credential: {} });
-
-  it("binds the row the login created, never another user's account", () => {
-    const entries = [entry(1, "email:a"), entry(2, "email:b"), entry(3, "email:c")];
-    expect(pickLoginCredential(entries, new Set([1, 2]), new Set([1]))?.id).toBe(3);
-    expect(pickLoginCredential(entries, new Set([1, 2, 3]), new Set([1, 3]), 2)?.id).toBe(2);
-    expect(pickLoginCredential(entries, new Set([1, 2, 3]), new Set([1]))).toBeUndefined();
-    expect(pickLoginCredential([entry(4, "email:orphan")], new Set([4]), new Set())).toBeUndefined();
-  });
-});
-
-describe("ompEnvironment", () => {
-  it("keeps only safe runtime settings and isolates the operator's own config and provider keys", () => {
-    const env = ompEnvironment(
-      {
-        PATH: "/bin",
-        HOME: "/home/op",
-        TMPDIR: "/tmp",
-        LANG: "C",
-        LC_ALL: "C",
-        TERM: "xterm",
-        SSL_CERT_FILE: "/etc/ssl/cert.pem",
-        HTTP_PROXY: "http://proxy",
-        https_proxy: "http://proxy-lower",
-        NO_PROXY: "localhost",
-        SYSTEMROOT: "C:\\Windows",
-        ANTHROPIC_API_KEY: "sk",
-        OMP_AUTH_BROKER_URL: "x",
-        PI_CODING_AGENT_DIR: "/root/.omp",
-        BETTER_AUTH_SECRET: "better",
-        VIBREAD_MODEL: "model",
-        VIBREAD_FOO: "secret",
-        PHOTON_PROJECT_SECRET: "photon",
-        GOOGLE_CLIENT_SECRET: "google",
-        GITHUB_CLIENT_SECRET: "github",
-      },
-      "/data/claude",
-    );
-    expect(env).toEqual({
-      PATH: "/bin",
-      HOME: "/data/claude",
-      TMPDIR: "/tmp",
-      LANG: "C",
-      LC_ALL: "C",
-      TERM: "xterm",
-      SSL_CERT_FILE: "/etc/ssl/cert.pem",
-      HTTP_PROXY: "http://proxy",
-      https_proxy: "http://proxy-lower",
-      NO_PROXY: "localhost",
-      SYSTEMROOT: "C:\\Windows",
-    });
+    const second = await service.start("alice");
+    expect(second.loginId).not.toBe(first.loginId);
+    expect((await service.complete("alice", second.loginId, `hash-code#${stateOf(second.url)}`)).connected).toBe(true);
   });
 
-  it("points the Windows profile directories into the isolated home, so omp never writes to the real profile", () => {
-    const env = ompEnvironment({ PATH: "C:\\Windows", USERPROFILE: "C:\\Users\\op", APPDATA: "C:\\Users\\op\\AppData\\Roaming", LOCALAPPDATA: "C:\\Users\\op\\AppData\\Local" }, "/data/claude");
-    expect(env.HOME).toBe("/data/claude");
-    expect(env.USERPROFILE).toBe("/data/claude");
-    expect(env.APPDATA).toBe(join("/data/claude", "AppData", "Roaming"));
-    expect(env.LOCALAPPDATA).toBe(join("/data/claude", "AppData", "Local"));
+  it("a code Claude rejects ends the sign-in with the reason, and nothing is stored", async () => {
+    stubAnthropicAuth();
+    const { loginId, url } = await service.start("alice");
+    await expect(service.complete("alice", loginId, `rejected-code#${stateOf(url)}`)).rejects.toMatchObject({ status: 400, code: "login_failed", message: expect.stringContaining("Claude sign-in didn't finish") });
+    expect(await service.credentials("alice").read("anthropic")).toBeUndefined();
+    await expect(service.complete("alice", loginId, "again")).rejects.toMatchObject({ status: 404, code: "login_not_found" });
+  });
+
+  it("a browser on this machine finishes through the local callback, without a paste", async () => {
+    stubAnthropicAuth();
+    const { loginId, url } = await service.start("alice");
+    const callback = await fetch(`http://127.0.0.1:53692/callback?code=callback-code&state=${stateOf(url)}`);
+    expect(callback.status).toBe(200);
+    await vi.waitFor(async () => expect((await service.view("alice")).connected).toBe(true));
+    expect((await service.view("alice")).pending).toBeUndefined();
+    // The page's "complete" call after the callback won just confirms.
+    expect((await service.complete("alice", loginId, "ignored")).connected).toBe(true);
+  });
+
+  it("one sign-in runs at a time; cancelling frees it", async () => {
+    const alice = await service.start("alice");
+    expect((await service.start("alice")).loginId).toBe(alice.loginId);
+    await expect(service.start("bob")).rejects.toMatchObject({ status: 409, code: "login_busy" });
+    await service.cancel("alice", alice.loginId);
+    expect((await service.view("alice")).pending).toBeUndefined();
+    const bob = await service.start("bob");
+    expect(bob.url.startsWith("https://claude.ai/oauth/authorize?")).toBe(true);
+  });
+
+  it("connects with an API key, and disconnecting removes the stored credential", async () => {
+    await expect(service.saveApiKey("bob", "  ")).rejects.toMatchObject({ status: 400, code: "key_required" });
+    expect(await service.saveApiKey("bob", " sk-ant-api03-bob ")).toMatchObject({ connected: true, using: "claude-account" });
+    expect(await service.credentials("bob").read("anthropic")).toEqual({ type: "api_key", key: "sk-ant-api03-bob" });
+    expect(await service.disconnect("bob")).toMatchObject({ connected: false, using: "none" });
+    expect(await service.credentials("bob").read("anthropic")).toBeUndefined();
+  });
+
+  it("credential writes are serialized per user, so a token refresh never loses a concurrent write", async () => {
+    const store = service.credentials("alice");
+    await store.modify("anthropic", async () => ({ type: "api_key", key: "0" }));
+    const bump = () =>
+      store.modify("anthropic", async (current) => {
+        const n = Number((current as { key: string }).key);
+        await yieldTurn();
+        return { type: "api_key", key: String(n + 1) };
+      });
+    await Promise.all([bump(), bump(), bump()]);
+    expect(await store.read("anthropic")).toEqual({ type: "api_key", key: "3" });
+    await expect(store.modify("openai", async () => ({ type: "api_key", key: "x" }))).rejects.toThrow("only Claude credentials");
   });
 });

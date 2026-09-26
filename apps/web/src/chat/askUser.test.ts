@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MissionShellValue } from "../contracts.js";
+import { askUserOf } from "./AskUserCard.js";
 import { MissionThread } from "./MissionChat.js";
 import { MissionShellContext } from "./missionShell.js";
 import { createMissionTransport } from "./missionTransport.js";
@@ -116,5 +117,15 @@ describe("first streamed ask_user card (issue #2)", () => {
     await chat.resumeStream();
     expect(chat.messages.filter((m) => m.role === "assistant")).toHaveLength(1);
     expectQuestionCard(renderThread(chat));
+  });
+});
+
+describe("askUserOf", () => {
+  it("shows the server's shortened display copy once the call finished, and the raw input while it streams", () => {
+    const raw = { question: "A very long question about the dish washer's modes, in more words than fit?", choices: ["Eco mode for light loads", "Normal"] };
+    const display = { summary: "Which modes?", question: "Which modes?", choices: ["Eco", "Normal"] };
+    expect(askUserOf(raw, display)).toEqual({ question: "Which modes?", choices: ["Eco", "Normal"] });
+    expect(askUserOf(raw)).toEqual(raw);
+    expect(askUserOf({ question: "Which" })).toEqual({ question: "Which", choices: [] });
   });
 });

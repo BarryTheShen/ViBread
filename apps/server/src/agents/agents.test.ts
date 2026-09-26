@@ -5,14 +5,14 @@ import { GOLDEN } from "@vibread/fixtures";
 import type { Actor, ConsoleReport, MissionStore } from "@vibread/core";
 import type { Pipeline } from "@vibread/tools";
 import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream, getCurrentTools, type AssistantMessage, type TranscriptContext } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream, getCurrentTools, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { UIMessage } from "ai";
 import express from "express";
 import { afterEach, describe, expect, it } from "vitest";
 import { createAgentRuntime, type AgentRuntime } from "./index.js";
-import { anthropicModels } from "./models.js";
+import { anthropicModels, type ClaudeModel } from "./models.js";
 import { MAX_DESIGN_ITERATIONS } from "./runs.js";
-import { jsonModel, mockModels, scriptedDesign, testDeps, type ScriptedDesign, type ScriptStep } from "./testing.js";
+import { mockModels, scriptedDesign, scriptedJson, testDeps, type ScriptStep } from "./testing.js";
 
 const golden = GOLDEN.find((g) => g.key === "moon-phase-lamp")!;
 const HUMAN: Actor = { kind: "human", id: "operator", name: "Operator", channel: "web" };
@@ -49,11 +49,9 @@ const proposeGolden: ScriptStep = { toolCalls: [{ name: "propose_design", input:
  * A hand-driven design model for stop/error paths: streams "Thinking", then either waits for the abort signal or fails
  * with `failure` (what pi-ai's Anthropic stream reports on an HTTP error).
  */
-function streamingDesign(failure?: string): ScriptedDesign {
+function streamingDesign(failure?: string): ClaudeModel {
   const { model } = scriptedDesign([]);
-  const requests: TranscriptContext[] = [];
-  const streamFn: StreamFn = (m, context, options) => {
-    requests.push(context);
+  const streamFn: StreamFn = (m, _context, options) => {
     const stream = createAssistantMessageEventStream();
     const partial: AssistantMessage = {
       role: "assistant",
@@ -74,7 +72,8 @@ function streamingDesign(failure?: string): ScriptedDesign {
     else options?.signal?.addEventListener("abort", () => end("aborted", "Request was aborted"));
     return stream;
   };
-  return { model, streamFn, requests };
+  const complete = () => Promise.reject(new Error("streamingDesign only drives the design agent"));
+  return { model, modelId: model.id, credential: { kind: "server-key" }, streamFn, complete };
 }
 
 let servers: Server[] = [];
@@ -122,7 +121,7 @@ async function say(base: string, missionId: string, text: string): Promise<Chunk
 
 async function setup(script: ScriptStep[], options: { realPipeline?: boolean } = {}) {
   const deps = testDeps();
-  const fast = jsonModel((call) => (JSON.stringify(call.prompt).includes("RETRO") ? GO_VOTE : golden.suite));
+  const fast = scriptedJson((context) => (JSON.stringify(context.messages).includes("RETRO") ? GO_VOTE : golden.suite));
   const pipeline = options.realPipeline ? undefined : goPipeline(deps.store);
   const design = scriptedDesign(script);
   const runtime = createAgentRuntime({ ...deps, models: mockModels(design, fast), ...(pipeline ? { pipeline } : {}) });
@@ -148,8 +147,8 @@ describe("design agent", () => {
     expect(revision.results.sim?.scenarios.every((s) => s.ok && s.traceKey?.startsWith("trace-"))).toBe(true);
     expect(deps.machine.events.map((e) => e.event.type)).toContain("DESIGN_READY");
     // The test author ran exactly once and never saw the sketch.
-    expect(fast.doGenerateCalls.length).toBeGreaterThanOrEqual(1);
-    const authorPrompt = JSON.stringify(fast.doGenerateCalls[0]!.prompt);
+    expect(fast.requests.length).toBeGreaterThanOrEqual(1);
+    const authorPrompt = JSON.stringify(fast.requests[0]!.messages);
     for (const marker of SKETCH_MARKERS) expect(authorPrompt).not.toContain(marker);
     expect(authorPrompt).toContain(golden.circuit.intent[0]!.text);
     expect((await deps.messages.list(mission.id)).map((m) => m.role)).toEqual(["user", "assistant"]);
@@ -168,7 +167,7 @@ describe("design agent", () => {
   it("design changes run without any approval, and the agent is never offered a release tool", async () => {
     const deps = testDeps();
     const design = scriptedDesign([proposeGolden, { text: "Revision 1 is GO — press GO for build when you're ready." }]);
-    const fast = jsonModel((call) => (JSON.stringify(call.prompt).includes("RETRO") ? GO_VOTE : golden.suite));
+    const fast = scriptedJson((context) => (JSON.stringify(context.messages).includes("RETRO") ? GO_VOTE : golden.suite));
     const pipeline = goPipeline(deps.store);
     const runtime = createAgentRuntime({ ...deps, models: mockModels(design, fast), pipeline });
     const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
@@ -188,7 +187,7 @@ describe("design agent", () => {
   it("stop aborts the active run and ends its stream", async () => {
     const deps = testDeps();
     // A model that streams one text chunk, then waits until the run is aborted.
-    const runtime = createAgentRuntime({ ...deps, models: mockModels(streamingDesign(), jsonModel([])) });
+    const runtime = createAgentRuntime({ ...deps, models: mockModels(streamingDesign(), scriptedJson([])) });
     const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
     const base = await serve(runtime);
     const response = await fetch(`${base}/api/missions/${mission.id}/chat`, {
@@ -221,11 +220,11 @@ describe("design agent", () => {
     expect(data("agent", (d) => d.outcome !== undefined)).toEqual([
       expect.objectContaining({ outcome: "done", steps: 2, finish: "stop", toolCalls: ["propose_design"], usage: { input: expect.any(Number), output: expect.any(Number) } }),
     ]);
-    // Two design-agent turns on pi (tool call, then the reply) plus the independent test author and RETRO on the fast model.
+    // Two design-agent turns (tool call, then the reply) plus the independent test author and RETRO on the fast model.
     const models = data("model", () => true);
-    expect(models.filter((d) => d.purpose === "design").map((d) => [d.model, d.credential, d.harness, d.stop, d.toolCalls])).toEqual([
-      ["mock-design", "server-key", "pi", "toolUse", ["propose_design"]],
-      ["mock-design", "server-key", "pi", "stop", undefined],
+    expect(models.filter((d) => d.purpose === "design").map((d) => [d.model, d.credential, d.stop, d.toolCalls])).toEqual([
+      ["mock-design", "server-key", "toolUse", ["propose_design"]],
+      ["mock-design", "server-key", "stop", undefined],
     ]);
     expect(models.filter((d) => d.purpose === "design").every((d) => typeof (d.usage as { input?: unknown }).input === "number" && typeof d.ms === "number")).toBe(true);
     expect(models.map((d) => d.purpose)).toEqual(expect.arrayContaining(["test-author", "retro"]));
@@ -388,7 +387,7 @@ describe("design agent on pi → chat contract", () => {
 
   it("a model failure ends the run with a readable error in the chat and the debug log", async () => {
     const deps = testDeps();
-    const runtime = createAgentRuntime({ ...deps, models: mockModels(streamingDesign("401 invalid bearer token"), jsonModel([])) });
+    const runtime = createAgentRuntime({ ...deps, models: mockModels(streamingDesign("401 invalid bearer token"), scriptedJson([])) });
     const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
     const chunks = await say(await serve(runtime), mission.id, "hi");
 
@@ -403,7 +402,7 @@ describe("design agent on pi → chat contract", () => {
 
   it("a browser that reconnects replays the running turn from its start, then follows it live", async () => {
     const deps = testDeps();
-    const runtime = createAgentRuntime({ ...deps, models: mockModels(streamingDesign(), jsonModel([])) });
+    const runtime = createAgentRuntime({ ...deps, models: mockModels(streamingDesign(), scriptedJson([])) });
     const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
     const base = await serve(runtime);
     const post = await fetch(`${base}/api/missions/${mission.id}/chat`, {

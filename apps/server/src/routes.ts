@@ -168,8 +168,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const user = actorUser(res, ctx);
     const scan = await ctx.scans.get(user.id, String(req.params.id));
     if (!scan) throw httpError(404, "SCAN_NOT_FOUND", "scan not found");
-    const connectedAccount = await ctx.claudeAccounts.endpointFor(user.id, ctx.config.fastModel).catch(() => undefined);
-    const claude = connectedAccount || ctx.config.anthropicApiKey ? "connected" : "missing";
+    const claude = (await ctx.claudeAccounts.view(user.id)).using === "none" ? "missing" : "connected";
     res.json({ ...scan, claude });
   });
   router.get("/inventory/scans/:id/crops/:index", async (req, res) => {
@@ -617,7 +616,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const link = ctx.config.capcom.number ? `sms:${ctx.config.capcom.number}?body=${encodeURIComponent(code.code)}` : undefined;
     res.status(201).json({ ...code, capcomNumber: ctx.config.capcom.number, link });
   });
-  // PLAN item 16 — connect your Claude account (oh-my-pi auth broker + gateway; see src/claude/accounts.ts).
+  // PLAN item 16 — connect your Claude account (pi-ai's Anthropic sign-in or an API key; see src/claude/accounts.ts).
   router.post("/connections/claude/start", async (_req, res) => {
     const user = actorUser(res, ctx);
     res.status(201).json(await ctx.claudeAccounts.start(user.id));
@@ -633,6 +632,12 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const body = req.body as { loginId?: unknown };
     if (typeof body.loginId === "string") await ctx.claudeAccounts.cancel(user.id, body.loginId);
     res.json(await ctx.claudeAccounts.view(user.id));
+  });
+  router.post("/connections/claude/key", async (req, res) => {
+    const user = actorUser(res, ctx);
+    const body = req.body as { key?: unknown };
+    if (typeof body.key !== "string") throw httpError(400, "INVALID_REQUEST", "key is required");
+    res.json(await ctx.claudeAccounts.saveApiKey(user.id, body.key));
   });
   router.delete("/connections/claude", async (_req, res) => {
     const user = actorUser(res, ctx);

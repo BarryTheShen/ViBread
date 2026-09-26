@@ -1,8 +1,8 @@
 import type { PartType, ScanObservation } from "@vibread/core";
-import { Output, generateText } from "ai";
 import sharp from "sharp";
 import { z } from "zod";
 import type { AgentModels } from "./models.js";
+import { completeObject } from "./pi-object.js";
 
 /**
  * Camera scan (docs/ui-redesign-plan.md §5.6): Claude reports only what it sees in photos of parts; our normalizer
@@ -109,29 +109,24 @@ export async function identifyParts(
   deps: { models: AgentModels },
   input: { ownerId: string; photos: Buffer[]; types: PartType[]; signal?: AbortSignal },
 ): Promise<{ observations: ScanObservation[]; analyzed: AnalyzedPhoto[] }> {
-  const { model } = await deps.models.fast(input.ownerId, { missionId: null, purpose: "scan" });
+  const claude = await deps.models.fast(input.ownerId, { missionId: null, purpose: "scan" });
   const analyzed = await Promise.all(input.photos.map((photo) => prepareForVision(photo)));
   const system = scanSystemPrompt(input.types);
   const known = new Set(input.types.map((t) => t.id));
   const observations: ScanObservation[] = [];
   for (const [photoIndex, photo] of analyzed.entries()) {
-    const result = await generateText({
-      model,
+    const output = await completeObject(claude, {
       system,
-      output: Output.object({ schema: ScanPhotoSchema, name: "scan_groups" }),
-      providerOptions: { anthropic: { effort: "low" } },
-      messages: [
-        {
-          role: "user",
-          content: [
-            { type: "file", data: new Uint8Array(photo.jpeg), mediaType: "image/jpeg" },
-            { type: "text", text: `This photo is ${photo.width}×${photo.height} px. List every group of parts you can see.` },
-          ],
-        },
+      schema: ScanPhotoSchema,
+      name: "scan_groups",
+      effort: "low",
+      content: [
+        { type: "image", data: photo.jpeg.toString("base64"), mimeType: "image/jpeg" },
+        { type: "text", text: `This photo is ${photo.width}×${photo.height} px. List every group of parts you can see.` },
       ],
-      ...(input.signal ? { abortSignal: input.signal } : {}),
+      ...(input.signal ? { signal: input.signal } : {}),
     });
-    for (const group of result.output.groups) {
+    for (const group of output.groups) {
       const [x, y, w, h] = clampBox(group.box as [number, number, number, number], photo);
       observations.push({
         photoIndex,

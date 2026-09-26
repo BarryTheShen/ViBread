@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 
 const port = process.env.PORT ?? "8787";
 const baseUrl = process.env.BASE_URL ?? `http://localhost:${port}`;
@@ -14,21 +14,6 @@ const headers = {
 
 function assert(condition, message) {
   if (!condition) throw new Error(message);
-}
-
-function isDirectory(path) {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function showsPiFlow(value, key = "") {
-  if (typeof value === "boolean") return value && /pi[-_ ]?ai|piBased/i.test(key);
-  if (typeof value === "string") return /flow|provider|implementation|backend|engine|auth|kind|mode|using/i.test(key) && /\bpi(?:[-_ ]?ai)?\b/i.test(value);
-  if (!value || typeof value !== "object") return false;
-  return Object.entries(value).some(([childKey, child]) => showsPiFlow(child, childKey));
 }
 
 async function responseBody(response) {
@@ -82,26 +67,19 @@ async function smoke() {
     assert(typeof startBody.url === "string" && startBody.url.startsWith("https://claude.ai/oauth/authorize"), `Claude start URL was not a Claude OAuth URL: ${describeBody(startBody)}`);
     console.log(`Claude connect smoke: start returned 201 and ${startBody.url}`);
 
-    const claudeHome = resolve(dataDir, "claude-accounts");
-    const ompDir = join(claudeHome, ".omp");
-    if (showsPiFlow(startBody)) {
-      console.log("Claude connect smoke: pi-based flow reported; skipped omp broker token path assertions.");
-    } else if (!isDirectory(ompDir)) {
-      console.log(`Claude connect smoke: no omp broker directory at ${ompDir}; skipped omp broker token path assertions.`);
-    } else {
-      const isolatedToken = join(ompDir, "auth-broker.token");
-      console.log(`Claude connect smoke: omp broker flow; checking isolated token ${isolatedToken}`);
-      assert(existsSync(isolatedToken), `Expected isolated omp broker token at ${isolatedToken}`);
-      if (process.platform === "win32") {
-        const userProfile = process.env.USERPROFILE;
-        assert(userProfile, "USERPROFILE is missing on Windows; cannot verify profile isolation");
-        const profileToken = join(userProfile, ".omp", "auth-broker.token");
-        assert(!existsSync(profileToken), `omp broker token leaked into the Windows profile: ${profileToken}`);
-        console.log(`Claude connect smoke: Windows profile token absent (${profileToken}); isolated token present.`);
-      } else {
-        console.log("Claude connect smoke: Linux profile-token check skipped; isolated token present.");
-      }
+    // pi-ai's sign-in keeps nothing on disk: the pending login lives in the server, the credential in its database.
+    const leftovers = ["claude-accounts", ".omp"].map((name) => join(dataDir, name)).filter((path) => existsSync(path));
+    assert(leftovers.length === 0, `Claude sign-in wrote files under DATA_DIR: ${leftovers.join(", ")}`);
+    if (process.platform === "win32") {
+      const userProfile = process.env.USERPROFILE;
+      assert(userProfile, "USERPROFILE is missing on Windows; cannot verify profile isolation");
+      const profileToken = join(userProfile, ".omp", "auth-broker.token");
+      assert(!existsSync(profileToken), `A Claude sign-in token was written into the Windows profile: ${profileToken}`);
     }
+    const pending = await fetch(`${baseUrl}/api/connections`, { headers });
+    const connections = await responseBody(pending);
+    assert(connections?.claude?.pending?.loginId === loginId, `GET /api/connections doesn't show the pending sign-in: ${describeBody(connections)}`);
+    console.log("Claude connect smoke: pending sign-in listed; nothing written to disk or the user profile.");
 
     const cancelledResponse = await post("/api/connections/claude/cancel", { loginId });
     assert(cancelledResponse.response.status === 200, `Claude cancel returned ${cancelledResponse.response.status}: ${describeBody(cancelledResponse.body)}`);

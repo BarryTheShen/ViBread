@@ -32,8 +32,9 @@ const ERRORS: Record<string, string> = {
   login_failed: "Claude didn't accept that code, so this sign-in has ended. Click Connect to start a new one, then paste the newest code (or the whole address).",
   login_not_found: "That sign-in expired or was already used. Click Connect to start a new one.",
   login_busy: "A sign-in is already in progress. Finish or cancel it first.",
-  claude_account_unknown: "Signed in, but ViBread couldn't tell which Claude account it was. Try connecting again.",
-  omp_unavailable: "The Claude connection service isn't running on this server right now. Try again in a minute.",
+  login_state_mismatch: "That code belongs to a different sign-in. Paste the address from the newest Claude tab, or click Connect to start over.",
+  code_required: "Paste the code (or the whole address) from the Claude sign-in page first.",
+  login_unavailable: "Claude sign-in isn't available right now. Try again in a minute.",
 };
 
 function friendly(error: Error): string {
@@ -41,7 +42,7 @@ function friendly(error: Error): string {
   return error.message;
 }
 
-/** PLAN item 16 — "Connect your Claude account" (oh-my-pi's Claude login, driven by the server). */
+/** PLAN item 16 — "Connect your Claude account" (pi's Claude sign-in, driven by the server). */
 export function ClaudeAccountSection() {
   const qc = useQueryClient();
   // Poll while a sign-in is pending: on the server's own machine the login finishes by itself (localhost callback).
@@ -96,8 +97,6 @@ export function ClaudeAccountSection() {
           </ErrorOrSignIn>
         ) : !claude ? (
           <Alert severity="warning">This server doesn't report Claude account status yet.</Alert>
-        ) : !claude.available ? (
-          <Typography sx={{ color: "text.disabled" }}>This server can't connect Claude accounts (oh-my-pi isn't installed).</Typography>
         ) : (
           <>
             <Typography sx={{ fontWeight: 600 }}>{USING[claude.using]}</Typography>

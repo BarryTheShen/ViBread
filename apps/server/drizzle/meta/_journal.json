@@ -50,6 +50,20 @@
       "when": 1790452627061,
       "tag": "0006_mature_charles_xavier",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1790459345631,
+      "tag": "0007_drop_omp_claude_accounts",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1790459347076,
+      "tag": "0008_pi_claude_credentials",
+      "breakpoints": true
     }
   ]
 }

@@ -3,7 +3,7 @@ import sharp from "sharp";
 import { describe, expect, it } from "vitest";
 import { anthropicModels } from "./models.js";
 import { HIGH_RES_LIMITS, cutCrop, identifyParts, prepareForVision, scanSystemPrompt, visionSize } from "./scan.js";
-import { jsonModel, mockModels, scriptedDesign } from "./testing.js";
+import { mockModels, scriptedDesign, scriptedJson } from "./testing.js";
 
 const tokens = (w: number, h: number) => Math.ceil(w / 28) * Math.ceil(h / 28);
 
@@ -66,7 +66,7 @@ describe("scan vision", () => {
         ],
       },
     ];
-    const fast = jsonModel(answers);
+    const fast = scriptedJson(answers);
     const result = await identifyParts(
       { models: mockModels(scriptedDesign([]), fast) },
       { ownerId: "operator", photos: [await photo(4032, 3024), await photo(800, 600)], types: [...BUILT_IN_PART_TYPES, USER_TYPE] },
@@ -78,13 +78,12 @@ describe("scan vision", () => {
       { photoIndex: 1, typeId: "u-thermistor", label: "black bead", count: 2, confidence: "check", box: [10, 10, 790, 50] },
       { photoIndex: 1, typeId: null, label: "odd box", count: 1, confidence: "unknown", box: [0, 0, 20, 20], printed: "OUTATIME" },
     ]);
-    expect(fast.doGenerateCalls).toHaveLength(2);
-    const call = fast.doGenerateCalls[0]!;
-    const user = call.prompt.find((m) => m.role === "user") as { content: { type: string; mediaType?: string; text?: string }[] };
-    expect(user.content[0]).toMatchObject({ type: "file", mediaType: "image/jpeg" });
+    expect(fast.requests).toHaveLength(2);
+    const user = fast.requests[0]!.messages.find((m) => m.role === "user") as { content: { type: string; mimeType?: string; text?: string }[] };
+    expect(user.content[0]).toMatchObject({ type: "image", mimeType: "image/jpeg" });
     expect(user.content[1]!.text).toContain(`${result.analyzed[0]!.width}×${result.analyzed[0]!.height} px`);
-    expect(call.providerOptions?.anthropic).toMatchObject({ effort: "low" });
-    expect(call.responseFormat).toMatchObject({ type: "json" });
+    // One structured answer per photo: the answer schema is the only tool and Claude must call it, at low effort.
+    expect(fast.requestOptions[0]).toMatchObject({ effort: "low", toolChoice: { type: "tool", name: "scan_groups" } });
   });
 
   it("needs a Claude credential (owner's account or server key)", async () => {
