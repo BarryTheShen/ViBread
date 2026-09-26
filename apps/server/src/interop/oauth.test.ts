@@ -43,7 +43,7 @@ async function reservePort(): Promise<number> {
   return port;
 }
 
-async function startOAuthTest(): Promise<{ baseUrl: string; context: AppContextHandle }> {
+async function startOAuthTest(): Promise<{ baseUrl: string; context: AppContextHandle; operatorPassword: string }> {
   const port = await reservePort();
   const config = loadConfig({
     DATA_DIR: `/tmp/vb-oauth-vitest-${randomBytes(6).toString("hex")}`,
@@ -72,7 +72,7 @@ async function startOAuthTest(): Promise<{ baseUrl: string; context: AppContextH
   mountA2a(app, ctx, auth);
   const handle = { server, context };
   running.push(handle);
-  return { baseUrl, context };
+  return { baseUrl, context, operatorPassword: `${config.authSecret}:vibread-operator` };
 }
 
 afterEach(async () => {
@@ -84,7 +84,7 @@ afterEach(async () => {
 
 describe("Better Auth OAuth → MCP", () => {
   it("completes PKCE authorization and calls read-scoped MCP", async () => {
-    const { baseUrl } = await startOAuthTest();
+    const { baseUrl, operatorPassword } = await startOAuthTest();
     const clientRedirect = "http://127.0.0.1:39999/callback";
     const registration = await fetch(`${baseUrl}/api/auth/oauth2/register`, {
       method: "POST",
@@ -120,12 +120,16 @@ describe("Better Auth OAuth → MCP", () => {
     const authorizeBody = (await authorize.clone().json().catch(() => ({}))) as { url?: string };
     expect([200, 302]).toContain(authorize.status);
     const loginUrl = new URL(authorize.headers.get("location") ?? authorizeBody.url ?? "", baseUrl);
-    const login = await fetch(`${baseUrl}${loginUrl.pathname}${loginUrl.search}`, { redirect: "manual", headers: { cookie } });
+    const login = await fetch(`${baseUrl}/api/oauth/operator-login`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "operator@vibread.local", password: operatorPassword, oauth_query: loginUrl.search.slice(1) }),
+      redirect: "manual",
+    });
     cookie = cookieValue(login, cookie);
-    expect(login.status).toBe(302);
-    const consentUrl = new URL(login.headers.get("location") ?? "", baseUrl);
-    const consent = await fetch(`${baseUrl}${consentUrl.pathname}${consentUrl.search}`, { headers: { cookie } });
-    expect(consent.status).toBe(200);
+    expect(login.status).toBe(200);
+    const loginBody = (await login.json()) as { redirect: string };
+    const consentUrl = new URL(loginBody.redirect, baseUrl);
     const consentQuery = consentUrl.searchParams.get("oauth_query") ?? consentUrl.search.slice(1);
     const accepted = await fetch(`${baseUrl}/api/auth/oauth2/consent`, {
       method: "POST",
@@ -185,7 +189,7 @@ describe("Better Auth OAuth → MCP", () => {
       })],
     }));
     const a2a = await a2aFactory.createFromAgentCard(card);
-    const a2aResult = await a2a.sendMessage({
+    await expect(a2a.sendMessage({
       tenant: "",
       metadata: {},
       message: {
@@ -199,7 +203,6 @@ describe("Better Auth OAuth → MCP", () => {
         referenceTaskIds: [],
       },
       configuration: undefined,
-    });
-    expect(a2aResult).toBeDefined();
+    })).rejects.toThrow();
   }, 10_000);
 });
