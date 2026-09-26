@@ -236,6 +236,9 @@ export default function MissionPage() {
                 ))}
               </Box>
             )}
+            {/* Notices above the chat never shrink under the chat (flex children default to flex-shrink: 1, which let
+                them overflow onto the chat at 1024 px); if they get tall they scroll on their own. */}
+            <Box sx={{ flexShrink: 0, maxHeight: "50%", overflowY: "auto", pb: 1 }}>
             <MissionComplete
               missionId={missionId}
               phase={m.phase}
@@ -267,6 +270,7 @@ export default function MissionPage() {
                 Claude isn't connected, so the agent can't chat. Checks, tests, and building still work.
               </Alert>
             )}
+            </Box>
             <Box sx={{ flex: 1, minHeight: 0 }}>
               <MissionChat
                 missionId={missionId}
@@ -274,6 +278,8 @@ export default function MissionPage() {
                 adapter={adapter}
                 brief={m.brief}
                 hasDesign={m.currentRevision !== undefined}
+                // Follow-up suggestions can't be answered while no Claude credential exists.
+                canChat={!claudeMissing}
                 designChannel={detail.revision?.author.channel}
                 // The server moves a fresh mission BRIEF → CLARIFY on creation (BRIEF_RECEIVED); either way no design exists yet.
                 isNewMission={(m.phase === "BRIEF" || m.phase === "CLARIFY") && m.currentRevision === undefined}

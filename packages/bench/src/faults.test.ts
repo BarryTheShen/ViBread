@@ -119,4 +119,20 @@ describe("shared fault catalog", () => {
     expect(result.diagnosis.candidates[0]?.cause).toBe("led-missing");
     expect(result.diagnosis.candidates[0]?.highlight.holes.length).toBeGreaterThan(0);
   });
+  it("does not suggest a fix for an incomplete prompt timeout", async () => {
+    const plan = planSelfTest(moon.circuit, revisionHash(moon.circuit));
+    const result = await evaluateRun({
+      circuit: moon.circuit,
+      plan,
+      lines: [{ t: "ask", id: "btn0-press", test: "button.interactive", kind: "press-hold", part: "BTN1", choices: ["done"], timeoutMs: 20_000 }],
+      answers: {},
+      kind: "selftest",
+      revision: 1,
+      runId: "timeout",
+    });
+    expect(result.verdict).toBe("incomplete");
+    expect(result.diagnosis.attribution).toBe("none");
+    expect(result.diagnosis.candidates).toHaveLength(0);
+    expect(result.diagnosis.summary).toContain("Nobody answered 'Press the button' in time");
+  });
 });

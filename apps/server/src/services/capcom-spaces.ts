@@ -14,6 +14,8 @@ export interface CapcomSpaceStore {
   put(input: { spaceId: string; handle: string; userId: string; missionId?: string | null }): Promise<CapcomSpace>;
   setMission(spaceId: string, missionId: string | null): Promise<CapcomSpace | null>;
   listForMission(missionId: string): Promise<CapcomSpace[]>;
+  list(): Promise<CapcomSpace[]>;
+  listAll(): Promise<CapcomSpace[]>;
 }
 
 interface CapcomSpaceRow {
@@ -54,6 +56,15 @@ export class SqlCapcomSpaceStore implements CapcomSpaceStore {
 
   async listForMission(missionId: string): Promise<CapcomSpace[]> {
     const rows = this.deps.sqlite.prepare('SELECT * FROM "capcom_spaces" WHERE "missionId" = ? ORDER BY "updatedAt" DESC').all(missionId) as CapcomSpaceRow[];
+    return rows.map((row) => this.fromRow(row));
+  }
+
+  async list(): Promise<CapcomSpace[]> {
+    return this.listAll();
+  }
+
+  async listAll(): Promise<CapcomSpace[]> {
+    const rows = this.deps.sqlite.prepare('SELECT * FROM "capcom_spaces" ORDER BY "updatedAt" DESC').all() as CapcomSpaceRow[];
     return rows.map((row) => this.fromRow(row));
   }
 

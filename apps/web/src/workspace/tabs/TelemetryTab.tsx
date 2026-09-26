@@ -40,6 +40,23 @@ const ATTRIBUTION: Record<Attribution, string> = {
   none: "Nothing wrong found",
 };
 
+/** Plain question the person didn't answer in time: from the diagnosis summary, else from the test that went unanswered. */
+function timedOutPrompt(run: BenchRunResult): string | undefined {
+  const quoted = /Nobody answered '([^']+)' in time/.exec(run.diagnosis.summary);
+  if (quoted) return `Nobody answered “${quoted[1]}” in time.`;
+  const unanswered = run.results.find((r) => r.subjects.some((s) => /timed out/.test(s.observed)));
+  if (!unanswered) return undefined;
+  const question: Partial<Record<BenchTestResult["test"], string>> = {
+    "button.interactive": "Press the button",
+    "led.sequence": "Which light is blinking",
+    "light.relative": "Cover the light sensor",
+    "pot.sweep": "Turn the knob",
+    "buzzer.confirm": "Listen for the beep",
+  };
+  const words = question[unanswered.test];
+  return words ? `Nobody answered “${words}” in time.` : "One of the bench questions wasn't answered in time.";
+}
+
 function RunCard({ run }: { run: BenchRunResult }) {
   const verdict =
     run.verdict === "pass"
@@ -55,12 +72,20 @@ function RunCard({ run }: { run: BenchRunResult }) {
         </Typography>
         <Chip icon={verdict.icon} color={verdict.color} label={verdict.label} />
       </Stack>
-      {run.diagnosis.summary && (
-        <Alert severity={run.verdict === "pass" ? "success" : run.verdict === "fail" ? "error" : "warning"} sx={{ mb: 1 }}>
-          <strong>{ATTRIBUTION[run.diagnosis.attribution]}.</strong> {run.diagnosis.summary}
+      {run.verdict === "incomplete" ? (
+        // An unfinished run proves nothing about the wiring: no causes, no fixes — just what was missed and what to do.
+        <Alert severity="warning" sx={{ mb: 1 }}>
+          <strong>The self-test didn't finish.</strong> {timedOutPrompt(run) ?? "The board stopped sending results before the end."} Nothing was
+          judged about your wiring. Run the self-test again and answer each question on the bench screen.
         </Alert>
+      ) : (
+        run.diagnosis.summary && (
+          <Alert severity={run.verdict === "pass" ? "success" : "error"} sx={{ mb: 1 }}>
+            <strong>{ATTRIBUTION[run.diagnosis.attribution]}.</strong> {run.diagnosis.summary}
+          </Alert>
+        )
       )}
-      {run.verdict !== "pass" && run.diagnosis.candidates.length > 0 && (
+      {run.verdict === "fail" && run.diagnosis.candidates.length > 0 && (
         <Box sx={{ mb: 1 }}>
           <Typography variant="overline" sx={{ color: "text.secondary" }}>
             Most likely causes

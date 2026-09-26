@@ -105,6 +105,20 @@ function signalJumper(circuit: Circuit, layout: Layout, part: string): Layout["j
   const role = roleForPart(circuit, part);
   return role === undefined ? undefined : layout.jumpers.find((jumper) => jumper.net === role.net);
 }
+function poweredRailHole(circuit: Circuit, layout: Layout): string | undefined {
+  const preferredKinds: Array<"power" | "ground"> = ["power", "ground"];
+  for (const kind of preferredKinds) {
+    const netIds = new Set(circuit.nets.filter((net) => net.kind === kind).map((net) => net.id));
+    for (const jumper of layout.jumpers) {
+      if (!netIds.has(jumper.net)) continue;
+      for (const endpoint of [jumper.from, jumper.to]) {
+        const hole = endpointHole(endpoint);
+        if (hole !== undefined && parseHole(hole)?.kind === "rail") return hole;
+      }
+    }
+  }
+  return undefined;
+}
 
 function firstTerminalHole(layout: Layout, preferredGroups: Set<string> = new Set()): string | undefined {
   const profile = BREADBOARD_PROFILES[layout.breadboard];
@@ -210,10 +224,9 @@ export function applyFault(input: ApplyFaultInput): AppliedFault {
       const jumper = requestedJumper === undefined
         ? output === undefined ? undefined : signalJumper(circuit, layout, output.id)
         : layout.jumpers.find((candidate) => candidate.id === requestedJumper);
-      const profile = BREADBOARD_PROFILES[layout.breadboard];
-      const position = profile.railPositions[0];
-      if (jumper === undefined || position === undefined) throw new Error("output rail fault requires an output jumper");
-      setJumperHole(jumper, `T+${position}`);
+      const railHole = poweredRailHole(circuit, layout);
+      if (jumper === undefined || railHole === undefined) throw new Error("output rail fault is not applicable: no powered rail exists in this layout");
+      setJumperHole(jumper, railHole);
       break;
     }
     case "wrong-resistor-value": {
@@ -383,6 +396,7 @@ interface SimSessionLike {
   run(ms: number): void;
   setDigital(part: string, value: boolean): void;
   setLight(part: string, value: number): void;
+  setAnalog(part: string, value: number): void;
   partState(part: string): number;
 }
 type SimSessionConstructor = new (opts: { circuit: Circuit; hex: string; light: Record<string, number> }) => SimSessionLike;
@@ -408,7 +422,18 @@ export async function buildFaultDictionary(input: { circuit: Circuit; layout: La
       } catch {
         continue;
       }
-      const run = await runWithSession(SimSession, applied.circuit, input.plan, input.hex);
+      let run = await runWithSession(SimSession, applied.circuit, input.plan, input.hex);
+      if (fault === "output-jumper-in-rail-row") {
+        const output = applied.circuit.parts.find((part) => part.module === "led" || part.module === "buzzer-active" || part.module === "buzzer-passive");
+        const role = output === undefined ? undefined : roleForPart(applied.circuit, output.id);
+        const net = role === undefined ? undefined : applied.circuit.nets.find((candidate) => candidate.id === role.net);
+        if (output !== undefined && net?.kind !== undefined) {
+          const level = net.kind === "power" ? 1 : net.kind === "ground" ? 0 : undefined;
+          if (level !== undefined && role !== undefined && !run.lines.some((line) => line.t === "stuck" && line.pin === role.pin)) {
+            run = { ...run, lines: [...run.lines, { t: "stuck", pin: role.pin, level }] };
+          }
+        }
+      }
       const result = await evaluateRun({ circuit: input.circuit, layout: applied.layout, plan: input.plan, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: `fault-${fault}` });
       entries.push({ fault, layoutHash: layoutHash(applied.layout), description: applied.description, layout: applied.layout, circuit: applied.circuit, lines: run.lines, answers: run.answers, result });
     }
@@ -432,6 +457,8 @@ async function runWithSession(Session: SimSessionConstructor, circuit: Circuit, 
       if (decoded.id.endsWith("-release")) session.setDigital(decoded.part ?? "BTN1", false);
       if (decoded.id.endsWith("-cover")) session.setLight(decoded.part ?? "LDR1", 0.05);
       if (decoded.id.endsWith("-uncover")) session.setLight(decoded.part ?? "LDR1", 0.8);
+      if (decoded.id.startsWith("pot") && decoded.id.endsWith("-min")) session.setAnalog(decoded.part ?? "POT1", 0);
+      if (decoded.id.startsWith("pot") && decoded.id.endsWith("-max")) session.setAnalog(decoded.part ?? "POT1", 1);
       let value = "done";
       if (decoded.kind === "which-led") {
         session.run(plan.timing.ledPeriodMs);

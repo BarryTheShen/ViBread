@@ -62,8 +62,19 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
       scopes_supported: ["circuits:read", "circuits:write", "bench:request"],
     });
   });
-  app.get("/.well-known/oauth-authorization-server", (_req, res) => res.redirect(307, "/api/auth/.well-known/oauth-authorization-server"));
-  app.get("/jwks", (_req, res) => res.redirect(307, "/api/auth/jwks"));
+  const authMetadata = async (_req: express.Request, res: express.Response, next: express.NextFunction): Promise<void> => {
+    try {
+      const result = await auth.handler(new globalThis.Request(`${config.publicUrl}/api/auth/.well-known/oauth-authorization-server`, { method: "GET" }));
+      result.headers.forEach((value, name) => res.setHeader(name, value));
+      res.status(result.status).send(await result.text());
+    } catch (error) {
+      next(error);
+    }
+  };
+  app.get("/.well-known/oauth-authorization-server", authMetadata);
+  app.get("/.well-known/oauth-authorization-server/api/auth", authMetadata);
+  app.get("/.well-known/openid-configuration/api/auth", authMetadata);
+  app.use("/.well-known", (request, response, next) => request.path === "/agent-card.json" ? next() : response.status(404).json({ error: "not_found" }));
   const authAtRoot = (req: http.IncomingMessage, res: http.ServerResponse, next: (error?: unknown) => void): void => {
     const originalUrl = req.url ?? "/";
     req.url = `/api/auth${originalUrl}`;

@@ -41,7 +41,7 @@ import type { DeviceLine } from "./telemetry.js";
  *   POST   /api/missions/:id/release      ReleaseRequest        → MissionDetail (human "GO for build"; 409 not_all_go | retro_missing | retro_no_go)
  *   GET    /api/missions/:id/build                              → BuildState   (phone Build Mode polls every 1–2 s)
  *   POST   /api/missions/:id/build/step   { n }                 → BuildState   ("I did this")
- *   POST   /api/missions/:id/bench/firmware { kind }            → { hex, design, plan? }  kind: "bench" | "app"
+ *   POST   /api/missions/:id/bench/firmware { kind }            → BenchFirmwareResponse  kind: "bench" | "app"
  *   POST   /api/missions/:id/bench/runs   BenchRunRequest       → BenchRunResult
  *   POST   /api/missions/:id/photo        multipart photo + step → PhotoCheckResult
  *   GET    /api/connections                                     → ConnectionsView
@@ -186,6 +186,13 @@ export interface BenchRunRequest {
   /** Answers the person gave to `ask` lines: ask id → value. */
   answers: Record<string, string>;
 }
+export interface BenchFirmwareResponse {
+  hex: string;
+  design: string;
+  plan?: SelfTestPlan;
+  fallbackUpload: { command: string; args: string[] };
+}
+
 
 export interface ConnectionsView {
   imessage: { linked: boolean; handle?: string; capcomNumber?: string };
