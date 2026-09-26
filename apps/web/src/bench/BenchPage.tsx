@@ -157,11 +157,12 @@ function promptTitle(ask: Extract<DeviceLine, { t: "ask" }>, plan: SelfTestPlan,
 
 const actionButtonSx = { minHeight: 46, borderRadius: 2 } as const;
 
-export default function BenchPage(): ReactElement {
+export default function BenchPage(): ReactElement | null {
   const { missionId = "" } = useParams<{ missionId: string }>();
   const [logPinned, setLogPinned] = useState(true);
   const [loaded, setLoaded] = useState<LoadedBench | undefined>();
   const [loadError, setLoadError] = useState<string>();
+  const [authRequired, setAuthRequired] = useState(false);
   const [mode, setMode] = useState<"physical" | "virtual">("virtual");
   const [boardProfileChoice, setBoardProfileChoice] = useState<BoardProfileId | "auto">("auto");
   const logRef = useRef<HTMLPreElement | null>(null);
@@ -192,8 +193,8 @@ export default function BenchPage(): ReactElement {
 
   useEffect(() => {
     let alive = true;
-    setLoaded(undefined);
     setLoadError(undefined);
+    setAuthRequired(false);
     if (!missionId) {
       setLoadError("No mission was selected.");
       return () => undefined;
@@ -203,7 +204,13 @@ export default function BenchPage(): ReactElement {
         if (alive) setLoaded(value);
       })
       .catch((reason: unknown) => {
-        if (alive) setLoadError(reason instanceof Error ? reason.message : String(reason));
+        const message = reason instanceof Error ? reason.message : String(reason);
+        if (alive && /401|unauthori[sz]ed|sign in|required/i.test(message)) {
+          setAuthRequired(true);
+          setLoadError(undefined);
+        } else if (alive) {
+          setLoadError(message);
+        }
       });
     return () => {
       alive = false;
@@ -622,6 +629,7 @@ export default function BenchPage(): ReactElement {
     },
     [loaded],
   );
+  if (authRequired) return null;
   if (!loaded) {
     return (
       <Box sx={{ minHeight: "100vh", p: { xs: 2, md: 5 } }}>

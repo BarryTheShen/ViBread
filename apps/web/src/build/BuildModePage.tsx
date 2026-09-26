@@ -80,6 +80,9 @@ function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
   return "Please try again in a moment.";
 }
+function isUnauthorized(error: unknown): boolean {
+  return error instanceof BuildApiError && (error.status === 401 || error.code === "UNAUTHORIZED");
+}
 
 function ageLabel(updatedAt: number, now: number): string {
   const seconds = Math.max(0, Math.floor((now - updatedAt) / 1_000));
@@ -660,6 +663,7 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
     }
     setShowPwaTip(false);
   };
+  if (isUnauthorized(query.error)) return null;
 
   if (!missionId) {
     return (
