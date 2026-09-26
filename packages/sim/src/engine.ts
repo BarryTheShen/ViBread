@@ -243,6 +243,7 @@ export class SimMachine {
   private readonly partsById = new Map<string, Part>();
   private readonly modeStates = new Map<string, ModeState>();
   private readonly outputValues: PinStateMap = new Map();
+  private readonly lastPinStates = new Map<string, boolean>();
   private readonly pinSegments = new Map<string, Array<{ start: number; end: number; on: boolean }>>();
   private readonly partSegments = new Map<string, Array<{ start: number; end: number; on: boolean }>>();
   private readonly partValueSegments = new Map<string, Array<{ start: number; end: number; value: number }>>();
@@ -517,7 +518,9 @@ export class SimMachine {
   private buildBoardIndex(): void {
     for (const pin of this.profile.pins) {
       if (!pin.port || pin.bit === undefined) continue;
-      this.boardPins.set(pin.name, { pin, port: this.ports[pin.port], bit: pin.bit });
+      const mapping = { pin, port: this.ports[pin.port], bit: pin.bit };
+      this.boardPins.set(pin.name, mapping);
+      this.lastPinStates.set(pin.name, mapping.port.pinState(mapping.bit) === PinState.High);
     }
     for (const role of this.circuit.roles) {
       this.roleByPin.set(role.pin, { mode: role.mode, part: role.part });
@@ -699,9 +702,11 @@ export class SimMachine {
     if (delta > 0) {
       for (const [pin, mapping] of this.boardPins) {
         const state = mapping.port.pinState(mapping.bit);
+        const previousHigh = this.lastPinStates.get(pin) ?? false;
         const segments = this.pinSegments.get(pin) ?? [];
-        segments.push({ start: this.lastAccountingCycle, end: target, on: state === PinState.High });
+        segments.push({ start: this.lastAccountingCycle, end: target, on: previousHigh });
         this.pinSegments.set(pin, segments);
+        this.lastPinStates.set(pin, state === PinState.High);
       }
       for (const [part, reading] of this.partReadings) {
         const segments = this.partSegments.get(part) ?? [];
