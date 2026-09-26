@@ -1,6 +1,6 @@
 import type { Circuit } from "./circuit.js";
 import type { ConsoleReport } from "./consoles.js";
-import type { Layout } from "./layout.js";
+import type { Layout, PlacementSummary } from "./layout.js";
 import type { ModuleKey, ModulePin } from "./modules.js";
 import type { BenchRunResult, CompileResult, PhotoCheckResult, SimRunResult } from "./results.js";
 import type { TestSuite } from "./scenario.js";
@@ -56,6 +56,8 @@ export interface RevisionResults {
   sim?: Omit<SimRunResult, "traces">;
   layout?: Layout;
   layoutHash?: string;
+  /** Where parts sit and whether the circuit's placement groups were honoured (assembly `placementSummary`). */
+  placement?: PlacementSummary;
   steps?: StepList;
   selftest?: SelfTestPlan;
   bench?: BenchRunResult[];

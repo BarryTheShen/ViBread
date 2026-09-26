@@ -61,6 +61,21 @@ export type PinRole = z.infer<typeof PinRoleSchema>;
 export const IntentClauseSchema = z.object({ id: z.string().regex(/^C\d+$/), text: z.string().min(1) });
 export type IntentClause = z.infer<typeof IntentClauseSchema>;
 
+/** Physical arrangement the person asked for (issue #16). The allocator honours it or reports PLACEMENT-UNMET. */
+export const PlacementRequestSchema = z
+  .object({
+    groups: z
+      .array(z.array(z.string().min(1)).min(2))
+      .min(1)
+      .describe(
+        "Each group lists part ids that must sit side by side on the breadboard, anchor first: the other parts go within a few rows of the first one, e.g. [[\"BTN1\",\"LED1\",\"R1\"],[\"BTN2\",\"LED2\",\"R2\"]] for 'each light next to its button'. A part may be in one group only.",
+      ),
+  })
+  .describe(
+    "Optional placement request. Use it whenever the person asks for parts next to each other. The breadboard layout puts each group's parts in neighbouring rows on the same half of the board, groups left to right in the order listed. The assembly check's placement summary says what was actually built: describe only that, never an arrangement it does not show.",
+  );
+export type PlacementRequest = z.infer<typeof PlacementRequestSchema>;
+
 export const CircuitSchema = z.object({
   schema: z.literal(CIRCUIT_SCHEMA),
   title: z.string().min(1).max(80),
@@ -80,6 +95,7 @@ export const CircuitSchema = z.object({
   sketch: z.object({ source: z.string().min(1) }),
   intent: z.array(IntentClauseSchema).min(1),
   assumptions: z.array(z.string()).default([]),
+  placement: PlacementRequestSchema.optional(),
 });
 export type Circuit = z.infer<typeof CircuitSchema>;
 
@@ -187,6 +203,16 @@ export function validateCircuit(circuit: Circuit): IrIssue[] {
   if (circuit.parts.length > ENVELOPE.maxParts || signalNets > ENVELOPE.maxSignalNets) {
     issues.push({ code: "IR-ENVELOPE", severity: "error", message: `Outside the supported envelope: ${circuit.parts.length} parts (max ${ENVELOPE.maxParts}), ${signalNets} signal nets (max ${ENVELOPE.maxSignalNets}).` });
   }
+
+  const grouped = new Map<string, number>();
+  (circuit.placement?.groups ?? []).forEach((group, index) => {
+    for (const id of group) {
+      if (!parts.has(id)) issues.push({ code: "IR-PLACEMENT", severity: "error", message: `Placement group ${index + 1} names part ${id}, which is not in the design.`, path: `placement.groups.${index}`, refs: { parts: [id] } });
+      const other = grouped.get(id);
+      if (other !== undefined) issues.push({ code: "IR-PLACEMENT", severity: "error", message: `${id} is in placement groups ${other + 1} and ${index + 1}; a part can sit in one group only.`, path: `placement.groups.${index}`, refs: { parts: [id] } });
+      grouped.set(id, index);
+    }
+  });
 
   const clauseIds = new Set<string>();
   for (const clause of circuit.intent) {

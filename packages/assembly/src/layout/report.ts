@@ -1,9 +1,25 @@
 import { verdictOf, type Circuit, type ConsoleReport, type Finding, type Layout, type LvsResult } from "@vibread/core";
 
 import { LayoutFitError, layoutHash } from "./allocator.js";
+import { placementSummary } from "./placement.js";
 
 export function assemblyReport(input: { circuit: Circuit; layout: Layout; lvs: LvsResult; revisionHash: string }): ConsoleReport {
   const findings: Finding[] = [];
+  const placement = placementSummary(input.circuit, input.layout);
+  // A requested arrangement that could not be built is reported, never silently dropped. The circuit itself is fine,
+  // so FAO stays GO; toolSide tells the design agent to tell the person instead of redesigning or claiming otherwise.
+  for (const group of placement.groups.filter((entry) => !entry.met)) {
+    findings.push({
+      console: "FAO",
+      ruleId: "PLACEMENT-UNMET",
+      severity: "warning",
+      title: `ViBread could not place ${group.parts.join(", ")} side by side on the breadboard.`,
+      detail: group.detail,
+      fix: "Tell the person these parts are not next to each other, and describe the layout from the placement summary. A bigger breadboard or fewer parts may make room.",
+      refs: { parts: group.parts },
+      toolSide: true,
+    });
+  }
   if (input.lvs.issues.length > 0) {
     for (const issue of input.lvs.issues) {
       findings.push({
@@ -37,6 +53,7 @@ export function assemblyReport(input: { circuit: Circuit; layout: Layout; lvs: L
       lvsClean: input.lvs.ok,
       placements: input.layout.placements.length,
       jumpers: input.layout.jumpers.length,
+      placement,
     },
     revisionHash: input.revisionHash,
     at: new Date().toISOString(),
