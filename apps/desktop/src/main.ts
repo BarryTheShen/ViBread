@@ -25,6 +25,8 @@ let serial: SerialState;
 let mainWindow: BrowserWindow | undefined;
 let setupWindow: BrowserWindow | undefined;
 let quitting = false;
+// Aborted on quit: stops first-run downloads and kills arduino-cli / example-seeding children still running.
+const setupAbort = new AbortController();
 const timings: SmokeTimings = { launchedAt: Date.now() };
 
 if (!SMOKE && !app.requestSingleInstanceLock()) {
@@ -48,8 +50,10 @@ async function boot(): Promise<void> {
     if (!quitting) void dialog.showMessageBox({ type: "error", title: "ViBread server stopped", message, detail: `Log: ${join(paths.logs, "server.log")}` }).then(() => app.quit());
   });
   server.on("ready", (info: ServerInfo) => {
-    // After an automatic restart the port can change; keep the window on the live server.
-    if (mainWindow && new URL(mainWindow.webContents.getURL() || info.localUrl).origin !== info.localUrl) void mainWindow.loadURL(`${info.localUrl}/`);
+    // After an automatic restart the port can change; keep the window on the live server. (The first start is loaded
+    // by boot(): the window still shows the local "Starting ViBread…" page then.)
+    const current = mainWindow?.webContents.getURL() ?? "";
+    if (mainWindow && current.startsWith("http") && new URL(current).origin !== info.localUrl) void mainWindow.loadURL(`${info.localUrl}/`);
   });
   const desktopLog = openLog(paths, "desktop.log");
   serial = installSerial(session.defaultSession, () => server.info?.localUrl, () => mainWindow, (line) => desktopLog.write(`${new Date().toISOString()} ${line}\n`));
@@ -61,12 +65,17 @@ async function boot(): Promise<void> {
     const started = Date.now();
     await firstRun(pending);
     timings.firstRunMs = Date.now() - started;
+    // Quit while setting up: shutdown() is already stopping everything; starting the server now would orphan it.
+    if (quitting) return;
   }
+  // The window opens right away on a "Starting ViBread…" page: the server can take a while to start (tsx compiles the
+  // server on a cold launch), and until now nothing would be on screen.
+  const window = await openMainWindow();
+  setupWindow?.close();
   const serverStarted = Date.now();
   const info = await server.start();
   timings.serverStartMs = Date.now() - serverStarted;
-  await openMainWindow(info);
-  setupWindow?.close();
+  await window.loadURL(`${info.localUrl}/`);
   if (SMOKE) {
     const result = await runSmoke({ window: mainWindow!, info, paths, serial, timings, setupRan: pending });
     await shutdown(result.ok ? 0 : 1);
@@ -87,14 +96,20 @@ async function firstRun(pending: SetupStep[]): Promise<void> {
     let current: SetupStep = pendingSteps(paths)[0] ?? "toolchain";
     try {
       const steps = pendingSteps(paths);
-      const ran = await runSetup(paths, steps, (progress) => {
-        current = progress.step;
-        send("setup:progress", progress);
-      });
+      const ran = await runSetup(
+        paths,
+        steps,
+        (progress) => {
+          current = progress.step;
+          send("setup:progress", progress);
+        },
+        setupAbort.signal,
+      );
       Object.assign(timings, { toolchainMs: ran.toolchain, seedMs: ran.seed });
       for (const step of steps) if (!pendingSteps(paths).includes(step)) send("setup:progress", { step, state: "done" });
       return;
     } catch (error) {
+      if (setupAbort.signal.aborted) return;
       const message = error instanceof Error ? error.message : String(error);
       if (SMOKE) throw error;
       send("setup:error", { step: current, message, logPath: join(paths.logs, "setup.log") });
@@ -105,7 +120,8 @@ async function firstRun(pending: SetupStep[]): Promise<void> {
   }
 }
 
-async function openMainWindow(info: ServerInfo): Promise<void> {
+/** Opens the main window on the local "Starting ViBread…" page; boot() then loads the server's URL into it. */
+async function openMainWindow(): Promise<BrowserWindow> {
   const window = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -138,8 +154,9 @@ async function openMainWindow(info: ServerInfo): Promise<void> {
       void shell.openExternal(url);
     }
   });
-  await window.loadURL(`${info.localUrl}/`);
+  await window.loadFile(join(STATIC, "starting.html"));
   window.show();
+  return window;
 }
 
 function smallWindow(page: string, width: number, height: number, title: string): BrowserWindow {
@@ -212,7 +229,7 @@ async function resetExamples(): Promise<void> {
     await once(progressWindow.webContents, "did-finish-load");
     const send = (payload: unknown) => progressWindow.isDestroyed() || progressWindow.webContents.send("setup:progress", payload);
     send({ step: "toolchain", state: "skipped" });
-    await seedGolden(paths, (line) => log.write(`${line}\n`), send);
+    await seedGolden(paths, (line) => log.write(`${line}\n`), send, setupAbort.signal);
     send({ step: "seed", state: "done" });
   } catch (error) {
     await dialog.showMessageBox(mainWindow!, { type: "error", message: "Could not rebuild the example missions", detail: `${error instanceof Error ? error.message : String(error)}\n\nLog: ${join(paths.logs, "setup.log")}` });
@@ -259,6 +276,7 @@ function buildMenu(): void {
 
 async function shutdown(code: number): Promise<void> {
   quitting = true;
+  setupAbort.abort();
   await server?.stop().catch(() => {});
   app.exit(code);
 }
@@ -279,6 +297,8 @@ function fatal(title: string, error: Error): void {
     void writeSmokeFailure(paths, error, timings).finally(() => shutdown(1));
     return;
   }
+  // Quitting while the server was still starting stops it, which fails its start: that is not an error to show.
+  if (quitting) return;
   dialog.showErrorBox(title, `${error.message}\n\n${logs ? `Log: ${logs}` : ""}`);
   void shutdown(1);
 }

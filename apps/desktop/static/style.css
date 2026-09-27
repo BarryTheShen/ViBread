@@ -24,3 +24,6 @@ input[type=password], input[type=text] { width: 100%; padding: 9px 11px; border-
 .qr { display: flex; gap: 22px; align-items: center; }
 .qr img { width: 220px; height: 220px; background: white; border-radius: 12px; padding: 10px; }
 code.url { display: block; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; margin: 8px 0 12px; user-select: text; overflow-wrap: anywhere; font-size: 15px; }
+body.starting { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; }
+body.starting h1 { font-size: 24px; }
+body.starting progress { width: 320px; }

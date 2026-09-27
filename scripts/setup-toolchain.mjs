@@ -6,7 +6,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFileSync, createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -141,14 +141,16 @@ function tarCommand() {
   return join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
 }
 
+// Runs in the archive's folder with relative names: the toolchain lives under the user's profile, and Windows' bsdtar
+// can fail to open paths with characters outside the ANSI code page (e.g. a Chinese or Cyrillic user name).
 function extract(archive, into, signal) {
   const name = process.platform === "win32" ? "arduino-cli.exe" : "arduino-cli";
-  return run(tarCommand(), ["-xf", archive, "-C", into, name], { signal });
+  return run(tarCommand(), ["-xf", basename(archive), "-C", relative(dirname(archive), into), name], { signal, cwd: dirname(archive) });
 }
 
-function run(command, args, { signal, onLog } = {}) {
+function run(command, args, { signal, onLog, cwd } = {}) {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"], signal, windowsHide: true });
+    const child = spawn(command, args, { cwd, stdio: ["ignore", "pipe", "pipe"], signal, windowsHide: true });
     let stdout = "";
     let stderr = "";
     const lines = (text) => {
