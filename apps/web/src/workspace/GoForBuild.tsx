@@ -129,9 +129,10 @@ export function GoForBuildButton({ missionId, detail, onReleased }: { missionId:
             Nothing touches your board yet: you'll build it step by step, and the bench self-test checks the real wiring.
           </Typography>
         </DialogContent>
-        {/* Three actions don't fit one row in a small dialog: wrap whole buttons, never their labels ("Not / yet"). */}
-        <DialogActions sx={{ flexWrap: "wrap", gap: 1, "& > :not(style) ~ :not(style)": { ml: 0 }, "& .MuiButton-root": { whiteSpace: "nowrap" } }}>
-          <Button onClick={() => setConfirmOpen(false)}>Not yet</Button>
+        {/* Three actions don't fit one row in a small dialog: wrap whole buttons, never their labels ("Not / yet"), and
+            keep each wrapped row right-aligned with the primary action last. Focus starts on the safe choice. */}
+        <DialogActions sx={{ flexWrap: "wrap", justifyContent: "flex-end", gap: 1, "& > :not(style) ~ :not(style)": { ml: 0 }, "& .MuiButton-root": { whiteSpace: "nowrap" } }}>
+          <Button onClick={() => setConfirmOpen(false)} autoFocus>Not yet</Button>
           <Button color="error" variant="outlined" onClick={openOverride}>Override — I know what I'm doing</Button>
           <Button variant="contained" disabled={release.isPending} onClick={() => go(true)}>
             {release.isPending ? "Releasing…" : "GO for build without review"}
@@ -162,8 +163,8 @@ export function GoForBuildButton({ missionId, detail, onReleased }: { missionId:
           />
           <Typography variant="body2" color="text.secondary">The revision's real verdicts stay unchanged. The override is recorded in the mission timeline.</Typography>
         </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setOverrideOpen(false)}>Cancel</Button>
+        <DialogActions sx={{ flexWrap: "wrap", justifyContent: "flex-end", gap: 1, "& > :not(style) ~ :not(style)": { ml: 0 }, "& .MuiButton-root": { whiteSpace: "nowrap" } }}>
+          <Button onClick={() => setOverrideOpen(false)} autoFocus>Cancel</Button>
           <Button color="error" variant="outlined" disabled={!understood || release.isPending} onClick={() => go(false, overrideReason)}>
             {release.isPending ? "Releasing…" : "Override and GO for build"}
           </Button>

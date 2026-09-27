@@ -746,12 +746,13 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
     }
   }
   const board = BOARD_PROFILES[circuit.board.profile];
-  const addPinCurrent = (pin: string | undefined, current: number, refs: FindingRefs, fix?: string): void => {
+  /** `corner` names the assumptions behind `current`, in words that fit the part (an LED has Vf; a buzzer has a coil). */
+  const addPinCurrent = (pin: string | undefined, current: number, corner: string, refs: FindingRefs, fix?: string): void => {
     if (!pin) return;
     currentByPin.set(pin, (currentByPin.get(pin) ?? 0) + current);
     const boardSourcePin = boardPin(board, pin);
     if (!boardSourcePin || (boardSourcePin.kind !== "digital" && boardSourcePin.kind !== "analog")) return;
-    const detail = `${pin} is planned at ${current.toFixed(2)} mA at the conservative maximum-current corner (5.25 V, minimum Vf, minimum resistor).`;
+    const detail = `${pin} is planned at ${current.toFixed(2)} mA ${corner}.`;
     if (current > board.limits.pinDesignMa) {
       addFinding("CUR-PIN-DESIGN", { severity: "warning", detail, refs, ...(fix ? { fix } : {}) });
     }
@@ -793,7 +794,7 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
       const raiseFix = branch.resistorPath.length === 1
         ? `Change ${present} to ${formatOhms(suggested)} or more for ${branch.led.id}.`
         : `Raise ${present} to ${formatOhms(suggested)} or more in total for ${branch.led.id}.`;
-      addPinCurrent(branch.source?.pin, branch.maxMa, refs, raiseFix);
+      addPinCurrent(branch.source?.pin, branch.maxMa, "at the conservative maximum-current corner (5.25 V, minimum Vf, minimum resistor)", refs, raiseFix);
       if (branch.maxMa > ledIfAbsMa) {
         addFinding("LED-CURRENT", {
           severity: "error",
@@ -856,6 +857,11 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
     addPinCurrent(
       branch.source?.pin,
       branch.maxMa,
+      branch.part.module === "buzzer-passive"
+        ? branch.resistorPath.length
+          ? `at the conservative maximum-current corner (5.25 V, ${electrical.coilOhms ?? 0} Ω coil, series resistor at the low end of its tolerance)`
+          : `at the conservative maximum-current corner (5.25 V, ${electrical.coilOhms ?? 0} Ω coil, no series resistor)`
+        : `at its rated draw (active buzzers pull about ${electrical.currentMa ?? 30} mA whatever the series resistance)`,
       refs,
       branch.part.module === "buzzer-passive"
         ? buzzerFix
@@ -1082,6 +1088,20 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
   };
 }
 
+/** One natural sentence under the verdict chip: the first problem by name, not a count the chip already shows. */
+function summaryOf(consoleId: "EECOM" | "GUIDO", findings: Finding[]): string {
+  const area = consoleId === "EECOM" ? "electrical" : "firmware";
+  const errors = findings.filter((finding) => finding.severity === "error");
+  const warnings = findings.filter((finding) => finding.severity === "warning");
+  const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? "" : "s"}`;
+  if (errors.length) {
+    const also = warnings.length ? ` (and ${plural(warnings.length, "warning")})` : "";
+    return `${plural(errors.length, "error")}${also}: ${errors[0]!.title}${errors.length > 1 ? ", and more" : ""}.`;
+  }
+  if (warnings.length) return `${plural(warnings.length, "warning")}: ${warnings[0]!.title}${warnings.length > 1 ? ", and more" : ""}.`;
+  return `All ${area} checks pass.`;
+}
+
 function reportFromFindings(
   consoleId: "EECOM" | "GUIDO",
   revisionHash: string,
@@ -1091,9 +1111,7 @@ function reportFromFindings(
   return {
     console: consoleId,
     verdict: verdictOf(findings),
-    summary: findings.length === 0
-      ? `${consoleId === "EECOM" ? "Electrical" : "Firmware"} checks are clear.`
-      : `${findings.filter((finding) => finding.severity === "error").length} error(s), ${findings.filter((finding) => finding.severity === "warning").length} warning(s).`,
+    summary: summaryOf(consoleId, findings),
     findings,
     evidence,
     revisionHash,

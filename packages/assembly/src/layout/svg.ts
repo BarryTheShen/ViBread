@@ -82,6 +82,18 @@ function cssColor(name: string): string {
   for (const character of name) hash = (hash * 31 + character.codePointAt(0)!) | 0;
   return `hsl(${Math.abs(hash) % 360} 62% 58%)`;
 }
+
+/** An end badge is white inside, so a white/cream wire's own colour as its ring would vanish: ring those in ink. */
+export function endBadgeOutline(stroke: string): string {
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})([0-9a-f]{2})?$/i.exec(stroke)?.[1];
+  if (!hex) return stroke;
+  const full = hex.length === 3 ? [...hex].map((digit) => digit + digit).join("") : hex;
+  const [r, g, b] = [0, 2, 4].map((offset) => {
+    const channel = Number.parseInt(full.slice(offset, offset + 2), 16) / 255;
+    return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.7 ? "#1B1D2B" : stroke;
+}
 function classes(...names: (string | false | undefined)[]): string {
   return names.filter(Boolean).join(" ");
 }
@@ -794,7 +806,7 @@ function endBadges(layout: Pick<Layout, "board">, jumper: Jumper, from: Point, t
   return ([[jumper.from, from, 1], [jumper.to, to, 2]] as const)
     .map(([end, pin, n]) => {
       const point = "board" in end ? { x: pin.x, y: pin.y + (pinLabelOffset(layout, pin) > 0 ? -17 : 17) } : pin;
-      return `<g class="wire-end" data-wire-end="${escapeSvg(jumper.id)}:${n}"><circle cx="${point.x}" cy="${point.y}" r="11" class="end-badge" stroke="${stroke}"/><text x="${point.x}" y="${point.y + 4.5}" text-anchor="middle" class="end-badge-text">${n}</text></g>`;
+      return `<g class="wire-end" data-wire-end="${escapeSvg(jumper.id)}:${n}"><circle cx="${point.x}" cy="${point.y}" r="11" class="end-badge" stroke="${endBadgeOutline(stroke)}"/><text x="${point.x}" y="${point.y + 4.5}" text-anchor="middle" class="end-badge-text">${n}</text></g>`;
     })
     .join("");
 }
