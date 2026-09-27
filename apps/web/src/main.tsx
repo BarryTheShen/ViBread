@@ -26,6 +26,7 @@ import { BenchRedirect } from "./workspace/BenchRedirect.js";
 import { installStaleChunkReload } from "./staleChunks.js";
 import { DEMO, getDemoMissionId } from "./demo/demo.js";
 import { DemoBanner } from "./demo/DemoBanner.js";
+import { DemoTour, useDemoTour } from "./demo/DemoTour.js";
 import { startDemo } from "./demo/bootstrap.js";
 
 const NewMissionPage = lazy(() => import("./pages/NewMissionPage.js"));
@@ -72,19 +73,23 @@ function SignedOutBanner() {
   );
 }
 
-function Shell() {
-  if (DEMO) {
-    return (
-      <Box sx={{ display: "flex", flexDirection: "column", height: "100dvh", overflow: "hidden" }}>
-        <DemoBanner />
-        <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
-          <Suspense fallback={<Loading />}>
-            <Outlet />
-          </Suspense>
-        </Box>
+function DemoShell() {
+  const tour = useDemoTour();
+  return (
+    <Box sx={{ display: "flex", flexDirection: "column", height: "100dvh", overflow: "hidden" }}>
+      <DemoBanner onTour={tour.start} />
+      <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        <Suspense fallback={<Loading />}>
+          <Outlet />
+        </Suspense>
       </Box>
-    );
-  }
+      {tour.open && <DemoTour key={tour.run} onClose={tour.close} />}
+    </Box>
+  );
+}
+
+function Shell() {
+  if (DEMO) return <DemoShell />;
   return (
     <Suspense fallback={<Loading />}>
       <SignedOutBanner />

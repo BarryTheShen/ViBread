@@ -71,7 +71,7 @@ function recordedVote(report: ConsoleReport | undefined): string | undefined {
 
 function StatusDots({ consoles, onOpen }: { consoles: ConsoleReport[]; onOpen(console: ConsoleId): void }) {
   return (
-    <Stack direction="row" component="ul" aria-label="Checks" sx={{ gap: 0.25, m: 0, p: 0, listStyle: "none" }}>
+    <Stack direction="row" component="ul" aria-label="Checks" data-tour="checks" sx={{ gap: 0.25, m: 0, p: 0, listStyle: "none" }}>
       {CONSOLE_IDS.map((id) => {
         const report = consoles.find((c) => c.console === id);
         const dot = dotFor(report);
@@ -125,7 +125,7 @@ function NextStepButton({ step, props, onStop, stopping }: { step: NextStep; pro
       return <GoForBuildButton missionId={missionId} detail={detail} onReleased={(n) => { setJustReleased(true); onOpenPanel("steps", { revision: n }); }} />;
     case "build":
       return (
-        <Button variant="contained" autoFocus={justReleased} startIcon={<ListAltIcon />} onClick={() => onOpenPanel("steps")} sx={{ whiteSpace: "nowrap" }}>
+        <Button variant="contained" autoFocus={justReleased} startIcon={<ListAltIcon />} data-tour="build-steps" onClick={() => onOpenPanel("steps")} sx={{ whiteSpace: "nowrap" }}>
           Build steps · {step.done}/{step.total}
         </Button>
       );
@@ -257,7 +257,7 @@ export function MissionHeader(props: MissionHeaderProps) {
         <NextStepButton step={step} props={props} onStop={() => stop.mutate()} stopping={stop.isPending} />
         {DEMO ? (
           <Tooltip title="Phone link: QR code for Build Mode">
-            <IconButton aria-label="Phone link" onClick={() => setPhoneOpen(true)}>
+            <IconButton aria-label="Phone link" data-tour="phone" onClick={() => setPhoneOpen(true)}>
               <PhoneIphoneIcon />
             </IconButton>
           </Tooltip>

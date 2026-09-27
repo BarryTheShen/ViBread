@@ -63,7 +63,7 @@ export function ArtifactPanel({ missionId, detail, view, revision: pickedRevisio
   return (
     <Box component="aside" aria-label="Mission details" sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, bgcolor: "background.paper" }}>
       <Stack direction="row" sx={{ alignItems: "center", gap: 1, px: 1.5, py: 1, borderBottom: 1, borderColor: "divider", minHeight: 56, flexWrap: "wrap" }}>
-        <FormControl size="small" sx={{ minWidth: 170 }}>
+        <FormControl size="small" data-tour="panel-picker" sx={{ minWidth: 170 }}>
           <InputLabel id="panel-view-label">Show</InputLabel>
           <Select
             labelId="panel-view-label"
@@ -111,7 +111,7 @@ export function ArtifactPanel({ missionId, detail, view, revision: pickedRevisio
         </Tooltip>
       </Stack>
       {needsRevision && revision.isFetching && <LinearProgress aria-label="Loading design" sx={{ height: 2 }} />}
-      <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", p: 2 }}>
+      <Box data-tour={`panel-${view}`} sx={{ flex: 1, minHeight: 0, overflow: "auto", p: 2 }}>
         {view === "parts" ? (
           <PartsView missionId={missionId} missionParts={detail.mission.inventory} revision={n} />
         ) : view === "bench" && DEMO ? (

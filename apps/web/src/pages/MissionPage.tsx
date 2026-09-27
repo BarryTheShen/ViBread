@@ -170,7 +170,7 @@ function MissionWorkspace({ missionId }: { missionId: string }) {
       <Box sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0 }}>
         <MissionHeader missionId={missionId} detail={detail} onOpenPanel={openPanel} />
         <Box sx={{ flex: 1, minHeight: 0, display: "flex" }}>
-          <Box component="main" aria-label="Mission chat" sx={{ flex: "1 1 55%", minWidth: 380, minHeight: 0, display: "flex", flexDirection: "column" }}>
+          <Box component="main" aria-label="Mission chat" data-tour="chat" sx={{ flex: "1 1 55%", minWidth: 380, minHeight: 0, display: "flex", flexDirection: "column" }}>
             <MissionChat
               missionId={missionId}
               detail={detail}
