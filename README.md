@@ -75,6 +75,11 @@ release's notes link the newest macOS build.
 - **First launch** shows a setup window: it downloads the Arduino toolchain (arduino-cli 1.5.1 + AVR core 1.8.8 +
   ArduinoJson 7.4.2, SHA-256 checked, ~150 MB) and builds the example missions — about 2–3 minutes, internet needed
   once. Later launches start in ~10 s. The download is ~160–200 MB; installed size ~600 MB plus the toolchain.
+- **Upgrading on Windows:** run the new installer over the old version; it closes a running ViBread first. An upgrade
+  used to stop with *"Failed to uninstall old application files"* when another program (for example an antivirus
+  scan) held one of the ~16,000 old files; from 0.1.105 the installer installs over the old files instead. If an
+  upgrade still fails, uninstall ViBread in *Settings → Apps* (your missions and the toolchain in `%APPDATA%\ViBread`
+  are kept), then install again.
 - **Chromium sandbox on Linux:** Ubuntu 23.10+ blocks unprivileged user namespaces (AppArmor), which Electron's
   sandbox normally uses. The `.deb` installs the setuid `chrome-sandbox` helper, so the sandbox keeps working there. The
   AppImage can't ship a setuid helper: its launcher tests `unshare -Ur true` and, when namespaces are blocked, starts
