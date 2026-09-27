@@ -15,7 +15,8 @@
  *   <g class="part" data-part="R1">   symbol lines/polylines/polygons/rects/circles, <line class="lead" data-pin="R1.1">
  *                                      (x2,y2 is the connection point), <text> labels owned by the part
  *   <g class="power" data-net="GND" data-pin="LED1.K">  <line class="stub"> starting at the pin, symbol, label
- *   <g class="net" data-net="D4">      <polyline class="wire">, <circle class="junction">, <circle class="pin-end">
+ *   <g class="net" data-net="D4">      <polyline class="wire">, <circle class="junction"> only where 3+ wire branches meet
+ *                                      (or a wire continues through a pin); a wire simply ending on a pin gets no dot
  */
 import { BOARD_PART, pinKey, type Circuit } from "@vibread/core";
 
@@ -265,7 +266,6 @@ interface NetDrawing {
   net: string;
   wires: Seg[];
   junctions: { at: Pt; box: Box }[];
-  pinEnds: { at: Pt; box: Box }[];
 }
 export interface ParsedSchematic {
   kind: string | undefined;
@@ -348,7 +348,7 @@ export function parseSchematicSvg(svg: string): ParsedSchematic {
     if (!attrs) return;
     if (attrs.class === "net") {
       const net = attrs["data-net"] ?? "?";
-      currentNet = nets.get(net) ?? { net, wires: [], junctions: [], pinEnds: [] };
+      currentNet = nets.get(net) ?? { net, wires: [], junctions: [] };
       nets.set(net, currentNet);
       return;
     }
@@ -406,8 +406,8 @@ export function parseSchematicSvg(svg: string): ParsedSchematic {
         const at = { x: num(attrs, "cx"), y: num(attrs, "cy") };
         const r = num(attrs, "r");
         const entry = { at, box: { left: at.x - r, top: at.y - r, right: at.x + r, bottom: at.y + r } };
-        if (cls.includes("junction")) currentNet.junctions.push(entry);
-        else currentNet.pinEnds.push(entry);
+        // Every dot drawn on a net reads as a junction, so every one must mark a real branch point.
+        currentNet.junctions.push(entry);
       }
       continue;
     }
@@ -617,7 +617,7 @@ export function checkSchematicSvg(svg: string, circuit: Circuit): SchematicIssue
 
   // (b) Labels.
   const labels = [...drawing.items.flatMap((item) => item.labels), ...drawing.looseLabels];
-  const dots = netEntries.flatMap((entry) => [...entry.junctions, ...entry.pinEnds].map((dot) => ({ net: entry.net, box: dot.box })));
+  const dots = netEntries.flatMap((entry) => entry.junctions.map((dot) => ({ net: entry.net, box: dot.box })));
   for (const label of labels) {
     if (label.size < MIN_FONT_PX) add("SCH-LABEL-SMALL", `"${label.text}" is smaller than ${MIN_FONT_PX}px.`);
   }
@@ -652,7 +652,7 @@ export function checkSchematicSvg(svg: string, circuit: Circuit): SchematicIssue
   for (const label of labels) outside(`Label "${label.text}"`, label.box);
   for (const entry of netEntries) {
     for (const wire of entry.wires) outside(`A wire of net ${entry.net}`, boxOfPoints([wire.a, wire.b]));
-    for (const dot of [...entry.junctions, ...entry.pinEnds]) outside(`A dot of net ${entry.net}`, dot.box);
+    for (const dot of entry.junctions) outside(`A dot of net ${entry.net}`, dot.box);
   }
   return issues;
 }

@@ -1,0 +1,307 @@
+{
+  "schema": "vibread.circuit/0.1",
+  "title": "Mini piano (key lights)",
+  "summary": "Mini piano (key lights).",
+  "board": {
+    "profile": "uno-r3-atmega328p-5v"
+  },
+  "breadboard": {
+    "profile": "bb-830"
+  },
+  "parts": [
+    {
+      "id": "BTN1",
+      "module": "button",
+      "label": "Key 1",
+      "params": {}
+    },
+    {
+      "id": "BTN2",
+      "module": "button",
+      "label": "Key 2",
+      "params": {}
+    },
+    {
+      "id": "BTN3",
+      "module": "button",
+      "label": "Key 3",
+      "params": {}
+    },
+    {
+      "id": "BTN4",
+      "module": "button",
+      "label": "Key 4",
+      "params": {}
+    },
+    {
+      "id": "R1",
+      "module": "resistor",
+      "params": {
+        "ohms": 1000,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "BZ1",
+      "module": "buzzer-passive",
+      "label": "Speaker",
+      "params": {}
+    },
+    {
+      "id": "LED1",
+      "module": "led",
+      "label": "Key 1 light",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "LED2",
+      "module": "led",
+      "label": "Key 2 light",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "LED3",
+      "module": "led",
+      "label": "Key 3 light",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "LED4",
+      "module": "led",
+      "label": "Key 4 light",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "R2",
+      "module": "resistor",
+      "params": {
+        "ohms": 220,
+        "tolerancePct": 5
+      }
+    }
+  ],
+  "nets": [
+    {
+      "id": "GND",
+      "kind": "ground",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "GND"
+        },
+        {
+          "part": "BTN1",
+          "pin": "3"
+        },
+        {
+          "part": "BTN2",
+          "pin": "3"
+        },
+        {
+          "part": "BTN3",
+          "pin": "3"
+        },
+        {
+          "part": "BTN4",
+          "pin": "3"
+        },
+        {
+          "part": "BZ1",
+          "pin": "N"
+        }
+      ]
+    },
+    {
+      "id": "D2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D2"
+        },
+        {
+          "part": "BTN1",
+          "pin": "1"
+        },
+        {
+          "part": "LED1",
+          "pin": "K"
+        }
+      ]
+    },
+    {
+      "id": "D3",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D3"
+        },
+        {
+          "part": "BTN2",
+          "pin": "1"
+        },
+        {
+          "part": "LED2",
+          "pin": "K"
+        }
+      ]
+    },
+    {
+      "id": "D4",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D4"
+        },
+        {
+          "part": "BTN3",
+          "pin": "1"
+        },
+        {
+          "part": "LED3",
+          "pin": "K"
+        }
+      ]
+    },
+    {
+      "id": "D5",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D5"
+        },
+        {
+          "part": "BTN4",
+          "pin": "1"
+        },
+        {
+          "part": "LED4",
+          "pin": "K"
+        }
+      ]
+    },
+    {
+      "id": "D8",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D8"
+        },
+        {
+          "part": "R1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "SPK",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R1",
+          "pin": "2"
+        },
+        {
+          "part": "BZ1",
+          "pin": "P"
+        }
+      ]
+    },
+    {
+      "id": "5V",
+      "kind": "power",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "5V"
+        },
+        {
+          "part": "R2",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "LA",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R2",
+          "pin": "2"
+        },
+        {
+          "part": "LED1",
+          "pin": "A"
+        },
+        {
+          "part": "LED2",
+          "pin": "A"
+        },
+        {
+          "part": "LED3",
+          "pin": "A"
+        },
+        {
+          "part": "LED4",
+          "pin": "A"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "pin": "D2",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN1",
+      "purpose": "Key 1"
+    },
+    {
+      "pin": "D3",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN2",
+      "purpose": "Key 2"
+    },
+    {
+      "pin": "D4",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN3",
+      "purpose": "Key 3"
+    },
+    {
+      "pin": "D5",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN4",
+      "purpose": "Key 4"
+    },
+    {
+      "pin": "D8",
+      "mode": "OUTPUT",
+      "part": "BZ1",
+      "purpose": "Speaker"
+    }
+  ],
+  "sketch": {
+    "source": "void setup() {}\nvoid loop() {}\n"
+  },
+  "intent": [
+    {
+      "id": "C1",
+      "text": "Mini piano (key lights)."
+    }
+  ],
+  "assumptions": [
+    "Schematic regression fixture."
+  ]
+}

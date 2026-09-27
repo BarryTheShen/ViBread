@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { beforeAll, describe, expect, it } from "vitest";
 import { CircuitSchema, parseCircuit, type Circuit } from "@vibread/core";
 import { GOLDEN } from "@vibread/fixtures";
-import { checkSchematicSvg, checkTextLayout, parseSchematicSvg, type Pt } from "./check.js";
+import { checkSchematicSvg, checkTextLayout, junctionPoints, parseSchematicSvg, type Pt } from "./check.js";
 import { connectionRows, connectionTableSvg, verifiedSchematic } from "./fallback.js";
 import { renderSchematicSvg } from "./index.js";
 
@@ -83,8 +83,8 @@ function wireMidpoint(svg: string, net: string): Pt {
   return { x: (longest.a.x + longest.b.x) / 2, y: longest.a.y };
 }
 
-describe("schematic drawings pass the geometry check", () => {
-  const keys = [
+/** Every drawing the tests render: goldens, the recorded run, and fixtures/schematic. */
+const DRAWING_KEYS = [
     "moon-phase-lamp",
     "knob-night-light",
     "launch-control",
@@ -95,7 +95,13 @@ describe("schematic drawings pass the geometry check", () => {
     "servo-knob-button",
     "dark-alarm",
     "distance-rgb",
+    "mini-piano",
+    "whack-a-mole",
+    "binary-counter",
   ];
+
+describe("schematic drawings pass the geometry check", () => {
+  const keys = DRAWING_KEYS;
   it.each(keys)("%s renders as a real, valid drawing (not the fallback)", (key) => {
     const { circuit, svg } = drawing(key);
     expect(svg).toContain('data-schematic="drawing"');
@@ -106,6 +112,36 @@ describe("schematic drawings pass the geometry check", () => {
 
   it("covers every fixture in fixtures/schematic", async () => {
     for (const [key] of await schematicFixtures()) expect(keys).toContain(key);
+  });
+});
+
+describe("junction dots (IQA2-16e)", () => {
+  it.each(DRAWING_KEYS)("%s: dots only at real branch points, none where a wire simply ends on a pin", (key) => {
+    const { circuit, svg } = drawing(key);
+    const parsed = parseSchematicSvg(svg);
+    const anchors = new Map<string, Pt>();
+    for (const item of parsed.items) for (const lead of item.leads) anchors.set(lead.pin, lead.seg.b);
+    for (const net of circuit.nets.filter((candidate) => candidate.kind === "signal")) {
+      const drawn = parsed.nets.get(net.id)!;
+      const pins = net.pins.map((ref) => anchors.get(`${ref.part}.${ref.pin}`)!);
+      const branches = junctionPoints(drawn.wires, pins);
+      expect(drawn.junctions.length, `${key} ${net.id}`).toBe(branches.length);
+      for (const dot of drawn.junctions) expect(branches.some((point) => Math.hypot(point.x - dot.at.x, point.y - dot.at.y) < 1), `${key} ${net.id} dot`).toBe(true);
+      // No dot sits on a pin end unless the wire goes on through that pin.
+      for (const pin of pins) {
+        const touching = drawn.wires.filter((wire) => [wire.a, wire.b].some((end) => Math.hypot(end.x - pin.x, end.y - pin.y) < 0.6)).length;
+        if (touching === 1) expect(drawn.junctions.some((dot) => Math.hypot(dot.at.x - pin.x, dot.at.y - pin.y) < 1), `${key} ${net.id}: dot on a plain pin end`).toBe(false);
+      }
+      if (net.pins.length === 2) expect(drawn.junctions, `${key} ${net.id}: two-terminal net`).toHaveLength(0);
+    }
+  });
+
+  it("the geometry check rejects a dot where a wire only ends on a pin", () => {
+    const { circuit, svg } = drawing("knob-night-light");
+    const parsed = parseSchematicSvg(svg);
+    const pin = parsed.items.flatMap((item) => item.leads).find((lead) => lead.pin === "LED1.A")!.seg.b;
+    const dotted = appendToNet(svg, "L1", `<circle class="pin-end" cx="${pin.x}" cy="${pin.y}" r="2.5"/>`);
+    expect(codes(dotted, circuit)).toContain("SCH-JUNCTION-SPURIOUS");
   });
 });
 
