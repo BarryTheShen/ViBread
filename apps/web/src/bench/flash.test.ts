@@ -50,6 +50,11 @@ interface UnoOptions {
   overrunOnFirstPage?: boolean;
   /** Every open after the new firmware starts is refused (a Windows driver that never gives the handle back). */
   refuseOpensAfterFlash?: boolean;
+  /**
+   * Optiboot's start-up delay plus LED blink (~440 ms on a Uno): it doesn't read the UART meanwhile, and the ATmega
+   * holds at most 3 received bytes (2-byte FIFO + shift register); later bytes are lost.
+   */
+  deafAfterResetMs?: number;
 }
 
 /**
@@ -66,6 +71,11 @@ class FakeUno {
   private readonly flash = new Uint8Array(32 * 1024);
   private address = 0;
   private lostSyncs = 0;
+  /** Bytes the chip received while Optiboot was deaf, or the unread tail of an earlier frame. */
+  private uart: number[] = [];
+  private deaf = false;
+  /** Each reset restarts Optiboot's start-up: a wake-up scheduled by an earlier reset no longer applies. */
+  private resets = 0;
   private missedResets: number;
   private overrunPending: boolean;
   private flashed = false;
@@ -124,6 +134,29 @@ class FakeUno {
       this.lostSyncs -= 1;
       return;
     }
+    if (this.deaf) {
+      this.uart.push(...Array.from(data).slice(0, Math.max(0, 3 - this.uart.length)));
+      return;
+    }
+    this.frame(data);
+  }
+
+  /** Optiboot reads the buffered bytes first: a whole GET_SYNC is answered and a leftover byte starts the next frame. */
+  private wake(): void {
+    this.deaf = false;
+    const buffered = this.uart;
+    this.uart = [];
+    if (buffered.length === 0) return;
+    const sync = buffered[0] === 0x30 && buffered[1] === EOP && this.baud === this.options.bootloaderBaud;
+    if (!sync) return this.frame(new Uint8Array(buffered));
+    this.startAppSoon(this.options.bootWindowMs ?? 1_000);
+    this.port.receive(new Uint8Array([INSYNC, OK]));
+    this.uart = buffered.slice(2);
+  }
+
+  private frame(bytes: Uint8Array): void {
+    const data = this.uart.length > 0 ? new Uint8Array([...this.uart, ...bytes]) : bytes;
+    this.uart = [];
     // Optiboot: the wrong baud or an unknown command is a bad frame; it lets the watchdog start the sketch.
     const command = this.baud === this.options.bootloaderBaud ? this.stk(data) : undefined;
     if (!command) {
@@ -149,6 +182,7 @@ class FakeUno {
     const ok = new Uint8Array([INSYNC, OK]);
     switch (data[0]) {
       case 0x30: // GET_SYNC
+        return data.length === 2 ? ok : undefined;
       case 0x42: // SET_DEVICE
       case 0x50: // ENTER_PROGMODE
       case 0x52: // CHIP_ERASE
@@ -184,6 +218,15 @@ class FakeUno {
     }
     this.mode = "bootloader";
     this.lostSyncs = this.options.lostSyncsAfterReset ?? 0;
+    this.uart = [];
+    const deafMs = this.options.deafAfterResetMs ?? 0;
+    if (deafMs > 0) {
+      this.deaf = true;
+      const reset = ++this.resets;
+      this.later(deafMs, () => {
+        if (reset === this.resets) this.wake();
+      });
+    }
     this.startAppSoon(this.options.bootWindowMs ?? 1_000);
     const stale = this.options.staleAfterReset;
     if (stale) this.later(20, () => this.port.receive(new Uint8Array(stale)));
@@ -282,7 +325,7 @@ describe("flash safe firmware, then check board power (issue #20)", () => {
     // The runner heard none of the STK500 traffic.
     expect(bench.runner.state.rawLines.every((line) => line.startsWith("{"))).toBe(true);
     const messages = bench.messages();
-    for (const stage of [/open port at 115200/, /reset round 1\/3 at 115200/, /drained \d+ stale bytes/, /2 dummy GET_SYNC sent; drained 4 bytes/, /sync OK on attempt 1/, /first reply 14 10/, /Verifying signature/, /Uploading 75%/, /Verifying 95%/, /Complete 100%/, /reopen port at 115200/, /hello design design-r2 board uno-r3/, /VCC 5001 mV/]) {
+    for (const stage of [/open port at 115200/, /reset round 1\/3 at 115200/, /drained \d+ stale bytes/, /bootloader in sync on GET_SYNC 1/, /sync OK on attempt 1/, /first reply 14 10/, /Verifying signature/, /Uploading 75%/, /Verifying 95%/, /Complete 100%/, /reopen port at 115200/, /hello design design-r2 board uno-r3/, /VCC 5001 mV/]) {
       expect(messages.some((message) => stage.test(message)), String(stage)).toBe(true);
     }
     // Chrome's receive buffer is set explicitly: its 255-byte default is ~22 ms of traffic at 115200.
@@ -380,15 +423,26 @@ describe("flashing a real CH340 Uno over Web Serial (issue #20)", () => {
     expect(bench.runner.state.seenVcc?.mv).toBe(5001);
   });
 
-  it("syncs on a later attempt when the first GET_SYNCs after the reset are lost, inside Optiboot's 1 s window", async () => {
-    // The two dummy syncs and the first real one never reach Optiboot; its watchdog starts the sketch 1 s after reset.
-    const bench = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, lostSyncsAfterReset: 3 });
+  it("syncs on a later attempt when the first GET_SYNC after the reset is lost, inside Optiboot's 1 s window", async () => {
+    const bench = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, lostSyncsAfterReset: 1 });
     await expect(bench.flash()).resolves.toEqual({ baud: 115_200, bytes: 16, reopened: true });
     const messages = bench.messages();
-    expect(messages).toContain("flash: sync attempt 1/5 failed: Timeout after 200ms (waiting for device response)");
-    expect(messages).toContain("flash: sync OK on attempt 2");
+    expect(messages).toContainEqual(expect.stringMatching(/^flash: bootloader in sync on GET_SYNC 2/));
+    expect(messages).toContain("flash: sync OK on attempt 1");
     expect(messages.filter((message) => /reset round/.test(message))).toEqual([expect.stringMatching(/^flash: reset round 1\/3 at 115200/)]);
     expect(bench.board.opens).toEqual([115_200, 115_200, 115_200]);
+  });
+
+  it("doesn't overrun Optiboot while it blinks the LED after a reset (answers once, then the sketch starts)", async () => {
+    // The real CH340 Uno log: GET_SYNCs sent during Optiboot's ~440 ms deaf start-up piled up in the chip's 3-byte
+    // buffer; it answered once, read '0' where it expected ' ', and its watchdog started the old sketch.
+    const bench = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, deafAfterResetMs: 440 });
+    await expect(bench.flash()).resolves.toEqual({ baud: 115_200, bytes: 16, reopened: true });
+    const messages = bench.messages();
+    expect(messages).toContainEqual(expect.stringMatching(/^flash: bootloader in sync on GET_SYNC 1/));
+    expect(messages.filter((message) => /reset round/.test(message))).toHaveLength(1);
+    await bench.startRail();
+    expect(bench.runner.state.seenVcc?.mv).toBe(5001);
   });
 
   it("resets again at the board's own baud when a reset pulse doesn't take, before trying 57600", async () => {
