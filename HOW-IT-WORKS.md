@@ -52,8 +52,9 @@ system setting, using a space-cadet, cool-gray, anti-flash-white and red palette
    - **RETRO, review:** a third AI compares your description, the design and all the results, and votes GO or NO-GO.
 4. **GO for build.** You (the "Flight Director") press it in the web app, or send `GO` from iMessage as the human operator.
    Only then does the design become the build target.
-5. **Build it.** Numbered LEGO-style steps, one per part or wire: a picture, the exact holes ("from e12 to e16"),
-   and whether the USB cable must be plugged in. On the laptop (Steps tab) or the phone (scan the QR code). The phone's
+5. **Build it.** Numbered LEGO-style steps, one small piece at a time: a picture, the exact holes ("from e12 to
+   e16"), and whether the USB cable must be plugged in. A unit that repeats (five identical lights) is shown once,
+   then "Repeat ×4 more, 3 columns right each time" with a tick-box per copy and the Arduino pin it goes to. On the laptop (Steps tab) or the phone (scan the QR code). The phone's
    **Check with camera** asks Claude whether the photo matches the step — advice only, it never blocks you.
 
 6. **Bench: test the real board.** Plug in the Arduino and open **Bench** → **Use USB board**. The seven steps on
@@ -88,6 +89,50 @@ New missions use these choices. The design agent is told which board and breadbo
 through the strips on a mini board and adds a bridge wire across split rails. The steps and pictures name your parts ("your
 400-point board", "3 mm red LED"). **Identify from a photo** (laptop camera, phone QR, or upload) asks Claude which one you
 have and shows the reasons, then you confirm it or pick another. Without Claude, you pick from the lists.
+
+## Design philosophy
+
+How a ViBread breadboard should look, drawn from a hand-built board versus a generated one (issue #26). The design
+agent's prompt has the same numbered rules (section "How to lay out a breadboard design" in
+`apps/server/src/agents/prompts.ts`), and the breadboard layout tool scores every candidate layout by them
+(`packages/assembly/src/layout/quality.ts`). Change them here and there together.
+
+1. **The layout looks like the idea.** Spatial words in the brief ("next to each other", "in a row", "left to right")
+   are requirements. Parts that belong together sit together, in the order the idea implies (a counter's bits, a bar
+   graph's levels, a chaser's direction), matching the sketch's pin order.
+2. **Repeat, don't improvise.** Identical units (pin → resistor → LED → GND, or a button from pin to GND) are built
+   identically: same orientation, same shape, fixed spacing, one after another. N copies look like N copies.
+3. **Signal flows one way through each unit:** Arduino pin → short wire → part → resistor → rail. No doubling back, no
+   unit spread over both halves unless the part straddles the channel by nature (a button).
+4. **Locality and short wires.** Each part sits next to what it connects to (the resistor at its LED). Power and
+   ground go through the rails; a wire only where legs can't reach. Wires run short and parallel and never cross.
+5. **Separate functions.** Outputs (lights, buzzer) together, inputs (buttons, sensors) apart, each near its own pins.
+   The power rails stay the edge highway.
+6. **Readable beats compact.** Never save rows by stacking parts, sharing strips or using both halves.
+7. **Colours by role:** GND black, 5 V red, one signal family in unit order.
+8. **Easy to check.** A beginner compares the board to the picture at a glance, counts the units, follows each wire.
+9. **Don't ship a broken promise.** If the layout can't honour an explicit spatial request, the design is not GO:
+   the assembly check says which request and why.
+
+How the pieces carry it out:
+
+- **Design agent** states every arrangement the brief implies as a placement request (a row of like parts, left to
+  right; or each unit next to its anchor) and gives the Arduino pins in the same physical order, consecutive along the
+  row. Part labels that state a position ("Moon light 1 (leftmost)", "2 from right") are read as positions too.
+- **Order of repeated units**, strongest first: a row placement group; positions stated in part labels or pin roles;
+  ascending pin numbers. The layout then turns the Uno below the breadboard (USB end left: digital header D13 … D0
+  left to right; USB end right: D0 … D13) so the wires run straight down for that order, and the first build step
+  says which way to put it. A Nano sits on the breadboard and keeps its own placement.
+- **Layout tool** (`allocator.ts`): placement requests are hard constraints. It finds repeated units in the netlist
+  (`units.ts`), tries building them as identical copies at a fixed pitch (resistor across the channel, LED from row a
+  straight into the GND rail, one Arduino wire per unit into row j), and also tries its general packings. The layout
+  that meets every request with the best score wins: fewest wires, no crossings, copies regular and in order, short
+  wires. The choice and why is written to the mission's debug log.
+- **Assembly check (FAO):** an unmet placement request is NO-GO (`PLACEMENT-UNMET`). Parts side by side but in the
+  wrong order is the design's to fix (the fix says how, and the agent proposes again); no room is tool-side, so the
+  agent stops and explains instead of redesigning; crossing wires (`LAYOUT-CROSSINGS`) and irregular repeats
+  (`LAYOUT-IRREGULAR`) and parts not where their labels say (`LAYOUT-LABEL-ORDER`) are warnings the agent sees.
+- **Wire colours** (`colors.ts`) follow role and the order the units are built in.
 
 ## Yes, the simulator is built in
 

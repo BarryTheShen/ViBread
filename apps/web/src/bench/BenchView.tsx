@@ -20,8 +20,7 @@ import Step from "@mui/material/Step";
 import StepLabel from "@mui/material/StepLabel";
 import Stepper from "@mui/material/Stepper";
 import Typography from "@mui/material/Typography";
-import type { BenchRunResult, BoardProfileId, BuildState, Circuit, DeviceLine, Layout, MissionDetail, RevisionDetail, SelfTestPlan } from "@vibread/core";
-import { BOARD_PROFILES, revisionHash } from "@vibread/core";
+import { BOARD_PROFILES, isPracticeRun, revisionHash, type BenchRunResult, type BoardProfileId, type BuildState, type Circuit, type DeviceLine, type Layout, type MissionDetail, type RevisionDetail, type SelfTestPlan } from "@vibread/core";
 import { FAULTS, evaluateRun, planSelfTest, promptFor } from "@vibread/bench";
 import { BenchRunner, BoardCheckError, type BenchRunnerState } from "./runner.js";
 import { benchRuntime, createBenchLog } from "./benchLog.js";
@@ -55,6 +54,7 @@ interface FirmwareResponse {
   design?: string;
   plan?: SelfTestPlan;
   fallbackUpload?: { command: string; args: string[] };
+  calibration?: "measured" | "default";
 }
 
 interface BenchApprovalRequest {
@@ -110,7 +110,7 @@ async function loadBench(missionId: string): Promise<LoadedBench> {
   if (!revisionNumber) throw new Error("This mission has no released revision to verify yet.");
   const revision = await readJson<RevisionDetail>(`/api/missions/${encodeURIComponent(missionId)}/revisions/${revisionNumber}`);
   const hash = revision.hash || revisionHash(revision.circuit, revision.suite);
-  const plan = revision.results.selftest ?? planSelfTest(revision.circuit, hash);
+  const plan = revision.results.selftest ?? planSelfTest(revision.circuit, hash, revision.results.layout);
   let boardSvg = fallbackBreadboardSvg(revision.circuit.parts.map((part) => part.id));
   // The finished board with the builder's wire colours when this is the build target; else the pipeline drawing.
   const build = await readJson<BuildState>(`/api/missions/${encodeURIComponent(missionId)}/build`).catch(() => undefined);
@@ -230,6 +230,8 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
   const [benchHex, setBenchHex] = useState<string>();
   const [fallbackUpload, setFallbackUpload] = useState<{ command: string; args: string[] }>();
   const [flashProgress, setFlashProgress] = useState<FlashProgress>();
+  const [appCalibration, setAppCalibration] = useState<"measured" | "default">();
+  const [railOverride, setRailOverride] = useState(false);
   // Telemetry lives outside React state: only the board drawings subscribe, so readings never re-render the page.
   const [telemetry] = useState(createTelemetryStore);
   const [run, setRun] = useState<BenchRunResult>();
@@ -290,8 +292,8 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
     return () => {
       alive = false;
       runnerRef.current?.dispose();
-      void connectionRef.current?.transport.close();
-      void virtualRef.current?.close();
+      void connectionRef.current?.transport.close().catch(() => undefined);
+      void virtualRef.current?.close().catch(() => undefined);
     };
   }, [missionId]);
   useEffect(() => {
@@ -411,13 +413,72 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
     return nextRunner;
   }, [log]);
 
+  /** Stop the current runner and release both kinds of transport before choosing another bench. */
+  const clearBenchFlow = useCallback(async (): Promise<void> => {
+    runnerRef.current?.dispose();
+    runnerRef.current = undefined;
+    const selected = connectionRef.current;
+    connectionRef.current = undefined;
+    const virtual = virtualRef.current;
+    virtualRef.current = undefined;
+    setConnection(undefined);
+    setRunner(undefined);
+    setRunnerState(undefined);
+    setRun(undefined);
+    setSelectedCandidate(0);
+    setActiveStep(0);
+    setRailRequestAt(undefined);
+    setFlashProgress(undefined);
+    setAppCalibration(undefined);
+    setRailOverride(false);
+    setNativeOutput(undefined);
+    setNativeFailed(undefined);
+    setNeedsReconnect(false);
+    setErrorFix(undefined);
+    setError(undefined);
+    setTechnicalError(undefined);
+    setBenchHex(undefined);
+    telemetry.set(undefined);
+    setHighlight({ holes: [], parts: [], jumpers: [] });
+    lastRunnerError.current = undefined;
+    let failure: unknown;
+    try {
+      if (selected?.transport.isOpen) await selected.transport.close();
+    } catch (reason: unknown) {
+      failure = reason;
+      log("warn", "serial: could not close the previous port", { error: reason instanceof Error ? reason.message : String(reason) });
+    }
+    try {
+      await virtual?.close();
+    } catch (reason: unknown) {
+      failure ??= reason;
+      log("warn", "virtual: could not close the previous board", { error: reason instanceof Error ? reason.message : String(reason) });
+    }
+    if (failure !== undefined) throw failure;
+  }, [log, telemetry]);
+
+  const switchMode = useCallback(async (nextMode: "physical" | "virtual"): Promise<void> => {
+    if (nextMode === mode || busy) return;
+    setBusy(`mode:${nextMode}`);
+    try {
+      await clearBenchFlow();
+      setMode(nextMode);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+      setMode(nextMode);
+    } finally {
+      setBusy(undefined);
+    }
+  }, [busy, clearBenchFlow, mode]);
+
+
   const connectPhysical = useCallback(async (): Promise<void> => {
     if (!loaded || !missionId) return;
     setBusy("connect");
     setError(undefined);
     setTechnicalError(undefined);
     try {
-      // Logged before the port picker, so a report shows where the bench ran even when choosing a port fails.
+      // Cancelling the chooser must leave an existing connection untouched.
       log("info", "connect: bench runtime", benchRuntime());
       const picked = await requestBoardPort({
         log,
@@ -429,6 +490,8 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
           setErrorFix("reconnect");
         },
       });
+      // A real port was chosen; now it is safe to tear down the old flow and attach the new one.
+      await clearBenchFlow();
       const selected = boardProfileChoice === "auto" ? picked : { ...picked, profile: BOARD_PROFILES[boardProfileChoice] };
       connectionRef.current = selected;
       setConnection(selected);
@@ -451,13 +514,14 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
     } finally {
       setBusy(undefined);
     }
-  }, [attachRunner, boardProfileChoice, loaded, log, missionId]);
+  }, [attachRunner, boardProfileChoice, clearBenchFlow, loaded, log, missionId]);
 
   const connectVirtual = useCallback(async (): Promise<void> => {
     if (!loaded || !missionId) return;
     setBusy("connect");
     setError(undefined);
     try {
+      await clearBenchFlow();
       const firmware = await firmwareFor(missionId, "bench");
       setBenchHex(firmware.hex);
       setFallbackUpload(firmware.fallbackUpload);
@@ -480,7 +544,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
     } finally {
       setBusy(undefined);
     }
-  }, [attachRunner, fault, loaded, missionId]);
+  }, [attachRunner, clearBenchFlow, fault, loaded, missionId]);
 
   const connect = mode === "physical" ? connectPhysical : connectVirtual;
 
@@ -564,8 +628,29 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
     }
   }, [log, mode, runner]);
 
+  const continueAfterPowerOverride = useCallback(async (): Promise<void> => {
+    if (!missionId || mode !== "physical") return;
+    setBusy("override:power");
+    setError(undefined);
+    setTechnicalError(undefined);
+    try {
+      await readJson<{ ok: true; bypass: "power-check" }>(`/api/missions/${encodeURIComponent(missionId)}/bench/override`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bypass: "power-check" }),
+      });
+      setRailOverride(true);
+      setErrorFix(undefined);
+      setActiveStep(2);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(undefined);
+    }
+  }, [missionId, mode]);
+
   const startSelfTest = useCallback(async (): Promise<void> => {
-    if (!runner || !runnerState?.seenHello || !runnerState.seenVcc) return;
+    if (!runner || (!railOverride && (!runnerState?.seenHello || !runnerState.seenVcc))) return;
     setBusy("selftest");
     setError(undefined);
     setRun(undefined);
@@ -581,7 +666,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
     } finally {
       setBusy(undefined);
     }
-  }, [runner, runnerState, subsetTests]);
+  }, [railOverride, runner, runnerState, subsetTests]);
 
   const submitRun = useCallback(async (): Promise<void> => {
     if (!loaded || !missionId || !runner) return;
@@ -619,6 +704,25 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
       setBusy(undefined);
     }
   }, [loaded, missionId, mode, runner, benchQuery.step]);
+
+  const acceptSelfTestOverride = useCallback(async (): Promise<void> => {
+    if (!missionId || mode !== "physical" || !run || isPracticeRun(run) || run.overriddenBy !== undefined) return;
+    setBusy("override:self-test");
+    setError(undefined);
+    setTechnicalError(undefined);
+    try {
+      const accepted = await readJson<BenchRunResult>(`/api/missions/${encodeURIComponent(missionId)}/bench/override`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ bypass: "self-test", runId: run.runId }),
+      });
+      setRun(accepted);
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusy(undefined);
+    }
+  }, [missionId, mode, run]);
   const downloadFirmware = useCallback(async (kind: "bench" | "app"): Promise<void> => {
     if (!missionId) return;
     setBusy(`download:${kind}`);
@@ -650,6 +754,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
     try {
       const firmware = await firmwareFor(missionId, "app");
       setFallbackUpload(firmware.fallbackUpload);
+      setAppCalibration(mode === "physical" ? firmware.calibration ?? "default" : undefined);
       if (mode === "physical") {
         const selected = connectionRef.current;
         if (!selected) throw new Error("Connect the board before flashing app firmware.");
@@ -731,7 +836,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
         await reopenWebSerial(selected);
         return;
       }
-      log("info", `native flash: done in ${result.durationMs} ms (${result.fqbn}); waiting for the new firmware's hello`);
+      if (which === "app") setAppCalibration(result.calibration ?? "default");
       runnerRef.current?.markFlashBoundary();
       setFlashProgress({ stage: "Flashed ✓ (avrdude)", percent: 100 });
       const reopened = await reopenWebSerial(selected);
@@ -773,7 +878,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
       connected: runner !== undefined,
       safeReady: activeStep >= 2,
       railsReady: Boolean(runner?.state.seenHello && runner.state.seenVcc),
-      passed: run?.verdict === "pass",
+      passed: run?.verdict === "pass" || run?.overriddenBy !== undefined,
       loadedRevision: loaded?.revision.n ?? -1,
       requestRevision: request.revision,
     });
@@ -897,8 +1002,10 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
   }
 
   const railReady = Boolean(runnerState?.seenHello && runnerState.seenVcc);
+  const hasLightSensor = loaded.plan.subjects.some((subject) => subject.kind === "light");
   const pendingAsks = (runnerState?.asks ?? []).filter((ask) => runnerState?.answers[ask.id] === undefined);
   const showPromptColumn = pendingAsks.length > 0 || remoteAnswer !== undefined || Boolean(runnerState?.done);
+  const runAccepted = run?.verdict === "pass" || run?.overriddenBy !== undefined;
   const topCandidate = run?.verdict === "pass" ? undefined : run?.diagnosis.candidates[selectedCandidate];
   const indistinguishable = run !== undefined && /indistinguishable|equally likely|cannot distinguish/i.test(run.diagnosis.summary);
   const allLines = runnerState?.rawLines ?? [];
@@ -906,7 +1013,11 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
   const currentProfile = connection?.profile;
   const benchArtifactUrl = loaded.revision.artifactUrls["bench.hex"];
   const appArtifactUrl = loaded.revision.artifactUrls["app.hex"];
-  const lastRun = loaded.revision.results.bench?.at(-1);
+  const benchRuns = loaded.revision.results.bench ?? [];
+  const lastPhysicalRun = benchRuns.findLast((candidate) => !isPracticeRun(candidate));
+  const lastPracticeRun = benchRuns.findLast((candidate) => isPracticeRun(candidate));
+  const lastRun = mode === "virtual" ? lastPracticeRun : lastPhysicalRun;
+  const lastRunLabel = mode === "virtual" ? "Last practice run (virtual board)" : "Last self-test";
   const timedOutAsk = run?.verdict === "incomplete" ? runnerState?.lines.find((line): line is Extract<DeviceLine, { t: "ask" }> => line.t === "ask" && runnerState?.answers[line.id] === "timeout") : undefined;
   const timedOutPrompt = timedOutAsk ? promptTitle(timedOutAsk, loaded.plan, promptFor(timedOutAsk, loaded.plan).title) : "a self-test prompt";
   const fix = mode === "physical" ? errorFix : undefined;
@@ -935,6 +1046,8 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
   // After Connect, the board's own banner tells whether a flash is needed at all.
   const connectHello = mode === "physical" && activeStep === 1 ? runnerState?.seenHello : undefined;
   const alreadyFlashed = connectHello !== undefined && connectHello.design === loaded.plan.design && connectHello.board === loaded.plan.board;
+  const boardConnected = mode === "physical" && connection !== undefined && !connection.transport.disconnected;
+  const connectButtonLabel = boardConnected && connection ? `Connected: ${describePort(connection)} · Change port` : "Choose filtered USB port";
 
   return (
     // A size container: the bench sits in the resizable mission panel, so its rows follow the panel's width, not the window's.
@@ -962,11 +1075,11 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
                 <Typography color="text.secondary" sx={{ mt: 0.5 }}>Physical actions stay behind an explicit click in this page. "Try without a board" runs the same self-test on a simulated Arduino, so you can practise before plugging anything in.</Typography>
               </Box>
               <Stack direction="row" spacing={1} useFlexGap sx={{ flexShrink: 0, flexWrap: "wrap" }}>
-                <Button variant={mode === "virtual" ? "contained" : "outlined"} onClick={() => setMode("virtual")} sx={{ ...actionButtonSx, whiteSpace: "nowrap" }}>Try without a board</Button>
-                <Button variant={mode === "physical" ? "contained" : "outlined"} onClick={() => setMode("physical")} sx={{ ...actionButtonSx, whiteSpace: "nowrap" }}>Use USB board</Button>
+                <Button variant={mode === "virtual" ? "contained" : "outlined"} onClick={() => void switchMode("virtual")} disabled={Boolean(busy)} sx={{ ...actionButtonSx, whiteSpace: "nowrap" }}>Try without a board</Button>
+                <Button variant={mode === "physical" ? "contained" : "outlined"} onClick={() => void switchMode("physical")} disabled={Boolean(busy)} sx={{ ...actionButtonSx, whiteSpace: "nowrap" }}>Use USB board</Button>
               </Stack>
             </Stack>
-            {lastRun && <Alert severity={lastRun.verdict === "pass" ? "success" : "warning"} sx={{ mt: 2 }}>Last self-test: {lastRun.verdict.toUpperCase()} · {lastRun.diagnosis.summary}</Alert>}
+            {lastRun && <Alert severity={lastRun.verdict === "pass" ? "success" : "warning"} sx={{ mt: 2 }}>{lastRunLabel}: {lastRun.verdict.toUpperCase()} · {lastRun.diagnosis.summary}</Alert>}
             {mode === "virtual" && (
               <Stack spacing={2} useFlexGap sx={{ mt: 2, flexDirection: "column", [WIDE_PANEL]: { flexDirection: "row", alignItems: "flex-end" } }}>
                 <FormControl size="small" sx={{ minWidth: "min(290px, 100%)" }}>
@@ -1002,7 +1115,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
                 </FormControl>
               </Paper>
             )}
-            <Button variant="contained" onClick={() => void connect()} disabled={Boolean(busy) || activeStep > 0} sx={{ ...actionButtonSx, mt: 2 }}>{busy === "connect" ? "Opening…" : mode === "virtual" ? "Start virtual board" : "Choose filtered USB port"}</Button>
+            <Button variant="contained" onClick={() => void connect()} disabled={Boolean(busy)} sx={{ ...actionButtonSx, mt: 2 }}>{busy === "connect" ? "Opening…" : mode === "virtual" ? "Start virtual board" : connectButtonLabel}</Button>
             {mode === "physical" && <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>Supported browser: Chrome or Edge. On unsupported browsers, use the laptop fallback below.</Typography>}
           </CardContent>
         </Card>
@@ -1014,7 +1127,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
           </Alert>
         )}
         {requests.map((request) => {
-          const gate = approvalGate(request.action, { connected: runner !== undefined, safeReady: activeStep >= 2, railsReady: Boolean(runner?.state.seenHello && runner.state.seenVcc), passed: run?.verdict === "pass", loadedRevision: loaded.revision.n, requestRevision: request.revision });
+          const gate = approvalGate(request.action, { connected: runner !== undefined, safeReady: activeStep >= 2, railsReady: Boolean(runner?.state.seenHello && runner.state.seenVcc), passed: runAccepted, loadedRevision: loaded.revision.n, requestRevision: request.revision });
           return <Card key={request.id} variant="outlined">
             <CardContent>
               <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>Claude Code asked: {request.summary} (r{request.revision})</Typography>
@@ -1079,7 +1192,9 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
                 <Chip label={runnerState?.seenVcc ? `VCC ${runnerState.seenVcc.mv} mV` : "Waiting for VCC"} color={runnerState?.seenVcc ? "success" : "default"} />
               </Stack>
               <Button variant="contained" onClick={() => void startRail()} disabled={Boolean(busy) || activeStep !== 2} sx={{ ...actionButtonSx, mt: 2 }}>{busy === "rail" ? "Checking…" : "Check board power"}</Button>
-              {railReady && <Button variant="outlined" onClick={() => void startSelfTest()} disabled={Boolean(busy) || activeStep !== 2} sx={{ ...actionButtonSx, mt: 2, ml: 1 }}>Board powered · begin self-test</Button>}
+              {mode === "physical" && error && activeStep === 2 && !railOverride && <Button variant="outlined" onClick={() => void continueAfterPowerOverride()} disabled={Boolean(busy)} sx={{ ...actionButtonSx, mt: 2, ml: 1 }}>{busy === "override:power" ? "Continuing…" : "Continue anyway"}</Button>}
+              {railOverride && <Alert severity="warning" sx={{ mt: 2 }}>Power check bypassed by your explicit override. Continue only if you have checked the board and wiring yourself.</Alert>}
+              {(railReady || railOverride) && <Button variant="outlined" onClick={() => void startSelfTest()} disabled={Boolean(busy) || activeStep !== 2} sx={{ ...actionButtonSx, mt: 2, ml: 1 }}>{railOverride ? "Continue anyway · begin self-test" : "Board powered · begin self-test"}</Button>}
             </CardContent>
           </Card>
         )}
@@ -1151,8 +1266,9 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
               </Stack>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
                 <Button variant="outlined" onClick={restartSelfTest} disabled={Boolean(busy)} sx={actionButtonSx}>{run.verdict === "pass" ? "Run the self-test again" : "Fix wiring and rerun"}</Button>
-                {run.verdict === "pass" && mode === "physical" && native.ports && <Button variant="contained" onClick={() => void flashNativeFirmware("app")} disabled={Boolean(busy) || !native.port} sx={actionButtonSx}>{busy === "native:app" ? "Flashing with avrdude…" : "Flash app firmware with ViBread's uploader (avrdude)"}</Button>}
-                {run.verdict === "pass" && <Button variant={mode === "physical" && native.ports ? "outlined" : "contained"} onClick={() => void flashApp()} disabled={Boolean(busy)} sx={actionButtonSx}>{mode === "virtual" ? "Continue to celebration" : native.ports ? "Flash app firmware in the browser (Web Serial)" : "Flash app firmware with calibration"}</Button>}
+                {!runAccepted && mode === "physical" && !isPracticeRun(run) && <Button variant="outlined" onClick={() => void acceptSelfTestOverride()} disabled={Boolean(busy)} sx={actionButtonSx}>{busy === "override:self-test" ? "Accepting…" : "Accept anyway"}</Button>}
+                {runAccepted && mode === "physical" && native.ports && <Button variant="contained" onClick={() => void flashNativeFirmware("app")} disabled={Boolean(busy) || !native.port} sx={actionButtonSx}>{busy === "native:app" ? "Flashing with avrdude…" : "Flash app firmware with ViBread's uploader (avrdude)"}</Button>}
+                {runAccepted && <Button variant={mode === "physical" && native.ports ? "outlined" : "contained"} onClick={() => void flashApp()} disabled={Boolean(busy)} sx={actionButtonSx}>{mode === "virtual" ? "Continue to celebration" : native.ports ? "Flash app firmware in the browser (Web Serial)" : "Flash app firmware with calibration"}</Button>}
               </Stack>
             </CardContent>
           </Card>
@@ -1162,6 +1278,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
           <Paper sx={{ p: { xs: 3, md: 6 }, textAlign: "center", overflow: "hidden", position: "relative", "@keyframes vb-liftoff": { from: { transform: "translateY(20px)", opacity: 0 }, to: { transform: "translateY(0)", opacity: 1 } }, animation: reducedMotion ? "none" : "vb-liftoff .8s ease-out" }}>
             <Typography variant="h2" sx={{ fontWeight: 900 }}>Mission verified</Typography>
             <Typography variant="h6" color="text.secondary" sx={{ mt: 1 }}>The bench telemetry agrees with the design. ViBread is GO for launch.</Typography>
+            {mode === "physical" && hasLightSensor && appCalibration === "default" && <Alert severity="warning" sx={{ mt: 2, textAlign: "left" }}>App firmware is running with default light-sensor calibration. No accepted real-board calibration was available, so retest the light sensor on the assembled board before relying on its threshold.</Alert>}
             {mode === "virtual" && <><Typography variant="body2" sx={{ mt: 2 }}>Your project firmware is running on the virtual board.</Typography><DecoratedBoard svg={loaded.boardSvg} highlight={highlight} telemetry={telemetry} sx={{ maxWidth: 720, mx: "auto", mt: 2, "& svg": { display: "block", width: "100%", height: "auto" } }} /></>}
           </Paper>
         )}

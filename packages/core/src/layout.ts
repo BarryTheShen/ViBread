@@ -63,7 +63,15 @@ export interface Layout {
   jumpers: Jumper[];
   /** Nano only: the board straddles the channel with pin 1 at `topRow` in `columns[0]`. */
   boardAnchor?: { topRow: number; columns: [Column, Column] };
+  /**
+   * Uno (off the breadboard, below it): which end its USB socket faces (issue #26). "usb-left" (the default when
+   * absent): the digital header reads AREF, D13 … D0 left to right; "usb-right": D0 … D13, AREF. The allocator picks
+   * the one that lets the parts' left-to-right order run with parallel wires. Not used for a Nano on the breadboard.
+   */
+  boardOrientation?: BoardOrientation;
 }
+
+export type BoardOrientation = "usb-left" | "usb-right";
 
 export type LvsIssueKind =
   | "split-net"
@@ -106,7 +114,11 @@ export interface LvsResult {
 export interface PlacementSummary {
   /** `rows`: breadboard row numbers (1…63), which run left to right in every drawing; `side`: half of the board. */
   parts: { part: string; rows: [number, number]; side: "a-e" | "f-j" | "both" }[];
-  groups: { parts: string[]; met: boolean; detail: string }[];
+  /**
+   * `orderOnly`: an unmet row group whose parts are all side by side but not in the listed left-to-right order. The
+   * design can fix that (list the group in the order wanted, pins in one direction); anything else is a room problem.
+   */
+  groups: { parts: string[]; met: boolean; detail: string; orderOnly?: boolean }[];
   /** Plain-language summary for the agent and the person. */
   text: string;
 }

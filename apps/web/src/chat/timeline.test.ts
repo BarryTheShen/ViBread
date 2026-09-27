@@ -99,6 +99,18 @@ describe("groupTimeline", () => {
     expect(views[3]).toMatchObject({ title: "Virtual board · self-test (practice)", status: "passed" });
   });
 });
+  it("renders safety overrides as visible warning rows", () => {
+    const views = groupTimeline([
+      ev("release.override", 1, { revision: 1, actor: human, channel: "web", text: "Released with an override — bypassed: FIDO NO-GO" }),
+      ev("bench.override", 2, { revision: 1, actor: human, channel: "web", text: "Bench override — bypassed: self-test fail" }),
+      ev("mission.override", 3, { revision: 1, actor: human, channel: "web", text: "Mission override — bypassed: bench run" }),
+    ]).map(describeItem);
+    expect(views.map((view) => [view.title, view.tone])).toEqual([
+      ["Released with override", "warning"],
+      ["Bench override", "warning"],
+      ["Mission complete with override", "warning"],
+    ]);
+  });
 
 describe("placeTimeline", () => {
   const brief = { id: "u-brief", role: "user" };

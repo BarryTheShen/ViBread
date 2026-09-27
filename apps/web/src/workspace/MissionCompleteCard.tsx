@@ -9,7 +9,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { keyframes } from "@mui/material/styles";
 import useMediaQuery from "@mui/material/useMediaQuery";
-import type { MissionDetail } from "@vibread/core";
+import { isPracticeRun, type MissionDetail } from "@vibread/core";
 import { useMemo } from "react";
 import { Link as RouterLink } from "react-router";
 import { HttpError } from "../api/client.js";
@@ -77,7 +77,10 @@ export function MissionCompleteCard({
   const confirm = useConfirmMission(missionId);
   const phase = detail.mission.phase;
   const released = useRevision(missionId, phase === "LAUNCH" ? detail.mission.releasedRevision : undefined);
-  const virtualBoard = released.data?.results.bench?.at(-1)?.runId.startsWith("virtual-") ?? false;
+  const benchRuns = released.data?.results.bench ?? [];
+  const latestReal = benchRuns.findLast((run) => !isPracticeRun(run));
+  const latestPractice = benchRuns.findLast((run) => isPracticeRun(run));
+  const virtualBoard = latestReal === undefined && latestPractice?.verdict === "pass";
   if (phase === "DONE") {
     return (
       <>

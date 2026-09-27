@@ -8,11 +8,12 @@ const moon = GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit;
 const launch = GOLDEN.find((design) => design.key === "launch-control")!.circuit;
 
 describe("default wire colours (issue #15)", () => {
-  it("reserves red for 5 V and black for GND, and gives same-role lines consecutive resistor-code colours in pin order", () => {
+  it("reserves red for 5 V and black for GND, and gives same-role lines consecutive resistor-code colours left to right as built", () => {
     const colors = defaultNetColors(moon);
     expect(colors["5V"]).toBe("red");
     expect(colors.GND).toBe("black");
-    // LED lines D3–D6 in pin order; each line keeps its colour through the resistor (L1…L4).
+    // The LED units are built left to right (moon light 1 leftmost, D3 … D6) and their colours follow that order; each
+    // line keeps its colour through the resistor (L1…L4).
     expect(["D3", "D4", "D5", "D6"].map((net) => colors[net])).toEqual(["yellow", "green", "blue", "purple"]);
     expect(["L1", "L2", "L3", "L4"].map((net) => colors[net])).toEqual(["yellow", "green", "blue", "purple"]);
     const signals = Object.entries(colors).filter(([net]) => net !== "5V" && net !== "GND").map(([, color]) => color);
@@ -83,7 +84,7 @@ describe("builder wire-colour overrides (issue #15)", () => {
 
   it("writes 'an' before colour names that start with a vowel", () => {
     const steps = buildSteps(moon, layout, { wireColors: jumperColors(moon, layout, { [`wire:${d4.id}`]: "orange" }) });
-    expect(steps.steps.find((step) => step.adds.jumpers.includes(d4.id))!.text).toMatch(/^An orange wire\b/);
+    expect(steps.steps.find((step) => step.adds.jumpers.includes(d4.id))!.text).toContain("an orange wire from Arduino pin D4");
     expect(steps.steps.find((step) => step.kind === "rails")!.text).toContain("A red wire: Arduino pin 5V");
     expect(steps.steps.map((step) => step.text).join(" ")).not.toMatch(/\ba (orange|a|e|i|o|u)\w* wire/);
   });
@@ -93,7 +94,7 @@ describe("builder wire-colour overrides (issue #15)", () => {
     const wireColors = jumperColors(moon, layout, overrides);
     const steps = buildSteps(moon, layout, { wireColors });
     const step = steps.steps.find((candidate) => candidate.adds.jumpers.includes(d4.id))!;
-    expect(step.text).toMatch(/^A custom-colour \(#ff66aa\) wire\b/);
+    expect(step.text).toContain("a custom-colour (#ff66aa) wire from Arduino pin D4");
     expect(steps.steps.find((candidate) => candidate.kind === "rails")!.text).toContain("A blue wire: Arduino pin GND");
     const svg = renderBreadboardSvg({ circuit: moon, layout, steps, upToStep: step.n, wireColors });
     const wire = svg.match(new RegExp(`<g id="wire-${d4.id}"[\\s\\S]*?</g>`))?.[0] ?? "";

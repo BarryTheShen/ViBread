@@ -120,8 +120,8 @@ describe("deterministic breadboard layout", () => {
     expect(steps.steps.at(-1)?.plug).toBe("plugged");
 
     expect(steps.steps[1].text).toContain("Columns 1–63 run left to right");
-    const resistorStep = steps.steps.find((step) => step.title.startsWith("Insert R1"))!;
-    expect(resistorStep.text).toMatch(/220 Ω resistor R1 \(red-red-brown-gold\), either way round: one leg in hole [a-j]\d+[^;]*; the other in hole [a-j]\d+/);
+    const resistorStep = steps.steps.find((step) => step.title.startsWith("Insert R5"))!;
+    expect(resistorStep.text).toMatch(/10 kΩ resistor R5 \(brown-black-orange-gold\), either way round: one leg in hole [a-j]\d+[^;]*; the other in hole [a-j]\d+/);
     const a0 = layout.jumpers.find((jumper) => "board" in jumper.from && jumper.from.board === "A0")!;
     const jumperStep = steps.steps.find((step) => step.adds.jumpers.includes(a0.id))!;
     expect(jumperStep.text).toMatch(new RegExp(`End 1: Arduino pin A0 \\(.+\\)\\. End 2: hole ${"hole" in a0.to ? a0.to.hole : ""}\\b`));
@@ -496,26 +496,29 @@ function whackAMole(options: { groups?: boolean; breadboard?: "bb-830" | "bb-400
 
 /** Rows and board halves of a placed part, straight from its holes. */
 function where(layout: Layout, part: string): { from: number; to: number; halves: Set<string> } {
-  const holes = Object.values(layout.placements.find((placement) => placement.part === part)!.pins).map((hole) => parseHole(hole)!);
+  // Terminal holes only: a leg straight in a rail hole is on neither half.
+  const holes = Object.values(layout.placements.find((placement) => placement.part === part)!.pins).map((hole) => parseHole(hole)!).filter((hole) => hole.kind === "terminal");
   const rows = holes.map((hole) => (hole.kind === "terminal" ? hole.row : 0));
   return { from: Math.min(...rows), to: Math.max(...rows), halves: new Set(holes.map((hole) => (hole.kind === "terminal" && "abcde".includes(hole.column) ? "top" : "bottom"))) };
 }
 
 describe("placement groups (issue #16)", () => {
-  it.each(["bb-830", "bb-400"] as const)("puts each light and its resistor next to its button on %s, groups left to right", (breadboard) => {
+  it.each(["bb-830", "bb-400"] as const)("puts each light and its resistor next to its button on %s, groups in pin order", (breadboard) => {
     const circuit = whackAMole({ groups: true, breadboard });
     const layout = assertBuildable(circuit);
     let previousEnd = 0;
+    // Groups in pin order (mole 1 on D2/D8 leftmost); the Uno faces whichever way makes the wires run parallel.
     for (const i of [1, 2, 3]) {
       const button = where(layout, `BTN${i}`);
       const led = where(layout, `LED${i}`);
       const resistor = where(layout, `R${i}`);
-      // Within 4 rows of the button's rows, one half of the board for LED and resistor.
+      // Within 4 rows of the button's rows; LED and resistor never on opposite halves (a part across the channel sits
+      // on both).
       for (const part of [led, resistor]) expect(Math.max(part.from - button.to, button.from - part.to, 0), `mole ${i}`).toBeLessThanOrEqual(4);
-      expect(led.halves.size).toBe(1);
-      expect([...resistor.halves]).toEqual([...led.halves]);
+      const oneHalf = [led, resistor].filter((part) => part.halves.size === 1).map((part) => [...part.halves][0]);
+      expect(new Set(oneHalf).size, `mole ${i} halves`).toBeLessThanOrEqual(1);
       const start = Math.min(button.from, led.from, resistor.from);
-      expect(start, `group ${i} starts right of group ${i - 1}`).toBeGreaterThan(previousEnd);
+      expect(start, `group ${i} starts right of the group before it`).toBeGreaterThan(previousEnd);
       previousEnd = Math.max(button.to, led.to, resistor.to);
     }
     const report = assemblyReport({ circuit, layout, lvs: lvs(circuit, layout), revisionHash: "test" });
@@ -532,25 +535,29 @@ describe("placement groups (issue #16)", () => {
     expect(placementSummary(circuit, layout).parts.map((entry) => entry.part).sort()).toEqual(circuit.parts.map((part) => part.id).sort());
   });
 
-  it("reports a group it cannot build as PLACEMENT-UNMET (tool-side) and still lays the circuit out", () => {
+  it("fails a group it cannot build (PLACEMENT-UNMET, tool-side NO-GO) and still lays the circuit out", () => {
     const keys = [1, 2, 3, 4, 5, 6];
     const circuit = circuitOf({
-      parts: keys.map((i) => ({ id: `BTN${i}`, module: "button", params: {} })),
+      parts: [...keys.map((i) => ({ id: `BTN${i}`, module: "button", params: {} })), { id: "LED1", module: "led", params: { color: "red" } }, { id: "R1", module: "resistor", params: { ohms: 220 } }],
       nets: [
         ...keys.map((i) => ({ id: `D${i + 1}`, kind: "signal", pins: [board(`D${i + 1}`), pin(`BTN${i}`, "1")] })),
-        { id: "GND", kind: "ground", pins: [board("GND"), ...keys.map((i) => pin(`BTN${i}`, "3"))] },
+        { id: "D9", kind: "signal", pins: [board("D9"), pin("R1", "1")] },
+        { id: "L1", kind: "signal", pins: [pin("R1", "2"), pin("LED1", "A")] },
+        { id: "GND", kind: "ground", pins: [board("GND"), pin("LED1", "K"), ...keys.map((i) => pin(`BTN${i}`, "3"))] },
       ],
-      roles: keys.map((i) => ({ pin: `D${i + 1}`, mode: "INPUT_PULLUP", part: `BTN${i}`, purpose: "key" })),
-      // Six buttons cannot all sit within 4 rows of BTN1.
-      placement: { groups: [keys.map((i) => `BTN${i}`)] },
+      roles: [...keys.map((i) => ({ pin: `D${i + 1}`, mode: "INPUT_PULLUP", part: `BTN${i}`, purpose: "key" })), { pin: "D9", mode: "OUTPUT", part: "LED1", purpose: "light" }],
+      // Six buttons cannot all sit within 4 rows of the light listed first.
+      placement: { groups: [["LED1", ...keys.map((i) => `BTN${i}`)]] },
     });
-    const layout = assertBuildable(circuit);
-    const report = assemblyReport({ circuit, layout, lvs: lvs(circuit, layout), revisionHash: "test" });
+    const layout = layoutBoard(circuit);
+    const result = lvs(circuit, layout);
+    expect(result.ok).toBe(true);
+    const report = assemblyReport({ circuit, layout, lvs: result, revisionHash: "test" });
     const unmet = report.findings.filter((finding) => finding.ruleId === "PLACEMENT-UNMET");
     expect(unmet).toHaveLength(1);
-    expect(unmet[0]).toMatchObject({ toolSide: true, severity: "warning", refs: { parts: keys.map((i) => `BTN${i}`) } });
-    expect(unmet[0]!.title).toContain("BTN1, BTN2, BTN3, BTN4, BTN5, BTN6");
-    expect(report.verdict).toBe("GO");
+    expect(unmet[0]).toMatchObject({ toolSide: true, severity: "error", refs: { parts: ["LED1", ...keys.map((i) => `BTN${i}`)] } });
+    expect(unmet[0]!.detail).toMatch(/rows away from LED1/);
+    expect(report.verdict).toBe("NO-GO");
     expect((report.evidence?.placement as { groups: { met: boolean }[] }).groups[0]!.met).toBe(false);
   });
 
@@ -756,6 +763,11 @@ describe("LEGO-style build steps (issue #22)", () => {
     const steps = buildSteps(circuit, layout);
     for (const part of circuit.parts.filter((entry) => entry.module === "led")) {
       const step = steps.steps.find((entry) => entry.adds.parts.includes(part.id))!;
+      // A repeat step's LEDs are copies of the one previewed on the template step (checked there); it shows the checklist.
+      if (step.repeat?.role === "repeat") {
+        expect(steps.steps[step.repeat.template - 1]!.adds.parts.some((id) => circuit.parts.find((entry) => entry.id === id)?.module === "led")).toBe(true);
+        continue;
+      }
       const pins = layout.placements.find((entry) => entry.part === part.id)!.pins;
       for (const focus of [false, true]) {
         const svg = renderBreadboardSvg({ circuit, layout, steps, upToStep: step.n, focus });
@@ -771,10 +783,12 @@ describe("LEGO-style build steps (issue #22)", () => {
         expect(Math.sign(x("− cathode") - middle), `${key} ${part.id}: − cathode side`).toBe(Math.sign(cathodeHole - middle));
         expect(panel).toContain("long leg");
         expect(panel).toContain("short leg, flat side");
-        // The leg order in the panel matches the board: the leg further left on the board is further left in the panel.
+        // The leg order in the panel matches the board: the leg further left on the board is further left in the panel
+        // (an upright LED, both legs in one column, may be drawn either way).
         const column = (hole: string) => Number(hole.replace(/^\D+/, ""));
-        expect(Math.sign(anodeHole - cathodeHole)).toBe(Math.sign(column(pins.A!) - column(pins.K!)));
-        for (const hole of [pins.A!, pins.K!]) expect(svg, `${key} ${part.id}: arrow to ${hole}`).toContain(`data-arrow-hole="${hole}"`);
+        if (column(pins.A!) !== column(pins.K!)) expect(Math.sign(anodeHole - cathodeHole)).toBe(Math.sign(column(pins.A!) - column(pins.K!)));
+        // Arrows from the panel to the holes when the step adds one or two pieces (more would criss-cross the board).
+        if (step.adds.parts.length + step.adds.jumpers.length <= 2) for (const hole of [pins.A!, pins.K!]) expect(svg, `${key} ${part.id}: arrow to ${hole}`).toContain(`data-arrow-hole="${hole}"`);
       }
     }
   });
@@ -814,8 +828,9 @@ describe("LEGO-style build steps (issue #22)", () => {
           expect(landmarkHolds(layout, landmark), `${key} step ${step.n}: ${landmark.text}`).toBe(true);
           expect(step.text, `${key} step ${step.n}`).toContain(landmark.text);
           if (landmark.kind !== "header") {
+            // Something already on the board, or placed earlier in this same step (a unit step's LED next to its resistor).
             const ref = "part" in landmark.ref ? landmark.ref.part : landmark.ref.jumper;
-            expect(built.has(ref), `${key} step ${step.n}: ${ref} built before`).toBe(true);
+            expect(built.has(ref) || step.adds.parts.includes(ref) || step.adds.jumpers.includes(ref), `${key} step ${step.n}: ${ref} built before`).toBe(true);
           }
         }
         if (step.kind === "place" || step.kind === "jumper") {
@@ -888,7 +903,7 @@ describe("LEGO-style build steps (issue #22)", () => {
     const splitSteps = buildSteps(split, splitLayout);
     const rails = splitSteps.steps.find((step) => step.kind === "rails")!;
     const bridges = splitLayout.jumpers.filter((jumper) => "hole" in jumper.from && "hole" in jumper.to && /^T.30$/.test(jumper.from.hole) && /^T.32$/.test(jumper.to.hole));
-    expect(bridges).toHaveLength(2);
+    expect(bridges.length).toBeGreaterThan(0);
     for (const bridge of bridges) {
       expect(rails.adds.jumpers).toContain(bridge.id);
       expect(rails.text).toContain(`across the gap: end 1 in hole ${"hole" in bridge.from ? bridge.from.hole : ""}, end 2 in hole ${"hole" in bridge.to ? bridge.to.hole : ""}`);

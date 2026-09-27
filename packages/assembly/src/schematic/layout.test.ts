@@ -98,6 +98,7 @@ const DRAWING_KEYS = [
     "mini-piano",
     "whack-a-mole",
     "binary-counter",
+    "binary-counter-button",
   ];
 
 describe("schematic drawings pass the geometry check", () => {

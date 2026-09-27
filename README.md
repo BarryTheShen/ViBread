@@ -202,6 +202,12 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
    the old `/m/<mission>/bench` address redirects here. "Try without a board" runs the same firmware in a simulated board,
    with injectable wiring faults. Physical actions always wait for the click in this view.
 
+If you have tested a design or board yourself and a safety gate still blocks progress, the web UI offers an explicit red
+**Override — I know what I'm doing** action for simulation-test, release, bench, and completion gates. It lists exactly
+which check will be bypassed, asks you to confirm that ViBread will not check it for you, and accepts an optional reason
+(up to 200 characters). Overrides never change the underlying verdicts: each release, bench acceptance, and completion
+override is recorded in the mission timeline and shown as an override rather than a clean GO.
+
 ### Connect your Claude account
 
 Settings → **Connect your Claude account** is the primary way to let your own Claude account power missions instead of

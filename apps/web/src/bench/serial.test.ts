@@ -92,7 +92,7 @@ describe("BufferedTransport", () => {
     expect(logged).toContain("serial: reading stopped after NetworkError: The device has been lost.");
   });
 
-  it("closes in Chrome's order and surfaces a close the driver refused", async () => {
+  it("closes in Chrome's order and clears the stale open state when the driver refuses", async () => {
     const port = new FakeSerialPort();
     const transport = new BufferedTransport(port);
     await transport.open(115_200);
@@ -103,7 +103,7 @@ describe("BufferedTransport", () => {
 
     port.failNextClose = true;
     const failure = await transport.close().then(() => undefined, (error: unknown) => error);
-    expect(transport.isOpen).toBe(true);
+    expect(transport.isOpen).toBe(false);
     expect(classifySerialError(failure)).toMatchObject({ kind: "busy", message: expect.stringMatching(/stuck open .*reload this page/) });
   });
 

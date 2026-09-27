@@ -13,6 +13,8 @@
  */
 import { BOARD_PART, isWireColorValue, type Circuit, type Layout, type WireColor } from "@vibread/core";
 
+import { repeatedUnits } from "./units.js";
+
 /** Resistor-code order, skipping red/black (reserved for power) and brown/gray (hard to tell apart on a board). */
 const SIGNAL_SEQUENCE: readonly WireColor[] = ["orange", "yellow", "green", "blue", "purple", "white"];
 /** Only when every sequence colour is taken by a touching line. */
@@ -69,9 +71,16 @@ function lines(circuit: Circuit): Line[] {
   const signals = circuit.nets.filter((net) => net.kind === "signal");
   const partsOf = (netId: string) => signals.find((net) => net.id === netId)!.pins.filter((ref) => ref.part !== BOARD_PART).map((ref) => ref.part);
   const pinsOf = (netId: string) => signals.find((net) => net.id === netId)!.pins.filter((ref) => ref.part === BOARD_PART).map((ref) => ref.pin);
+  // Repeated units in the order they are built (left to right), other lines in Arduino pin order.
+  const position = new Map<string, number>();
+  for (const set of repeatedUnits(circuit)) {
+    const start = Math.min(...set.copies.flatMap((copy) => copy.units.map((unit) => boardPinRank(unit.boardPin))));
+    set.copies.forEach((copy, index) => copy.units.forEach((unit) => position.set(unit.signalNet, start + index * 0.01)));
+  }
+  const place = (netId: string) => position.get(netId) ?? Math.min(...pinsOf(netId).map(boardPinRank));
   const seeds = [...signals]
     .filter((net) => pinsOf(net.id).length > 0)
-    .sort((a, b) => Math.min(...pinsOf(a.id).map(boardPinRank)) - Math.min(...pinsOf(b.id).map(boardPinRank)) || a.id.localeCompare(b.id));
+    .sort((a, b) => place(a.id) - place(b.id) || a.id.localeCompare(b.id));
   const assigned = new Set<string>();
   const out: Line[] = [];
   const grow = (seed: string) => {
@@ -110,9 +119,11 @@ function lines(circuit: Circuit): Line[] {
 /** Suggested colour of every net (the default rule above). */
 export function defaultNetColors(circuit: Circuit): Record<string, WireColor> {
   const colors: Record<string, WireColor> = {};
+  // By role, whatever kind the design gave the net: the Arduino's GND is black, its 5 V / 3V3 red.
   for (const net of circuit.nets) {
-    if (net.kind === "power") colors[net.id] = "red";
-    else if (net.kind === "ground") colors[net.id] = "black";
+    const boardPins = net.pins.filter((ref) => ref.part === BOARD_PART).map((ref) => ref.pin);
+    if (net.kind === "ground" || boardPins.includes("GND")) colors[net.id] = "black";
+    else if (net.kind === "power" || boardPins.includes("5V") || boardPins.includes("3V3")) colors[net.id] = "red";
   }
   const all = lines(circuit);
   const roles = [...new Set(all.map((line) => line.role))];

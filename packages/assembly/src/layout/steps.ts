@@ -11,6 +11,7 @@ import {
   type Jumper,
   type Layout,
   type Part,
+  type RepeatCopy,
   type Step,
   type StepLandmark,
   type StepList,
@@ -20,7 +21,9 @@ import {
 
 import { layoutHash } from "./allocator.js";
 import { aWire } from "./colors.js";
-import { earlierItems, headerLandmark, holeLandmark, type Earlier } from "./landmarks.js";
+import { earlierItems, headerLandmark, holeLandmark, legName, type Earlier } from "./landmarks.js";
+import { repeatQuality } from "./quality.js";
+import { findUnits, repeatedUnits, type Unit } from "./units.js";
 
 function endpointText(endpoint: Jumper["from"]): string {
   if ("board" in endpoint) return `Arduino pin ${endpoint.board}`;
@@ -175,7 +178,11 @@ function inventoryCallouts(circuit: Circuit): string[] {
 
 function orientationText(layout: Layout): string {
   const profile = BREADBOARD_PROFILES[layout.breadboard];
-  const board = layout.board.includes("nano") ? "the Nano across its centre channel" : "the Uno below it";
+  const board = layout.board.includes("nano")
+    ? "the Nano across its centre channel"
+    : layout.boardOrientation === "usb-right"
+      ? "the Uno below it, its USB socket on the right, so the power/analog header is the row nearest the breadboard and the digital pins run D0 … D13 left to right behind it"
+      : "the Uno below it, its USB socket on the left, so the digital header is the row nearest the breadboard (D13 … D0 left to right)";
   const rails = powerRails(profile);
   const railText = !rails
     ? "This board has no power rails."
@@ -205,6 +212,96 @@ function testsForSubsection(circuit: Circuit): TestId[] {
   if (circuit.parts.some((part) => part.module === "led")) tests.add("led.sequence");
   if (circuit.parts.some((part) => part.module.startsWith("buzzer"))) tests.add("buzzer.confirm");
   return [...tests];
+}
+
+interface RepeatPlan {
+  /** "light unit", "button unit", "button + light unit". */
+  name: string;
+  columns: number;
+  copies: Omit<RepeatCopy, "index" | "text">[];
+}
+
+/** Every hole a copy uses: its parts' legs and its wires' breadboard ends. */
+function copyHoles(layout: Layout, parts: string[], jumpers: string[]): string[] {
+  return [
+    ...parts.flatMap((id) => Object.values(layout.placements.find((entry) => entry.part === id)?.pins ?? {})),
+    ...jumpers.flatMap((id) => {
+      const jumper = layout.jumpers.find((entry) => entry.id === id)!;
+      return [jumper.from, jumper.to].flatMap((end) => ("hole" in end ? [end.hole] : []));
+    }),
+  ];
+}
+
+function holeColumn(hole: string): number {
+  const parsed = parseHole(hole);
+  return parsed === null ? 0 : parsed.kind === "terminal" ? parsed.row : parsed.position;
+}
+
+/**
+ * Repeated units the layout built as identical copies, with each copy's own wires (its Arduino wires and any rail wire
+ * inside its columns). Only sets whose copies really are identical, parts and wires alike, at one pitch.
+ */
+function repeatPlans(circuit: Circuit, layout: Layout, rails: Jumper[]): RepeatPlan[] {
+  const plans: RepeatPlan[] = [];
+  const taken = new Set(rails.map((jumper) => jumper.id));
+  for (const set of repeatedUnits(circuit)) {
+    const quality = repeatQuality(layout, set);
+    if (!quality.regular || quality.pitch === undefined) continue;
+    const copies = set.copies.map((copy, index) => {
+      const jumpers = [...new Set(copy.units.flatMap((unit) => unitJumpers(layout, unit, taken)))];
+      const boardPins = copy.units.map((unit) => unit.boardPin);
+      return { parts: copy.parts, jumpers, boardPins, column: quality.columns[index]!, holes: copyHoles(layout, copy.parts, jumpers) };
+    });
+    // Identical wires too: same count and the same holes relative to the copy's column.
+    const shape = (copy: (typeof copies)[number]) => copy.jumpers.map((id) => {
+      const jumper = layout.jumpers.find((entry) => entry.id === id)!;
+      return [jumper.from, jumper.to].map((end) => ("hole" in end ? `${end.hole.replace(/\d+$/, "")}${holeColumn(end.hole) - copy.column}` : "board")).join(">");
+    }).sort().join(" ");
+    if (copies.some((copy) => shape(copy) !== shape(copies[0]!))) continue;
+    for (const copy of copies) for (const id of copy.jumpers) taken.add(id);
+    const modules = [...new Set(set.copies[0]!.units.map((unit) => circuit.parts.find((part) => part.id === unit.members.at(-1)!.part)!.module))];
+    const noun = (module: string) => (module === "led" ? "light" : module === "button" ? "button" : module.startsWith("buzzer") ? "buzzer" : MODULES[module as keyof typeof MODULES].name.toLowerCase());
+    plans.push({ name: `${modules.map(noun).join(" + ")} unit`, columns: quality.pitch, copies });
+  }
+  return plans;
+}
+
+/** A unit's own wires: its signal and link nets' wires, and rail wires with both ends inside the unit's columns. */
+function unitJumpers(layout: Layout, unit: Unit, taken: Set<string>): string[] {
+  const nets = new Set([unit.signalNet, ...(unit.linkNet ? [unit.linkNet] : [])]);
+  const partHoles = unit.members.flatMap((member) => Object.values(layout.placements.find((entry) => entry.part === member.part)?.pins ?? {}));
+  const [from, to] = [Math.min(...partHoles.map(holeColumn)), Math.max(...partHoles.map(holeColumn))];
+  return layout.jumpers.filter((jumper) => {
+    if (taken.has(jumper.id)) return false;
+    if (nets.has(jumper.net)) return true;
+    const holes = [jumper.from, jumper.to].flatMap((end) => ("hole" in end ? [end.hole] : []));
+    return jumper.net === unit.railNet && holes.length === 2 && holes.every((hole) => holeColumn(hole) >= from && holeColumn(hole) <= to);
+  }).map((jumper) => jumper.id);
+}
+
+/** Units not built by a repeat step, left to right, each with its own wires (unless another unit's wire is shared). */
+function singleUnits(circuit: Circuit, layout: Layout, placedParts: string[], taken: string[]): { parts: string[]; jumpers: string[] }[] {
+  const used = new Set(taken);
+  const units = findUnits(circuit).filter((unit) => unit.members.every((member) => !placedParts.includes(member.part)));
+  const column = (unit: Unit) => Math.min(...unit.members.flatMap((member) => Object.values(layout.placements.find((entry) => entry.part === member.part)?.pins ?? {})).map(holeColumn));
+  return units.sort((a, b) => column(a) - column(b)).map((unit) => {
+    const jumpers = unitJumpers(layout, unit, used);
+    for (const id of jumpers) used.add(id);
+    return { parts: unit.members.map((member) => member.part), jumpers };
+  });
+}
+
+/** "Copy 2 → D6: R4 in holes f38 and e38; LED4 in holes a38 and T-38; a yellow wire from Arduino pin D6 to hole j38." */
+function copyText(layout: Layout, copy: Omit<RepeatCopy, "index" | "text">, index: number, colorOf: (jumper: Jumper) => string): string {
+  const parts = copy.parts.map((id) => {
+    const holes = Object.values(layout.placements.find((entry) => entry.part === id)!.pins);
+    return `${id} in holes ${holes.join(" and ")}`;
+  });
+  const wires = copy.jumpers.map((id) => {
+    const jumper = layout.jumpers.find((entry) => entry.id === id)!;
+    return `${aWire(colorOf(jumper))} from ${endpointText(jumper.from).replace(/ on the .*$/, "")} to ${endpointText(jumper.to).replace(/ on the .*$/, "")}`;
+  });
+  return `Copy ${index}${copy.boardPins.length > 0 ? ` → ${copy.boardPins.join(", ")}` : ""}: ${[...parts, ...wires].join("; ")}.`;
 }
 
 /**
@@ -331,7 +428,114 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
   const placedParts: string[] = [];
   const placedJumpers: string[] = rails.map((jumper) => jumper.id);
   const colors = Object.fromEntries(layout.jumpers.map((jumper) => [jumper.id, colorOf(jumper)]));
-  for (const part of [...circuit.parts].sort((a, b) => leftmost(a) - leftmost(b) || a.id.localeCompare(b.id))) {
+
+  // Repeated units built as identical copies (issue #25): one step builds the first copy with its wires, the next
+  // repeats it for all the others with a per-copy checklist. Copies that aren't regular get individual steps below.
+  for (const repeat of repeatPlans(circuit, layout, rails)) {
+    const first = repeat.copies[0]!;
+    const templateN = steps.length + 1;
+    const texts: string[] = [];
+    const holes: string[] = [];
+    const landmarks: StepLandmark[] = [];
+    const wireEnds: NonNullable<Step["wireEnds"]> = [];
+    for (const id of first.parts) {
+      const placed = placementText(circuit, partMap.get(id)!, layout, earlierItems(circuit, layout, placedParts, placedJumpers, colors));
+      placedParts.push(id);
+      texts.push(placed.text);
+      holes.push(...placed.holes);
+      landmarks.push(...placed.landmarks);
+    }
+    for (const id of first.jumpers) {
+      const jumper = layout.jumpers.find((entry) => entry.id === id)!;
+      const wire = jumperText(layout, jumper, colorOf(jumper), earlierItems(circuit, layout, placedParts, placedJumpers, colors));
+      placedJumpers.push(id);
+      texts.push(wire.text);
+      holes.push(...[jumper.from, jumper.to].flatMap((end) => ("hole" in end ? [end.hole] : [])));
+      landmarks.push(...wire.landmarks);
+      wireEnds.push({ jumper: id, ends: wire.ends });
+    }
+    const unitName = repeat.name;
+    const copies = repeat.copies.map((copy, index) => ({ ...copy, index: index + 1, text: copyText(layout, copy, index + 1, colorOf) }));
+    const plan = { template: templateN, count: copies.length, columns: repeat.columns, copies };
+    push({
+      kind: "place",
+      title: `Build one ${unitName} (1 of ${copies.length})`,
+      text: `One ${unitName}: ${first.parts.join(" + ")} and ${first.jumpers.length === 1 ? "its wire" : "its wires"}. You'll repeat it ${copies.length - 1} more time${copies.length === 2 ? "" : "s"} next. ${texts.join(" ")}`,
+      plug: "unplugged",
+      adds: { parts: first.parts, jumpers: first.jumpers },
+      holes,
+      callouts: first.parts.map((id) => partCallout(partMap.get(id)!)),
+      ...(landmarks.length > 0 ? { landmarks } : {}),
+      ...(wireEnds.length > 0 ? { wireEnds } : {}),
+      repeat: { role: "template", ...plan },
+    });
+    // The other copies, each placed like the one before it, `columns` to the right.
+    const rest = copies.slice(1);
+    const restLandmarks: StepLandmark[] = rest.flatMap((copy) => {
+      const previous = copies[copy.index - 2]!;
+      const anchor = copy.parts[0]!;
+      const pin = Object.keys(layout.placements.find((entry) => entry.part === anchor)!.pins).sort()[0]!;
+      const hole = layout.placements.find((entry) => entry.part === anchor)!.pins[pin]!;
+      const refHole = layout.placements.find((entry) => entry.part === previous.parts[0])!.pins[pin]!;
+      const text = `${repeat.columns} column${repeat.columns === 1 ? "" : "s"} right of ${previous.parts[0]}'s ${legName(circuit, layout, previous.parts[0]!, pin)}`;
+      return [{ kind: "near" as const, hole, ref: { part: previous.parts[0]!, pin, hole: refHole }, columns: repeat.columns, text }];
+    });
+    const restEnds: NonNullable<Step["wireEnds"]> = rest.flatMap((copy) => copy.jumpers.map((id) => {
+      const jumper = layout.jumpers.find((entry) => entry.id === id)!;
+      return { jumper: id, ends: jumperText(layout, jumper, colorOf(jumper), []).ends };
+    }));
+    push({
+      kind: "place",
+      title: `Repeat ×${rest.length} more (${copies.length} in all), ${repeat.columns} column${repeat.columns === 1 ? "" : "s"} right each time`,
+      text: `Build ${rest.length} more ${rest.length === 1 ? unitName : `${unitName}s`} exactly like the first, each ${repeat.columns} column${repeat.columns === 1 ? "" : "s"} to the right of the one before. Tick them off: ${rest.map((copy) => copy.text.replace(/:/, ` (${restLandmarks[copy.index - 2]!.text}):`)).join(" ")}`,
+      plug: "unplugged",
+      adds: { parts: rest.flatMap((copy) => copy.parts), jumpers: rest.flatMap((copy) => copy.jumpers) },
+      holes: rest.flatMap((copy) => copy.holes),
+      callouts: rest.flatMap((copy) => copy.parts).map((id) => partCallout(partMap.get(id)!)),
+      landmarks: restLandmarks,
+      ...(restEnds.length > 0 ? { wireEnds: restEnds } : {}),
+      repeat: { role: "repeat", ...plan },
+    });
+    placedParts.push(...rest.flatMap((copy) => copy.parts));
+    placedJumpers.push(...rest.flatMap((copy) => copy.jumpers));
+  }
+
+  // A unit that isn't repeated (a button with its two wires) is still one step: the part, then its own wires.
+  for (const unit of singleUnits(circuit, layout, [...placedParts], [...placedJumpers, ...rails.map((jumper) => jumper.id)])) {
+    const texts: string[] = [];
+    const holes: string[] = [];
+    const landmarks: StepLandmark[] = [];
+    const wireEnds: NonNullable<Step["wireEnds"]> = [];
+    for (const id of unit.parts) {
+      const placed = placementText(circuit, partMap.get(id)!, layout, earlierItems(circuit, layout, placedParts, placedJumpers, colors));
+      placedParts.push(id);
+      texts.push(placed.text);
+      holes.push(...placed.holes);
+      landmarks.push(...placed.landmarks);
+    }
+    for (const id of unit.jumpers) {
+      const jumper = layout.jumpers.find((entry) => entry.id === id)!;
+      const wire = jumperText(layout, jumper, colorOf(jumper), earlierItems(circuit, layout, placedParts, placedJumpers, colors));
+      placedJumpers.push(id);
+      texts.push(wire.text);
+      holes.push(...[jumper.from, jumper.to].flatMap((end) => ("hole" in end ? [end.hole] : [])));
+      landmarks.push(...wire.landmarks);
+      wireEnds.push({ jumper: id, ends: wire.ends });
+    }
+    push({
+      kind: "place",
+      title: `Insert ${unit.parts.join(" + ")} and ${unit.jumpers.length === 1 ? "its wire" : `its ${unit.jumpers.length} wires`}`,
+      text: texts.join(" "),
+      plug: "unplugged",
+      adds: { parts: unit.parts, jumpers: unit.jumpers },
+      holes,
+      callouts: unit.parts.map((id) => partCallout(partMap.get(id)!)),
+      ...(landmarks.length > 0 ? { landmarks } : {}),
+      ...(wireEnds.length > 0 ? { wireEnds } : {}),
+    });
+  }
+
+  for (const part of [...circuit.parts].filter((entry) => !placedParts.includes(entry.id)).sort((a, b) => leftmost(a) - leftmost(b) || a.id.localeCompare(b.id))) {
     const placed = placementText(circuit, part, layout, earlierItems(circuit, layout, placedParts, placedJumpers, colors));
     placedParts.push(part.id);
     push({
@@ -346,7 +550,7 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
     });
   }
 
-  const nonRailJumpers = layout.jumpers.filter((jumper) => !rails.some((rail) => rail.id === jumper.id));
+  const nonRailJumpers = layout.jumpers.filter((jumper) => !rails.some((rail) => rail.id === jumper.id) && !placedJumpers.includes(jumper.id));
   for (const jumper of nonRailJumpers) {
     const wire = jumperText(layout, jumper, colorOf(jumper), earlierItems(circuit, layout, placedParts, placedJumpers, colors));
     placedJumpers.push(jumper.id);

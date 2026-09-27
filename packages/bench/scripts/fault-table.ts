@@ -20,7 +20,7 @@ async function main(): Promise<void> {
   const rows: Row[] = [];
   for (const golden of GOLDEN) {
     const layout = layoutBoard(golden.circuit);
-    const plan = planSelfTest(golden.circuit, revisionHash(golden.circuit));
+    const plan = planSelfTest(golden.circuit, revisionHash(golden.circuit), layout);
     const compiled = await compileBenchFirmware(plan);
     if (!compiled.ok || compiled.hex === undefined) throw new Error(`${golden.key}: bench firmware compile failed: ${compiled.log}`);
     const dictionary = await buildFaultDictionary({ circuit: golden.circuit, layout, plan, hex: compiled.hex, maxFaults: 40 });

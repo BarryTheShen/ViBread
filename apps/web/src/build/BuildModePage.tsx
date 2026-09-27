@@ -586,6 +586,7 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
           runs: revisionQuery.data.results.bench,
           fullSelfTest,
           step: step.n,
+          layout: revisionQuery.data.results.layout,
         })
       : describeCheckpointChecks({ tests: step.checkpoint.tests, fullSelfTest })
     : [];

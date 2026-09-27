@@ -33,4 +33,9 @@ describe("nativeFlash", () => {
     expect(await nativeFlash("m1", { port: "COM8", which: "app" }, json(400, { error: { code: "port_not_listed", message: "COM8 is not a connected Arduino port." } })))
       .toEqual({ ok: false, output: "", error: { code: "port_not_listed", message: "COM8 is not a connected Arduino port." } });
   });
+
+  it("preserves app calibration metadata from the native uploader", async () => {
+    await expect(nativeFlash("m1", { port: "COM3", which: "app" }, json(200, { ok: true, output: "written", fqbn: "arduino:avr:uno", durationMs: 1800, calibration: "measured" })))
+      .resolves.toMatchObject({ ok: true, calibration: "measured" });
+  });
 });

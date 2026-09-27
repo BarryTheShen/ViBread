@@ -1,12 +1,14 @@
 import {
   MODULES,
   type Circuit,
+  type Layout,
   type Net,
   type Part,
   type PinRef,
   type SelfTestPlan,
   type SelfTestSubject,
   type TestId,
+  parseHole,
   pinKey,
   shortHash,
 } from "@vibread/core";
@@ -135,11 +137,26 @@ function applicableTests(subjects: SelfTestSubject[]): TestId[] {
   return tests;
 }
 
-export function planSelfTest(circuit: Circuit, revisionHash: string): SelfTestPlan {
+/**
+ * LED numbers as the person sees them: 1 is the leftmost light on the breadboard ("Which light is blinking? 1 is the
+ * leftmost"). With the layout, by each LED's leftmost built column (issue #26: the layout may build a row in another
+ * order than the parts list); without one, the parts-list order.
+ */
+function ledNumbers(circuit: Circuit, layout?: Pick<Layout, "placements">): Map<string, number> {
+  const leds = circuit.parts.filter((part) => part.module === "led").map((part) => part.id);
+  const column = (id: string): number | undefined => {
+    const holes = Object.values(layout?.placements.find((placement) => placement.part === id)?.pins ?? {});
+    const columns = holes.map((hole) => parseHole(hole)).flatMap((parsed) => (parsed?.kind === "terminal" ? [parsed.row] : []));
+    return columns.length > 0 ? Math.min(...columns) : undefined;
+  };
+  const placed = leds.map((id, position) => ({ id, position, column: column(id) }));
+  const ordered = placed.every((entry) => entry.column !== undefined) ? [...placed].sort((a, b) => a.column! - b.column! || a.position - b.position) : placed;
+  return new Map(ordered.map((entry, index) => [entry.id, index + 1]));
+}
+
+export function planSelfTest(circuit: Circuit, revisionHash: string, layout?: Pick<Layout, "placements">): SelfTestPlan {
   const index = indexNets(circuit);
-  const ledOrder = new Map(
-    circuit.parts.filter((part) => part.module === "led").map((part, position) => [part.id, position + 1]),
-  );
+  const ledOrder = ledNumbers(circuit, layout);
   const subjects: SelfTestSubject[] = [];
 
   for (const role of circuit.roles) {

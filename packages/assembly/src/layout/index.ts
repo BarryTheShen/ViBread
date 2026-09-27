@@ -1,4 +1,6 @@
-export { LayoutFitError, layoutBoard, layoutHash } from "./allocator.js";
+export { LayoutFitError, layoutBoard, layoutHash, layoutWithDecision, type LayoutDecision } from "./allocator.js";
+export { jumperCrossings, layoutQuality, type LayoutQuality, type RepeatQuality } from "./quality.js";
+export { findUnits, repeatedUnits, type Unit, type UnitCopy, type UnitSet } from "./units.js";
 export { asBuiltCircuit, lvs, lvsIssueKinds } from "./lvs.js";
 export { buildSteps, partCallout } from "./steps.js";
 export { renderBreadboardSvg } from "./svg.js";

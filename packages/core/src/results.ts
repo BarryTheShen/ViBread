@@ -3,6 +3,7 @@ import type { PinMode } from "./circuit.js";
 import type { ConsoleReport } from "./consoles.js";
 import type { ScenarioStep } from "./scenario.js";
 import type { TestId } from "./telemetry.js";
+import type { Actor } from "./mission.js";
 
 // ---------- firmware (@vibread/firmware) ----------
 
@@ -155,11 +156,17 @@ export interface BenchRunResult {
   diagnosis: Diagnosis;
   calibration: Calibration[];
   verdict: "pass" | "fail" | "incomplete";
+  /** A person explicitly accepted a failed/incomplete real-board run; the original verdict remains authoritative. */
+  overriddenBy?: { actor: Actor; at: string; reason?: string };
   /**
    * The build step whose checkpoint asked for this run (issue #24). A run counts for a step's checklist when it has no
    * step or the same step, so the bare-board check never answers for a later checkpoint that runs the same test.
    */
   step?: number;
+}
+/** Virtual-board self-tests are practice only; they never stand in for a real Arduino run. */
+export function isPracticeRun(run: Pick<BenchRunResult, "runId">): boolean {
+  return run.runId.startsWith("virtual-");
 }
 
 // ---------- photo check ----------

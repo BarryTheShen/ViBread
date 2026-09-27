@@ -1,5 +1,6 @@
 import {
   CircuitSchema,
+  isPracticeRun,
   CONSOLE_LABELS,
   MODULE_KEYS,
   MODULES,
@@ -80,7 +81,7 @@ const DETAIL_LIMIT = 600;
  * Findings the design can't fix: a stage crashed, the independent tests couldn't be written, or the independent suite
  * doesn't cover the circuit (only the test author writes tests), plus any finding a console marks `toolSide`.
  */
-const TOOL_SIDE_RULES: Record<string, true> = { "STAGE-CRASH": true, "TESTS-NOT-WRITTEN": true, "TESTS-SUSPECT": true, "PLACEMENT-UNMET": true, "COV-OUTPUT": true, "COV-INPUT": true, "COV-CLAUSE": true, "COV-CATEGORY": true };
+const TOOL_SIDE_RULES: Record<string, true> = { "STAGE-CRASH": true, "TESTS-NOT-WRITTEN": true, "TESTS-SUSPECT": true, "COV-OUTPUT": true, "COV-INPUT": true, "COV-CLAUSE": true, "COV-CATEGORY": true };
 
 export function isToolSide(finding: Finding): boolean {
   return TOOL_SIDE_RULES[finding.ruleId] === true || finding.toolSide === true;
@@ -552,9 +553,10 @@ export function createToolRegistry(deps: {
       handler: async (ctx, input) => {
         const revision = await requireRevision(store, ctx.missionId, input.revision);
         const runs = revision.results.bench ?? [];
-        const run = input.runId ? runs.find((r) => r.runId === input.runId) : runs.at(-1);
+        // Prefer the latest real-board run; a practice (virtual) run is still reported, labelled so it's never taken as the board's status.
+        const run = input.runId ? runs.find((r) => r.runId === input.runId) : runs.findLast((candidate) => !isPracticeRun(candidate)) ?? runs.at(-1);
         if (!run) return { summary: `No bench runs for revision ${revision.n} yet`, runs: 0 };
-        return { summary: run.diagnosis.summary, runId: run.runId, verdict: run.verdict, attribution: run.diagnosis.attribution, candidates: run.diagnosis.candidates };
+        return { summary: run.diagnosis.summary, runId: run.runId, practice: isPracticeRun(run), verdict: run.verdict, attribution: run.diagnosis.attribution, candidates: run.diagnosis.candidates };
       },
     }),
     defineTool({
@@ -566,10 +568,10 @@ export function createToolRegistry(deps: {
       handler: async (ctx, input) => {
         const revision = await requireRevision(store, ctx.missionId, input.revision);
         const runs = revision.results.bench ?? [];
-        const run = input.runId ? runs.find((r) => r.runId === input.runId) : runs.at(-1);
+        const run = input.runId ? runs.find((r) => r.runId === input.runId) : runs.findLast((candidate) => !isPracticeRun(candidate)) ?? runs.at(-1);
         if (!run) return { summary: `No bench runs for revision ${revision.n} yet`, runs: 0 };
         const failed = run.results.filter((t) => t.status === "fail").length;
-        return { summary: `${run.kind} run ${run.verdict}: ${failed} failing tests`, runId: run.runId, kind: run.kind, verdict: run.verdict, results: run.results, calibration: run.calibration };
+        return { summary: `${isPracticeRun(run) ? "practice (virtual board) " : ""}${run.kind} run ${run.verdict}: ${failed} failing tests`, runId: run.runId, practice: isPracticeRun(run), kind: run.kind, verdict: run.verdict, results: run.results, calibration: run.calibration };
       },
     }),
     defineTool({

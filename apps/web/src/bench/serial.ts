@@ -308,6 +308,9 @@ export class BufferedTransport implements ISTKTransport {
     try {
       await this.port.close();
     } catch (error) {
+      this.openBaud = undefined;
+      this.closedByUs = true;
+      this.discardQueued();
       this.options.log?.("error", `serial: close failed: ${describeError(error)}`);
       throw new PortCloseError(describeError(error));
     }

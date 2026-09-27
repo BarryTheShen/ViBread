@@ -52,9 +52,9 @@ export function stepPictureCount(keys: readonly string[]): number {
   return stepPictures(keys).length;
 }
 
-/** Artifacts that aren't the sketch, a single-file row, or a step picture: traces, fault data, photo checks… */
+/** Artifacts that aren't the sketch, a single-file row, a step picture or a calibrated-firmware cache (`app-<runId>.hex`): traces, fault data, photo checks… */
 export function otherFiles(keys: readonly string[]): string[] {
-  return keys.filter((key) => !SINGLE_FILES.some((f) => f.key === key) && !STEP.test(key) && !/^step-\d+-focus\.(?:svg|png)$/.test(key));
+  return keys.filter((key) => !SINGLE_FILES.some((f) => f.key === key) && !STEP.test(key) && !/^step-\d+-focus\.(?:svg|png)$/.test(key) && !/^app-.+\.hex$/.test(key));
 }
 
 function partLine(part: Part): string {

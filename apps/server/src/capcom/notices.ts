@@ -1,4 +1,4 @@
-import { CONSOLE_IDS, type BenchRunResult, type ConsoleReport, type Revision } from "@vibread/core";
+import { CONSOLE_IDS, isPracticeRun, type BenchRunResult, type ConsoleReport, type Revision } from "@vibread/core";
 
 /**
  * CAPCOM's unsolicited texts: short, plain, one idea each. Pure functions (unit-tested); index.ts decides who gets them,
@@ -6,7 +6,7 @@ import { CONSOLE_IDS, type BenchRunResult, type ConsoleReport, type Revision } f
  */
 
 /** Findings that stop a design on a ViBread limit rather than a design mistake (plus any finding marked toolSide). */
-const TOOL_STOP_RULES: Record<string, true> = { "LAYOUT-NO-FIT": true, "TESTS-SUSPECT": true, "PLACEMENT-UNMET": true };
+const TOOL_STOP_RULES: Record<string, true> = { "LAYOUT-NO-FIT": true, "TESTS-SUSPECT": true };
 
 export function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, " ").trim();
@@ -40,7 +40,7 @@ export function designNotice(title: string, revision: Pick<Revision, "n" | "resu
 
 /** Bench self-test finished (pass count), or a failed bench run's diagnosis and its top candidate. Virtual runs: none. */
 export function benchNotice(title: string, result: Pick<BenchRunResult, "runId" | "kind" | "verdict" | "results" | "diagnosis">): { key: string; text: string } | undefined {
-  if (result.runId.startsWith("virtual-") || result.verdict === "incomplete") return undefined;
+  if (isPracticeRun(result) || result.verdict === "incomplete") return undefined;
   const key = `bench:${result.runId}`;
   if (result.verdict === "pass") {
     if (result.kind !== "selftest") return undefined;

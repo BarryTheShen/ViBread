@@ -7,7 +7,7 @@ export type FirmwareKind = "bench" | "app";
 
 /** The HEX the web flash uses (POST /bench/firmware): built once per revision and reused from its artifacts. */
 export type MissionFirmware =
-  | { ok: true; hex: string; board: BoardProfileId }
+  | { ok: true; hex: string; board: BoardProfileId; calibration?: "measured" | "default" }
   | { ok: false; status: number; body: unknown };
 
 export type MissionFirmwareSource = (missionId: string, kind: FirmwareKind) => Promise<MissionFirmware>;
@@ -51,7 +51,7 @@ export function mountNativeFlashRoutes(router: Router, ctx: AppContext, firmware
     });
     if (result.ok) {
       ctx.debug.event(missionId, "bench", `${tag}: flashed ${body.port} in ${result.durationMs} ms`);
-      return res.json({ ok: true, output: result.output, port: body.port, which: body.which, fqbn: result.fqbn, durationMs: result.durationMs });
+      return res.json({ ok: true, output: result.output, port: body.port, which: body.which, fqbn: result.fqbn, durationMs: result.durationMs, ...(body.which === "app" ? { calibration: built.calibration ?? "default" } : {}) });
     }
     ctx.debug.event(missionId, "bench", `${tag}: failed — ${result.error.code}: ${result.error.message}`, undefined, "warn");
     res.status(result.error.code === "timeout" ? 504 : 502).json({ ok: false, error: result.error, output: result.output, port: body.port, which: body.which, fqbn: result.fqbn, durationMs: result.durationMs });

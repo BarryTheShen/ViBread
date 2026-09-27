@@ -41,13 +41,16 @@ import {
   type Layout,
   type Part,
   type Placement,
+  type BoardOrientation,
   type RailId,
   type WireColor,
 } from "@vibread/core";
 import { defaultNetColors } from "./colors.js";
 import { lvs } from "./lvs.js";
 import { GROUP_GAP, partExtent, placementSummary } from "./placement.js";
+import { layoutQuality, type LayoutQuality } from "./quality.js";
 import { headerRow, partDrawingBox, type DrawingBox } from "./svg.js";
+import { repeatedUnits, type Unit, type UnitCopy, type UnitMember, type UnitSet } from "./units.js";
 
 type Side = "left" | "right";
 
@@ -66,6 +69,13 @@ export class LayoutFitError extends Error {
 }
 
 interface Strategy {
+  /** Uno below the breadboard: which end its USB socket faces (the header reads the other way round). */
+  orientation: BoardOrientation;
+  /**
+   * Build repeated units as identical copies first (design philosophy rule 2), using the `anchorRank`-th best start
+   * column for the largest set; off for the plain packings. Both kinds are candidates of the same search, scored alike.
+   */
+  repeats?: { anchorRank: number };
   /** Free holes every strip keeps after part placement (jumper room). */
   reserve: number;
   /** Keep every part's drawing (body, leads, label) clear of the others; off for the tightest packing. */
@@ -76,7 +86,7 @@ interface Strategy {
   placementGroups: boolean;
 }
 
-const PACKINGS: Omit<Strategy, "placementGroups">[] = [
+const PACKINGS: Omit<Strategy, "placementGroups" | "orientation">[] = [
   { reserve: 1, spread: true, grouped: true },
   { reserve: 2, spread: true, grouped: true },
   { reserve: 1, spread: false, grouped: true },
@@ -116,6 +126,10 @@ interface Ctx {
   headerHoles: Map<string, HoleId[]>;
   /** Net → breadboard row above its Uno header pin (short, straight board wires). */
   homeRow: Map<string, number>;
+  /** Nets with a part leg straight in a rail hole (a repeated unit's resistor into the GND rail). */
+  railPinNets: Set<string>;
+  /** Columns the repeated units occupy; other parts stay clear of them (with one column to spare). */
+  keepOut: [number, number][];
   boardAnchor?: Layout["boardAnchor"];
 }
 
@@ -311,6 +325,13 @@ function groupAllows(ctx: Ctx, part: Part, pins: Record<string, HoleId>): boolea
   if (group === undefined) return ctx.groupSpans.every((span) => !span || to < span[0] || from > span[1]);
   const earlier = ctx.groupSpans.slice(0, group).filter((span): span is [number, number] => span !== undefined);
   if (earlier.length > 0 && from <= Math.max(...earlier.map((span) => span[1])) + 1) return false;
+  // A row of like parts: each one right of the one listed before it, within GROUP_GAP rows (placement.ts).
+  const members = ctx.circuit.placement?.groups[group] ?? [];
+  if (members.length >= 2 && new Set(members.map((id) => ctx.circuit.parts.find((entry) => entry.id === id)?.module)).size === 1) {
+    const previousId = members[members.indexOf(part.id) - 1];
+    const previous = previousId === undefined ? undefined : partExtent(ctx.placements.find((placement) => placement.part === previousId)?.pins ?? {});
+    return !previous || (from > previous.rows[0] && from - previous.rows[1] <= GROUP_GAP);
+  }
   const anchor = ctx.groupAnchor[group];
   if (anchor && Math.max(from - anchor[1], anchor[0] - to, 0) > GROUP_GAP) return false;
   const half = ctx.groupHalf[group];
@@ -320,7 +341,6 @@ function groupAllows(ctx: Ctx, part: Part, pins: Record<string, HoleId>): boolea
 function place(ctx: Ctx, part: Part): void {
   const constrained = ctx.groupSpans.length > 0;
   const group = ctx.groupOfPart.get(part.id);
-  const span = group === undefined ? undefined : ctx.groupSpans[group];
   const anchor = group === undefined ? undefined : ctx.groupAnchor[group];
   // Within a group, closer is better: pull each part against its anchor (beats the header-row pull).
   const closeness = anchor
@@ -329,17 +349,31 @@ function place(ctx: Ctx, part: Part): void {
         return Math.max(from - anchor[1], anchor[0] - to, 0) * 0.5;
       }
     : undefined;
-  const chosen = search(ctx, part, constrained ? (pins) => groupAllows(ctx, part, pins) : undefined, closeness) ?? (constrained ? search(ctx, part) : undefined);
+  const clear = (pins: Record<string, HoleId>) => {
+    const extent = partExtent(pins);
+    return !extent || ctx.keepOut.every(([from, to]) => extent.rows[1] < from - 1 || extent.rows[0] > to + 1);
+  };
+  const accept = constrained || ctx.keepOut.length > 0 ? (pins: Record<string, HoleId>) => clear(pins) && (!constrained || groupAllows(ctx, part, pins)) : undefined;
+  const chosen = search(ctx, part, accept, closeness) ?? (accept ? search(ctx, part, ctx.keepOut.length > 0 ? clear : undefined) : undefined) ?? (ctx.keepOut.length > 0 ? search(ctx, part) : undefined);
   if (!chosen) throw new LayoutFitError(`No room for ${part.id} (${MODULES[part.module].name}) on the ${ctx.profile.name}.`, true);
-  for (const [pin, hole] of Object.entries(chosen.pins)) {
+  commit(ctx, part, chosen.pins, chosen.covered, chosen.body);
+}
+
+/** Records a part at its holes: strips claimed for its nets, rail legs noted, its group's extent updated. */
+function commit(ctx: Ctx, part: Part, pins: Record<string, HoleId>, covered: HoleId[], body: DrawingBox): void {
+  for (const [pin, hole] of Object.entries(pins)) {
     occupy(ctx, hole, `${part.id}.${pin}`);
-    claimStrip(ctx, groupOf(ctx, hole), ctx.pinNet.get(`${part.id}.${pin}`)!);
+    const net = ctx.pinNet.get(`${part.id}.${pin}`)!;
+    if (parseHole(hole)?.kind === "rail") ctx.railPinNets.add(net);
+    else claimStrip(ctx, groupOf(ctx, hole), net);
   }
-  for (const hole of chosen.covered) occupy(ctx, hole, `body:${part.id}`);
-  ctx.placements.push({ part: part.id, pins: chosen.pins });
-  ctx.bodies.push(chosen.body);
-  const extent = partExtent(chosen.pins);
+  for (const hole of covered) occupy(ctx, hole, `body:${part.id}`);
+  ctx.placements.push({ part: part.id, pins });
+  ctx.bodies.push(body);
+  const group = ctx.groupOfPart.get(part.id);
+  const extent = partExtent(pins);
   if (group !== undefined && extent) {
+    const span = ctx.groupSpans[group];
     ctx.groupSpans[group] = span ? [Math.min(span[0], extent.rows[0]), Math.max(span[1], extent.rows[1])] : extent.rows;
     if (ctx.circuit.placement?.groups[group]?.[0] === part.id) ctx.groupAnchor[group] = extent.rows;
     if (extent.side !== "both") ctx.groupHalf[group] ??= extent.side;
@@ -404,6 +438,126 @@ function search(ctx: Ctx, part: Part, accept?: (pins: Record<string, HoleId>) =>
     }
   }
   return best;
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Repeated units (design philosophy rule 2): every copy gets the same tile, one after another at a fixed pitch.
+//
+// Chain tile at column c (Arduino pin → part → part → rail): the first part straddles the centre channel (its signal
+// leg in f{c}, the other in e{c}), the second runs from a{c} straight into the rail hole of column c, and the Arduino
+// wire lands in j{c}: short, parallel, nothing doubles back. Button tile: legs straddle the channel at columns c and
+// c+span, signal pair first. A composite copy (a placement group of whole units) lays its units out in the order the
+// group lists them, one free column apart.
+
+interface Tile {
+  part: Part;
+  pins: Record<string, HoleId>;
+  covered: HoleId[];
+}
+
+function unitWidth(ctx: Ctx, unit: Unit): number {
+  if (unit.kind === "chain") return 1;
+  const variant = partVariant(ctx.circuit.parts.find((part) => part.id === unit.members[0]!.part)!)?.footprint;
+  return (variant?.kind === "button4" ? variant.rowSpan : 2) + 1;
+}
+
+function copyWidth(ctx: Ctx, copy: UnitCopy): number {
+  return copy.units.reduce((sum, unit) => sum + unitWidth(ctx, unit), 0) + copy.units.length - 1;
+}
+
+/** Holes of one unit with its leftmost column at `column`, or undefined when they are not all free and valid. */
+function unitTiles(ctx: Ctx, unit: Unit, column: number): Tile[] | undefined {
+  const partOf = (id: string) => ctx.circuit.parts.find((part) => part.id === id)!;
+  const tiles: Tile[] = [];
+  if (unit.kind === "chain") {
+    const rail = ctx.railOf.get(unit.railNet);
+    if (!rail || !rail.startsWith("T") || !ctx.profile.railPositions.includes(column)) return undefined;
+    const [first, second] = unit.members as [UnitMember, UnitMember];
+    tiles.push({ part: partOf(first.part), pins: { [first.enter]: `f${column}`, [first.exit]: `e${column}` }, covered: [] });
+    tiles.push({ part: partOf(second.part), pins: { [second.enter]: `a${column}`, [second.exit]: `${rail}${column}` }, covered: [] });
+  } else {
+    const member = unit.members[0]!;
+    const part = partOf(member.part);
+    const variant = partVariant(part)?.footprint;
+    const [left, right] = variant?.kind === "button4" ? variant.columns : (["e", "f"] as const);
+    const span = variant?.kind === "button4" ? variant.rowSpan : 2;
+    const pairs = MODULES.button.internallyConnected ?? [];
+    const enter = pairs.find((pair) => pair.includes(member.enter));
+    const exit = pairs.find((pair) => pair !== enter);
+    if (!enter || !exit) return undefined;
+    const covered: HoleId[] = [];
+    for (let row = column; row <= column + span; row += 1) {
+      if (row !== column && row !== column + span) covered.push(`${left}${row}`, `${right}${row}`);
+      if (left !== "e") covered.push(`e${row}`, `f${row}`);
+    }
+    tiles.push({ part, pins: { [enter[0]!]: `${left}${column}`, [enter[1]!]: `${right}${column}`, [exit[0]!]: `${left}${column + span}`, [exit[1]!]: `${right}${column + span}` }, covered });
+  }
+  for (const tile of tiles) {
+    for (const [pin, hole] of Object.entries(tile.pins)) {
+      if (!isValidHole(ctx.profile, hole) || ctx.occupied.has(hole)) return undefined;
+      if (parseHole(hole)?.kind !== "terminal") continue;
+      const owner = ctx.stripNet.get(groupOf(ctx, hole));
+      if (owner !== undefined && owner !== ctx.pinNet.get(`${tile.part.id}.${pin}`)) return undefined;
+    }
+    for (const hole of tile.covered) if (!isValidHole(ctx.profile, hole) || ctx.occupied.has(hole)) return undefined;
+  }
+  return tiles;
+}
+
+function copyTiles(ctx: Ctx, copy: UnitCopy, column: number): Tile[] | undefined {
+  const tiles: Tile[] = [];
+  let at = column;
+  for (const unit of copy.units) {
+    const unitTilesAt = unitTiles(ctx, unit, at);
+    if (!unitTilesAt) return undefined;
+    tiles.push(...unitTilesAt);
+    at += unitWidth(ctx, unit) + 1;
+  }
+  return tiles;
+}
+
+/** Start columns where every copy fits, best first: copies close to their Arduino pins (short, parallel wires). */
+function setAnchors(ctx: Ctx, set: UnitSet, pitch: number): number[] {
+  const options: { anchor: number; cost: number }[] = [];
+  const span = (set.copies.length - 1) * pitch + copyWidth(ctx, set.copies.at(-1)!) - 1;
+  for (let anchor = 1; anchor + span <= ctx.profile.rows; anchor += 1) {
+    // Another set's copies keep two free columns between them (outputs apart from inputs).
+    if (ctx.keepOut.some(([from, to]) => anchor <= to + 3 && anchor + span >= from - 3)) continue;
+    let cost = anchor * 0.001;
+    let fits = true;
+    set.copies.forEach((copy, index) => {
+      const column = anchor + index * pitch;
+      if (!fits || !copyTiles(ctx, copy, column)) {
+        fits = false;
+        return;
+      }
+      let at = column;
+      for (const unit of copy.units) {
+        const home = ctx.homeRow.get(unit.signalNet);
+        if (home !== undefined) cost += Math.abs(at - home);
+        at += unitWidth(ctx, unit) + 1;
+      }
+    });
+    if (fits) options.push({ anchor, cost });
+  }
+  return options.sort((a, b) => a.cost - b.cost).map((option) => option.anchor);
+}
+
+/** Builds a set's copies at a fixed pitch from its `rank`-th best start column; false when it doesn't fit. */
+function placeSet(ctx: Ctx, set: UnitSet, rank: number): boolean {
+  const width = Math.max(...set.copies.map((copy) => copyWidth(ctx, copy)));
+  // One free column between copies at least; two for single-column copies, so 5 mm LEDs and labels don't touch.
+  for (const pitch of width === 1 ? [3, 2] : [width + 1, width + 2]) {
+    const anchors = setAnchors(ctx, set, pitch);
+    if (anchors.length === 0) continue;
+    const anchor = anchors[Math.min(rank, anchors.length - 1)]!;
+    set.copies.forEach((copy, index) => {
+      for (const tile of copyTiles(ctx, copy, anchor + index * pitch)!) commit(ctx, tile.part, tile.pins, tile.covered, partDrawingBox(ctx.profile.id, tile.part, tile.pins));
+    });
+    ctx.keepOut.push([anchor, anchor + (set.copies.length - 1) * pitch + copyWidth(ctx, set.copies.at(-1)!) - 1]);
+    return true;
+  }
+  return false;
 }
 
 /** Parts connected by signal nets are placed back to back, starting from the Arduino pins in pin order. */
@@ -484,7 +638,7 @@ function assignRails(ctx: Ctx): void {
   const rails = powerRails(ctx.profile);
   for (const net of ctx.circuit.nets) {
     const boardPins = net.pins.filter((ref) => ref.part === BOARD_PART).map((ref) => ref.pin).sort((a, b) => boardPinRank(a) - boardPinRank(b));
-    const home = boardPins.map((pin) => headerRow(ctx.profile.id, ctx.circuit.board.profile, pin)).find((row) => row !== undefined);
+    const home = boardPins.map((pin) => headerRow(ctx.profile.id, ctx.circuit.board.profile, pin, ctx.strategy.orientation)).find((row) => row !== undefined);
     if (home !== undefined && net.kind === "signal") ctx.homeRow.set(net.id, home);
     if (!rails) continue;
     if (net.kind === "power" && boardPins.includes("5V") && !ctx.railOf.has(net.id)) ctx.railOf.set(net.id, rails.plus);
@@ -513,7 +667,7 @@ function islandKey(island: Island): string {
 function islandPoint(ctx: Ctx, island: Island, near?: number): { x: number; y: number } {
   if (island.kind === "strip") return { x: island.row, y: island.side === "left" ? 2 : 7 };
   if (island.kind === "rail") return { x: near ?? 1, y: -2 };
-  return { x: headerRow(ctx.profile.id, ctx.circuit.board.profile, island.pin) ?? 1, y: 13 };
+  return { x: headerRow(ctx.profile.id, ctx.circuit.board.profile, island.pin, ctx.strategy.orientation) ?? 1, y: 13 };
 }
 
 function railHoles(ctx: Ctx, rail: RailId): HoleId[] {
@@ -572,7 +726,7 @@ function connectNet(ctx: Ctx, netId: string): void {
     islands.set(islandKey(island), island);
   }
   const rail = ctx.railOf.get(netId);
-  const hasPartPins = islands.size > 0;
+  const hasPartPins = islands.size > 0 || ctx.railPinNets.has(netId);
   if (rail && hasPartPins) islands.set(rail, { kind: "rail", rail });
   const boardPins = [...new Set(net?.pins.filter((ref) => ref.part === BOARD_PART).map((ref) => ref.pin) ?? [])];
   for (const pin of boardPins) {
@@ -628,7 +782,7 @@ function connectNet(ctx: Ctx, netId: string): void {
   if (rail && islands.has(rail)) {
     const pin = rail.endsWith("+") ? "5V" : "GND";
     if (islands.has(`board:${pin}`)) {
-      const home = headerRow(ctx.profile.id, ctx.circuit.board.profile, pin) ?? 1;
+      const home = headerRow(ctx.profile.id, ctx.circuit.board.profile, pin, ctx.strategy.orientation) ?? 1;
       const hole = railHoles(ctx, rail).sort((a, b) => Math.abs(holeRow(a) - home) - Math.abs(holeRow(b) - home) || holeRow(a) - holeRow(b))[0];
       if (!hole) throw new LayoutFitError(`The ${rail} rail has no free holes left.`, true);
       addJumper(ctx, { board: pin }, { hole }, netId, 0);
@@ -678,7 +832,7 @@ function connectNet(ctx: Ctx, netId: string): void {
 // ---------------------------------------------------------------------------------------------------------------
 // Entry points
 
-function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strategy): Layout {
+function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strategy, sets: UnitSet[]): Layout {
   const pinNet = buildPinNets(circuit);
   const ctx: Ctx = {
     circuit,
@@ -700,6 +854,8 @@ function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strateg
     railOf: new Map(),
     headerHoles: new Map(),
     homeRow: new Map(),
+    railPinNets: new Set(),
+    keepOut: [],
   };
   if (strategy.placementGroups) {
     (circuit.placement?.groups ?? []).forEach((group, index) => {
@@ -711,7 +867,12 @@ function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strateg
   }
   reserveNano(ctx);
   assignRails(ctx);
-  for (const part of placementOrder(ctx)) place(ctx, part);
+  if (strategy.repeats) {
+    sets.forEach((set, index) => placeSet(ctx, set, index === 0 ? strategy.repeats!.anchorRank : 0));
+    if (ctx.keepOut.length === 0) throw new LayoutFitError("No repeated units could be built as identical copies.", true);
+  }
+  const placed = new Set(ctx.placements.map((placement) => placement.part));
+  for (const part of placementOrder(ctx)) if (!placed.has(part.id)) place(ctx, part);
   // Nano header jumpers tie the board pin to its header hole (how LVS sees a plugged-in pin).
   for (const [pin, holes] of [...ctx.headerHoles].sort(([a], [b]) => a.localeCompare(b))) {
     const net = circuit.nets.find((entry) => entry.pins.some((ref) => ref.part === BOARD_PART && ref.pin === pin))!;
@@ -720,7 +881,10 @@ function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strateg
   for (const net of [...circuit.nets].sort((a, b) => a.id.localeCompare(b.id))) connectNet(ctx, net.id);
   // A split rail's bridge stays only when the rail's other wires really use both halves.
   const railHalves = (rail: string, except: Jumper) =>
-    new Set(ctx.jumpers.filter((entry) => entry.jumper !== except).flatMap(({ jumper }) => [jumper.from, jumper.to]).flatMap((end) => ("hole" in end && end.hole.startsWith(rail) ? [groupOf(ctx, end.hole)] : [])));
+    new Set([
+      ...ctx.jumpers.filter((entry) => entry.jumper !== except).flatMap(({ jumper }) => [jumper.from, jumper.to]).flatMap((end) => ("hole" in end ? [end.hole] : [])),
+      ...ctx.placements.flatMap((placement) => Object.values(placement.pins)),
+    ].filter((hole) => hole.startsWith(rail)).map((hole) => groupOf(ctx, hole)));
   ctx.jumpers = ctx.jumpers.filter(({ jumper }) => !isRailBridge(profile, jumper) || railHalves("hole" in jumper.from ? jumper.from.hole.slice(0, 2) : "", jumper).size > 1);
   ctx.jumpers.sort((a, b) => a.phase - b.phase || a.jumper.net.localeCompare(b.jumper.net) || endpointKey(a.jumper.from).localeCompare(endpointKey(b.jumper.from)) || endpointKey(a.jumper.to).localeCompare(endpointKey(b.jumper.to)));
   return {
@@ -730,45 +894,101 @@ function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strateg
     placements: ctx.placements.sort((a, b) => a.part.localeCompare(b.part)),
     jumpers: ctx.jumpers.map((entry, index) => ({ ...entry.jumper, id: `W${index + 1}` })),
     ...(ctx.boardAnchor ? { boardAnchor: ctx.boardAnchor } : {}),
+    ...(BOARD_PROFILES[circuit.board.profile].placement !== "straddle" ? { boardOrientation: strategy.orientation } : {}),
   };
 }
 
+/** How the allocator chose a layout: every candidate it tried, and why the winner won (for the mission log). */
+export interface LayoutDecision {
+  chosen: string;
+  reason: string;
+  candidates: { label: string; ok: boolean; unmet?: number; score?: number; crossings?: number; wires?: number; problem?: string }[];
+}
+
+function strategyLabel(strategy: Strategy, uno: boolean): string {
+  const facing = uno ? `, Uno USB ${strategy.orientation === "usb-right" ? "right" : "left"}` : "";
+  if (strategy.repeats) return `repeated units as identical copies (start column option ${strategy.repeats.anchorRank + 1}${strategy.spread ? "" : ", tight"}${facing})`;
+  return `packing (reserve ${strategy.reserve}${strategy.spread ? ", spread" : ""}${strategy.grouped ? ", connected parts together" : ""}${strategy.placementGroups ? ", placement groups" : ""}${facing})`;
+}
+
 /**
- * Deterministic breadboard layout whose LVS is clean. Throws `LayoutFitError` when no strategy fits (tool-side unless
- * the design contradicts itself, e.g. a button's joined legs on two nets).
+ * Deterministic breadboard layout whose LVS is clean, scored by the design philosophy (quality.ts). Hard constraints:
+ * LVS clean and every explicit placement request met; among the candidates that satisfy them the lowest quality score
+ * wins (fewest wires, no crossings, regular repeated units, short wires). Candidates: repeated units built as
+ * identical copies (a few start columns), then the plain packings. When no candidate meets every placement request,
+ * the one with the fewest unmet requests is returned and the assembly console fails it (PLACEMENT-UNMET).
+ * Throws `LayoutFitError` when nothing fits (tool-side unless the design contradicts itself).
  */
 export function layoutBoard(circuit: Circuit): Layout {
+  return layoutWithDecision(circuit).layout;
+}
+
+export function layoutWithDecision(circuit: Circuit): { layout: Layout; decision: LayoutDecision } {
   const profile = BREADBOARD_PROFILES[circuit.breadboard.profile];
   if (!profile) throw new LayoutFitError(`Unknown breadboard profile ${circuit.breadboard.profile}.`, true);
   if (!BOARD_PROFILES[circuit.board.profile]) throw new LayoutFitError(`Unknown board profile ${circuit.board.profile}.`, true);
   const failures: string[] = [];
-  // With placement groups: every packing honouring them first, then the same packings without (the placement summary
-  // then reports the unmet groups). The first LVS-clean layout with the fewest unmet groups wins.
+  const sets = repeatedUnits(circuit);
   const grouped = (circuit.placement?.groups.length ?? 0) > 0;
-  const strategies: Strategy[] = [
-    ...(grouped ? PACKINGS.map((packing) => ({ ...packing, placementGroups: true })) : []),
-    ...PACKINGS.map((packing) => ({ ...packing, placementGroups: false })),
-  ];
-  let fallback: { layout: Layout; unmet: number } | undefined;
-  for (const strategy of strategies) {
+  // An Uno below the breadboard can face either way (USB end left or right); a Nano sits on the breadboard.
+  const orientations: BoardOrientation[] = BOARD_PROFILES[circuit.board.profile].placement === "straddle" ? ["usb-left"] : ["usb-left", "usb-right"];
+  const tiled: Strategy[] = sets.length > 0 ? orientations.flatMap((orientation) => [0, 1, 2].map((anchorRank) => ({ orientation, reserve: 1, spread: true, grouped: true, placementGroups: grouped, repeats: { anchorRank } }))) : [];
+  const packings: Strategy[] = orientations.flatMap((orientation) => [
+    ...(grouped ? PACKINGS.map((packing) => ({ ...packing, orientation, placementGroups: true })) : []),
+    ...PACKINGS.map((packing) => ({ ...packing, orientation, placementGroups: false })),
+  ]);
+  const candidates: { layout: Layout; unmet: number; quality: LayoutQuality; label: string }[] = [];
+  const tried: LayoutDecision["candidates"] = [];
+  const run = (strategy: Strategy): (typeof candidates)[number] | undefined => {
+    const label = strategyLabel(strategy, orientations.length > 1);
     try {
-      const layout = attempt(circuit, profile, strategy);
+      const layout = attempt(circuit, profile, strategy, sets);
       const result = lvs(circuit, layout);
       if (!result.ok) {
-        failures.push(result.issues.filter((issue) => issue.severity === "error").map((issue) => issue.message).join("; "));
-        continue;
+        const problem = result.issues.filter((issue) => issue.severity === "error").map((issue) => issue.message).join("; ");
+        failures.push(problem);
+        tried.push({ label, ok: false, problem });
+        return undefined;
       }
-      const unmet = grouped ? placementSummary(circuit, layout).groups.filter((group) => !group.met).length : 0;
-      if (unmet === 0) return layout;
-      if (!fallback || unmet < fallback.unmet) fallback = { layout, unmet };
+      const quality = layoutQuality(circuit, layout);
+      const unmet = grouped ? placementSummary(circuit, layout, quality).groups.filter((group) => !group.met).length : 0;
+      const entry = { layout, unmet, quality, label };
+      candidates.push(entry);
+      tried.push({ label, ok: true, unmet, score: quality.score, crossings: quality.crossings, wires: quality.wires });
+      return entry;
     } catch (error) {
       if (error instanceof LayoutFitError && !error.toolSide) throw error;
-      failures.push(error instanceof Error ? error.message : String(error));
+      const problem = error instanceof Error ? error.message : String(error);
+      // The plain packings' reasons explain a no-fit better than "no copies fit".
+      if (!strategy.repeats) failures.push(problem);
+      tried.push({ label, ok: false, problem });
+      return undefined;
+    }
+  };
+  for (const strategy of tiled) run(strategy);
+  if (tiled.length > 0 && !candidates.some((entry) => entry.unmet === 0)) for (const orientation of orientations) run({ ...tiled[0]!, orientation, spread: false });
+  // The plain packings. When identical copies already meet every request, each orientation's first good packing is
+  // enough to compare against (trying them all costs seconds on big designs and rarely wins); otherwise the score
+  // picks among all of them (fewer crossings, fewer and shorter wires).
+  const tiledOk = candidates.some((entry) => entry.unmet === 0);
+  for (const orientation of orientations) {
+    for (const strategy of packings.filter((entry) => entry.orientation === orientation)) {
+      const entry = run(strategy);
+      if (tiledOk && entry && entry.unmet === 0) break;
     }
   }
-  if (fallback) return fallback.layout;
-  const reason = [...new Set(failures)].slice(0, 2).join(" / ");
-  throw new LayoutFitError(`ViBread could not fit this circuit on the ${profile.name}: ${reason}`, true);
+  if (candidates.length === 0) {
+    const reason = [...new Set(failures)].slice(0, 2).join(" / ");
+    throw new LayoutFitError(`ViBread could not fit this circuit on the ${profile.name}: ${reason}`, true);
+  }
+  const best = [...candidates].sort((a, b) => a.unmet - b.unmet || a.quality.score - b.quality.score)[0]!;
+  const repeats = best.quality.repeats.filter((entry) => entry.regular).map((entry) => `${entry.copies.map((copy) => copy.join("+")).join(", ")} every ${entry.pitch} columns`);
+  const reason = [
+    best.unmet > 0 ? `no candidate met every placement request (${best.unmet} unmet); this one misses the fewest` : grouped ? "meets every placement request" : "",
+    `score ${best.quality.score}: ${best.quality.wires} wires, ${best.quality.crossings} crossing${best.quality.crossings === 1 ? "" : "s"}, ${best.quality.irregular} irregular repeat${best.quality.irregular === 1 ? "" : "s"}`,
+    repeats.length > 0 ? `identical copies: ${repeats.join("; ")}` : "",
+  ].filter(Boolean).join("; ");
+  return { layout: best.layout, decision: { chosen: best.label, reason, candidates: tried } };
 }
 
 export function layoutHash(layout: Layout): string {
