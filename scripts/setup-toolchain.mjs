@@ -70,11 +70,15 @@ export async function installToolchain({ dir, onProgress = () => {}, onLog = () 
   }
 
   const quote = (value) => `'${value.replaceAll("'", "''")}'`;
+  // The core build cache defaults to the OS cache folder (…\AppData\Local\arduino), which holds the user name; kept in
+  // the toolchain folder, everything the compiler reads or writes stays under the folders ViBread chose.
   writeFileSync(
     paths.config,
     [
       "board_manager:",
       "    additional_urls: []",
+      "build_cache:",
+      `    path: ${quote(join(arduinoDir, "build-cache"))}`,
       "directories:",
       `    data: ${quote(join(arduinoDir, "data"))}`,
       `    downloads: ${quote(join(arduinoDir, "downloads"))}`,
