@@ -5,11 +5,13 @@ import { heifToJpeg } from "heif2jpeg";
 import type {
   Actor,
   BenchRunRequest,
+  BoardProfileId,
   CompileResult,
   Mission,
   ReleaseRequest,
   Revision,
   RevisionResults,
+  SelfTestPlan,
 } from "@vibread/core";
 import { HARDWARE_KINDS, MODULES, normalizeObservation, parsePartsText, type HardwareKind, type HardwareView } from "@vibread/core";
 import type { CatalogView, InventoryEntry, InventoryUpsertRequest, PartType, ScanAcceptRequest, ScanItem } from "@vibread/core";
@@ -27,6 +29,7 @@ import type { PhotonSettings } from "./capcom/index.js";
 import { mergeCapcomPrefs } from "./capcom/prefs.js";
 import { BUILD_VERSION } from "./version.js";
 import type { AppContext } from "./context.js";
+import { mountNativeFlashRoutes, type FirmwareKind } from "./routes/native-flash.js";
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
 const fieldValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 const inventoryUpsertSchema = z.object({
@@ -565,48 +568,14 @@ export function mountApi(app: Express, ctx: AppContext): void {
     res.type("image/svg+xml").send(svg);
   });
   router.post("/missions/:id/bench/firmware", async (req, res) => {
-    const missionId = String(req.params.id);
     const body = req.body as { kind?: unknown };
     if (body.kind !== "bench" && body.kind !== "app") throw httpError(400, "INVALID_KIND", "kind must be bench or app");
-    const mission = await ctx.store.getMission(missionId);
-    if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
-    if (mission.releasedRevision === undefined) throw httpError(409, "RELEASE_REQUIRED", "Press GO for build first");
-    const revision = await ctx.store.getRevision(missionId, mission.releasedRevision);
-    if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "released revision not found");
-    const key = body.kind === "bench" ? "bench.hex" : "app.hex";
-    const fallbackUpload = uploadCommand({ hexPath: "<downloaded .hex file>", port: "<port>", board: revision.circuit.board.profile });
-    const cachedHash = revision.results.artifacts[key];
-    if (cachedHash) {
-      const cached = await ctx.store.getArtifact(cachedHash);
-      if (cached) return res.json({ hex: Buffer.from(cached.data).toString("utf8"), design: revision.hash, fallbackUpload, ...(body.kind === "bench" ? { plan: revision.results.selftest } : {}) });
-    }
-    let plan = revision.results.selftest;
-    let compile: CompileResult;
-    if (body.kind === "bench") {
-      plan = planSelfTest(revision.circuit, revision.hash);
-      compile = await compileBenchFirmware(plan);
-    } else {
-      const calibrations = revision.results.bench?.at(-1)?.calibration ?? [];
-      compile = await compileSketch({
-        source: applyCalibration(revision.circuit.sketch.source, calibrationMacros(calibrations)),
-        board: revision.circuit.board.profile,
-      });
-    }
-    if (!compile.ok || !compile.hex) {
-      const { hex: _hex, ...withoutBinary } = compile;
-      await ctx.store.saveResults(missionId, revision.n, { compile: withoutBinary, ...(body.kind === "bench" && plan ? { selftest: plan } : {}) });
-      return res.status(422).json({ error: { code: "COMPILE_FAILED", message: compile.log || "firmware compilation failed" }, diagnostics: compile.diagnostics });
-    }
-    const artifactHash = await ctx.store.putArtifact(compile.hex, "text/plain; charset=utf-8");
-    const { hex: _hex, ...withoutBinary } = compile;
-    const resultPatch: Partial<RevisionResults> = {
-      compile: withoutBinary,
-      artifacts: { [key]: artifactHash },
-      ...(body.kind === "bench" && plan ? { selftest: plan } : {}),
-    };
-    await ctx.store.saveResults(missionId, revision.n, resultPatch);
-    res.json({ hex: compile.hex, design: revision.hash, fallbackUpload, ...(body.kind === "bench" ? { plan } : {}) });
+    const built = await missionFirmware(ctx, String(req.params.id), body.kind);
+    if (!built.ok) return res.status(built.status).json(built.body);
+    const fallbackUpload = uploadCommand({ hexPath: "<downloaded .hex file>", port: "<port>", board: built.board });
+    res.json({ hex: built.hex, design: built.design, fallbackUpload, ...(body.kind === "bench" ? { plan: built.plan } : {}) });
   });
+  mountNativeFlashRoutes(router, ctx, (missionId, kind) => missionFirmware(ctx, missionId, kind));
   router.post("/missions/:id/bench/runs", async (req, res) => {
     const missionId = String(req.params.id);
     const body = req.body as BenchRunRequest & { runId?: unknown };
@@ -829,6 +798,52 @@ async function currentRevisionForBench(ctx: AppContext, missionId: string): Prom
   const revision = await ctx.store.getRevision(missionId, mission.releasedRevision);
   if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "released revision not found");
   return { revision: revision.n, hash: revision.hash };
+}
+
+type BuiltFirmware =
+  | { ok: true; hex: string; board: BoardProfileId; design: string; plan?: SelfTestPlan }
+  | { ok: false; status: number; body: unknown };
+
+/** The released revision's bench/app HEX (what the web flash and native flash upload): built once, then reused. */
+async function missionFirmware(ctx: AppContext, missionId: string, kind: FirmwareKind): Promise<BuiltFirmware> {
+  const mission = await ctx.store.getMission(missionId);
+  if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
+  if (mission.releasedRevision === undefined) throw httpError(409, "RELEASE_REQUIRED", "Press GO for build first");
+  const revision = await ctx.store.getRevision(missionId, mission.releasedRevision);
+  if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "released revision not found");
+  const key = kind === "bench" ? "bench.hex" : "app.hex";
+  const board = revision.circuit.board.profile;
+  const cachedHash = revision.results.artifacts[key];
+  if (cachedHash) {
+    const cached = await ctx.store.getArtifact(cachedHash);
+    if (cached) return { ok: true, hex: Buffer.from(cached.data).toString("utf8"), board, design: revision.hash, ...(kind === "bench" && revision.results.selftest ? { plan: revision.results.selftest } : {}) };
+  }
+  let plan = revision.results.selftest;
+  let compile: CompileResult;
+  if (kind === "bench") {
+    plan = planSelfTest(revision.circuit, revision.hash);
+    compile = await compileBenchFirmware(plan);
+  } else {
+    const calibrations = latestFullBenchRun(revision)?.calibration ?? [];
+    compile = await compileSketch({
+      source: applyCalibration(revision.circuit.sketch.source, calibrationMacros(calibrations)),
+      board,
+    });
+  }
+  if (!compile.ok || !compile.hex) {
+    const { hex: _hex, ...withoutBinary } = compile;
+    await ctx.store.saveResults(missionId, revision.n, { compile: withoutBinary, ...(kind === "bench" && plan ? { selftest: plan } : {}) });
+    return { ok: false, status: 422, body: { error: { code: "COMPILE_FAILED", message: compile.log || "firmware compilation failed" }, diagnostics: compile.diagnostics } };
+  }
+  const artifactHash = await ctx.store.putArtifact(compile.hex, "text/plain; charset=utf-8");
+  const { hex: _hex, ...withoutBinary } = compile;
+  const resultPatch: Partial<RevisionResults> = {
+    compile: withoutBinary,
+    artifacts: { [key]: artifactHash },
+    ...(kind === "bench" && plan ? { selftest: plan } : {}),
+  };
+  await ctx.store.saveResults(missionId, revision.n, resultPatch);
+  return { ok: true, hex: compile.hex, board, design: revision.hash, ...(kind === "bench" && plan ? { plan } : {}) };
 }
 
 function userFromLocals(res: Response): WebUser | undefined {
