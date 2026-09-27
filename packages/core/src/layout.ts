@@ -13,7 +13,7 @@ export interface Placement {
   pins: Record<string, HoleId>;
 }
 
-export const WIRE_COLORS = ["red", "black", "yellow", "green", "blue", "orange", "white", "purple"] as const;
+export const WIRE_COLORS = ["red", "black", "yellow", "green", "blue", "orange", "white", "purple", "brown", "gray"] as const;
 export type WireColor = (typeof WIRE_COLORS)[number];
 
 /** Colours found in ordinary jumper-wire kits: the builder's picker swatches (a custom #rrggbb is also allowed). */

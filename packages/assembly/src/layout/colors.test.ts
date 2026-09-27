@@ -1,6 +1,7 @@
+import { readFileSync, readdirSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { GOLDEN } from "@vibread/fixtures";
-import { KIT_WIRE_CSS } from "@vibread/core";
+import { CircuitSchema, KIT_WIRE_CSS, type Circuit } from "@vibread/core";
 import { buildSteps, defaultNetColors, jumperColors, layoutBoard, lineNets, netColors, renderBreadboardSvg, wireLegend } from "./index.js";
 
 const moon = GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit;
@@ -104,5 +105,41 @@ describe("builder wire-colour overrides (issue #15)", () => {
       { colors: ["blue"], label: "GND (ground)" },
       { colors: ["yellow", "#ff66aa", "blue", "purple"], label: "LED1–LED4 (D3–D6)" },
     ]));
+  });
+});
+
+const FIXTURES = new URL("../../../../fixtures/schematic/", import.meta.url);
+const fixture = (name: string): Circuit => CircuitSchema.parse(JSON.parse(readFileSync(new URL(`${name}.json`, FIXTURES), "utf8")));
+
+describe("buses get their own colour", () => {
+  it("gives the mini piano's shared anode bus LA its own colour, unlike D2–D5 and every net it touches", () => {
+    const piano = fixture("mini-piano");
+    const colors = defaultNetColors(piano);
+    const touching = piano.nets.filter((net) => net.id !== "LA" && net.pins.some((ref) => piano.nets.find((entry) => entry.id === "LA")!.pins.some((own) => own.part === ref.part)));
+    expect(touching.map((net) => net.id).sort()).toEqual(["5V", "D2", "D3", "D4", "D5"]);
+    for (const net of touching) expect(colors.LA, net.id).not.toBe(colors[net.id]);
+    // Serial channels still share one colour (D8 → R1 → buzzer).
+    expect(colors.SPK).toBe(colors.D8);
+    expect(lineNets(piano, "LA")).toEqual(["LA"]);
+    expect(lineNets(piano, "D2")).toEqual(["D2"]);
+    // A D2 override no longer spills onto the bus.
+    expect(netColors(piano, { "net:D2": "brown" }).LA).toBe(colors.LA);
+    const layout = layoutBoard(piano);
+    expect(wireLegend(piano, layout)).toContainEqual({ colors: [colors.LA], label: "LA bus (LED1–LED4, R2)" });
+  });
+
+  it.each([...readdirSync(FIXTURES).map((name) => name.replace(/\.json$/, "")), "goldens"])("%s: nets on different lines that touch the same part never share a default colour", (name) => {
+    const circuits = name === "goldens" ? GOLDEN.map((design) => design.circuit) : [fixture(name)];
+    for (const circuit of circuits) {
+      const colors = defaultNetColors(circuit);
+      const signals = circuit.nets.filter((net) => net.kind === "signal");
+      for (const a of signals) {
+        for (const b of signals) {
+          if (a.id >= b.id || lineNets(circuit, a.id).includes(b.id)) continue;
+          const shared = a.pins.some((ref) => ref.part !== "board" && b.pins.some((other) => other.part === ref.part));
+          if (shared) expect(colors[a.id], `${circuit.title}: ${a.id} vs ${b.id}`).not.toBe(colors[b.id]);
+        }
+      }
+    }
   });
 });
