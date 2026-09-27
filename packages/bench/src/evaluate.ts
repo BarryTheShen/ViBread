@@ -127,16 +127,18 @@ function evaluateRails(context: EvaluationContext): BenchTestResult {
   const lines = context.lines;
   const hello = lines.find((line): line is Extract<DeviceLine, { t: "hello" }> => line.t === "hello");
   const vcc = lines.find((line): line is Extract<DeviceLine, { t: "vcc" }> => line.t === "vcc");
+  // Firmware for another design or board is a flashing problem, never a wiring one: check it before any power verdict.
+  const designMismatch = hello !== undefined && (hello.design !== context.plan.design || hello.board !== context.plan.board);
+  // The check started (the firmware began rails.vcc) but no reading came: the board browned out or reset mid-check.
+  // A board that never began the check, even one that said hello, tells nothing about power.
   const railStarted = lines.some((line) => line.t === "begin" && line.test === "rails.vcc");
-  const streamShowsDrop = lines.some((line) => (line.t === "err" || line.t === "log") && /usb|power|reset|banner|disconnect|drop/i.test(line.msg));
-  const shortSuspected = vcc === undefined && (hello !== undefined || railStarted || streamShowsDrop);
+  const shortSuspected = vcc === undefined && !designMismatch && railStarted;
   let status: TestStatus = vcc === undefined
     ? shortSuspected ? "fail" : "unknown"
     : vcc.mv >= VCC_PASS_MV.min && vcc.mv <= VCC_PASS_MV.max
       ? "pass"
       : "fail";
   let observed = vcc === undefined ? "no board VCC reading" : `${vcc.mv} mV`;
-  const designMismatch = hello !== undefined && (hello.design !== context.plan.design || hello.board !== context.plan.board);
   if (hello === undefined) {
     observed = vcc === undefined ? "no hello banner or board VCC reading" : `${vcc.mv} mV, but no hello banner`;
   } else if (designMismatch) {
@@ -153,12 +155,12 @@ function evaluateRails(context: EvaluationContext): BenchTestResult {
     observed,
     expected: `VCC ≈ 5 V (${VCC_PASS_MV.min}–${VCC_PASS_MV.max} mV) and design ${context.plan.design}`,
   };
-  const summary = shortSuspected
-    ? SHORT_SUSPECTED_MESSAGE
-    : status === "pass"
-      ? "Board power check passed (VCC ≈ 5 V). The part tests that follow exercise the breadboard rails."
-      : designMismatch
-        ? "Board identity or power check failed. The part tests that follow exercise the breadboard rails."
+  const summary = designMismatch && hello
+    ? `The board's banner says design ${hello.design}, board ${hello.board}: it runs safe firmware for another design or board. Flash this design's safe firmware again.`
+    : shortSuspected
+      ? SHORT_SUSPECTED_MESSAGE
+      : status === "pass"
+        ? "Board power check passed (VCC ≈ 5 V). The part tests that follow exercise the breadboard rails."
         : status === "fail"
           ? "Board power check failed (VCC must be ≈ 5 V). The part tests that follow exercise the breadboard rails."
           : "Board power check needs a VCC reading. The part tests that follow exercise the breadboard rails.";
@@ -836,18 +838,20 @@ export async function evaluateRun(input: {
   let verdict = verdictFor(results);
   if (verdict === "pass" && (!helloMatchesPlan || results.length === 0 || !plannedTestsPresent)) verdict = "incomplete";
   const shortSuspectedRail = results.find((result) => result.test === "rails.vcc" && result.reason === SHORT_SUSPECTED_REASON);
+  const bannerMismatch = context.signatures.designMismatch && hello !== undefined ? hello : undefined;
   const fallback = verdict === "pass"
     ? "All bench checks passed."
     : verdict === "incomplete"
       ? "Houston, we have a problem: the bench run is incomplete — telemetry or a human answer timed out."
-      : context.signatures.designMismatch
-        ? "Houston, we have a problem: the board's design banner does not match this revision."
+      : bannerMismatch
+        ? `Houston, we have a problem: the board's banner says design ${bannerMismatch.design}, board ${bannerMismatch.board}, not this revision's ${input.plan.design} (${input.plan.board}). Flash this design's safe firmware again.`
         : "Houston, we have a problem: a bench signature did not match the design.";
   const ruleCandidates = candidatesFor(events, context);
+  // Firmware for another design explains everything after it: say so, never blame the wiring for it.
   const ruleDiagnosis: BenchRunResult["diagnosis"] = {
-    attribution: shortSuspectedRail !== undefined ? "wiring" : primary?.attribution ?? (context.signatures.designMismatch ? "design" : verdict === "pass" ? "none" : verdict === "incomplete" ? "unknown" : "component"),
-    candidates: ruleCandidates,
-    summary: shortSuspectedRail?.summary ?? summaryFor(primary, context, fallback),
+    attribution: bannerMismatch ? "design" : shortSuspectedRail !== undefined ? "wiring" : primary?.attribution ?? (verdict === "pass" ? "none" : verdict === "incomplete" ? "unknown" : "component"),
+    candidates: bannerMismatch ? [] : ruleCandidates,
+    summary: bannerMismatch ? fallback : shortSuspectedRail?.summary ?? summaryFor(primary, context, fallback),
   };
   const baseResult: BenchRunResult = {
     runId: input.runId,
@@ -860,6 +864,7 @@ export async function evaluateRun(input: {
   };
   if (verdict === "pass") return { ...baseResult, diagnosis: { ...ruleDiagnosis, attribution: "none", candidates: [] } };
   if (verdict === "incomplete") return { ...baseResult, diagnosis: { ...ruleDiagnosis, attribution: "none", candidates: [], summary: incompleteSummary(input.lines, input.answers) } };
+  if (bannerMismatch) return baseResult;
   let candidates = ruleCandidates;
   if (input.layout !== undefined && input.faultDictionary !== undefined) {
     const dictionaryCandidates = rankFaults({

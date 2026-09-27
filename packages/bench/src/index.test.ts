@@ -50,15 +50,12 @@ async function run(lines: DeviceLine[], answers: Record<string, string>, runLayo
 }
 const railPlan: typeof plan = { ...plan, tests: ["rails.vcc"] };
 
-async function evaluateRail(
-  mv?: number,
-  options: { hello?: boolean; begin?: boolean; drop?: boolean; kind?: "rails" | "selftest" } = {},
-) {
+async function evaluateRails(mv?: number, options: { hello?: false | { design: string; board: string }; begin?: boolean; kind?: "rails" | "selftest" } = {}) {
   const lines: DeviceLine[] = [];
-  if (options.hello !== false) lines.push({ t: "hello", fw: "vibread-bench", proto: 1, design: plan.design, board: plan.board });
+  const hello = options.hello === undefined ? { design: plan.design, board: plan.board } : options.hello;
+  if (hello) lines.push({ t: "hello", fw: "vibread-bench", proto: 1, ...hello });
   if (options.begin) lines.push({ t: "begin", test: "rails.vcc" });
   if (mv !== undefined) lines.push({ t: "vcc", mv });
-  if (options.drop) lines.push({ t: "log", msg: "USB reset after plug-in" });
   const result = await evaluateRun({
     circuit: moonPhaseLamp,
     plan: { ...railPlan, tests: ["rails.vcc"] },
@@ -71,7 +68,11 @@ async function evaluateRail(
   });
   const rail = result.results.find((candidate) => candidate.test === "rails.vcc");
   if (rail === undefined) throw new Error("rails.vcc result missing");
-  return rail;
+  return { rail, result };
+}
+
+async function evaluateRail(mv?: number, options: Parameters<typeof evaluateRails>[1] = {}) {
+  return (await evaluateRails(mv, options)).rail;
 }
 
 
@@ -90,24 +91,44 @@ describe("bench self-test", () => {
     expect(rail.subjects[0]).toMatchObject({ part: "board power", observed: `${mv} mV` });
   });
 
-  it("reports a missing VCC reading as a short-suspected power loss", async () => {
-    const rail = await evaluateRail(undefined, { begin: true });
+  it("reports a power check that began but never read VCC as a short-suspected power loss", async () => {
+    const { rail, result } = await evaluateRails(undefined, { begin: true });
     expect(rail.status).toBe("fail");
     expect(rail.reason).toBe("short-suspected");
     expect(rail.summary).toBe("The board lost power or stopped answering when you plugged in — unplug now and check for a short between the red + and blue − rails, or a part bridging them");
+    expect(result.diagnosis.attribution).toBe("wiring");
   });
 
-  it("reports a USB drop/reset as short-suspected even without a hello banner", async () => {
-    const rail = await evaluateRail(undefined, { hello: false, drop: true, kind: "selftest" });
-    expect(rail.status).toBe("fail");
-    expect(rail.reason).toBe("short-suspected");
+  it("keeps a board that said hello but never began the power check unknown", async () => {
+    const rail = await evaluateRail(undefined);
+    expect(rail.status).toBe("unknown");
+    expect(rail.reason).toBeUndefined();
+    expect(rail.subjects[0]).toMatchObject({ observed: "no board VCC reading" });
   });
 
-  it("keeps an unstarted board-power check unknown", async () => {
+  it("keeps a board that sent nothing at all unknown", async () => {
     const rail = await evaluateRail(undefined, { hello: false, kind: "selftest" });
     expect(rail.status).toBe("unknown");
     expect(rail.reason).toBeUndefined();
     expect(rail.subjects[0]).toMatchObject({ part: "board power", observed: "no hello banner or board VCC reading" });
+  });
+
+  it.each([false, true])("blames a wrong-design banner on the firmware, not a short (power check begun: %s)", async (begin) => {
+    const { rail, result } = await evaluateRails(undefined, { hello: { design: "other-design", board: plan.board }, begin });
+    expect(rail.status).toBe("fail");
+    expect(rail.reason).toBeUndefined();
+    expect(rail.summary).toContain("design other-design");
+    expect(result.verdict).toBe("fail");
+    expect(result.diagnosis.attribution).toBe("design");
+    expect(result.diagnosis.candidates).toEqual([]);
+    expect(result.diagnosis.summary).toContain("banner says design other-design");
+    expect(result.diagnosis.summary).toContain("Flash this design's safe firmware again");
+  });
+
+  it("blames a banner for another board on the firmware too", async () => {
+    const { result } = await evaluateRails(undefined, { hello: { design: plan.design, board: "nano-atmega328p-5v" }, begin: true });
+    expect(result.diagnosis.attribution).toBe("design");
+    expect(result.diagnosis.summary).toContain("board nano-atmega328p-5v");
   });
 
   it("derives safe subjects, order, timings, and friendly prompts", () => {

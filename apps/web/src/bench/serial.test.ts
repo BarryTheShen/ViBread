@@ -94,7 +94,11 @@ describe("BufferedTransport", () => {
   });
 
   it("classifies serial failures without treating every error as power loss", () => {
-    expect(classifySerialError(Object.assign(new Error("Failed to open serial port"), { name: "InvalidStateError" })).kind).toBe("busy");
+    // Chrome: an OS-level open failure (another app, a port not yet released, a board gone) vs a port this page holds.
+    const openFailed = classifySerialError(Object.assign(new Error("Failed to execute 'open' on 'SerialPort': Failed to open serial port."), { name: "NetworkError" }));
+    expect(openFailed.kind).toBe("open-failed");
+    expect(openFailed.message).toMatch(/would not open.*or the board was unplugged/);
+    expect(classifySerialError(Object.assign(new Error("Failed to execute 'open' on 'SerialPort': The port is already open."), { name: "InvalidStateError" })).kind).toBe("busy");
     expect(classifySerialError(Object.assign(new Error("No answer from bootloader"), { name: "STK500SyncError" })).kind).toBe("sync-timeout");
     expect(classifySerialError(Object.assign(new Error("The device has been lost"), { name: "NetworkError" })).kind).toBe("disconnect");
   });

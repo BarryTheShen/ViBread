@@ -217,7 +217,7 @@ async function until(check: () => boolean): Promise<void> {
   if (!check()) throw new Error("condition not met");
 }
 
-/** Connect as BenchPage does: runner attached to the port, port opened at the telemetry baud. */
+/** Connect as the bench view does: runner attached to the port, port opened at the telemetry baud. */
 async function connect(firmware: Firmware, options: { bootloaderBaud: number; flashedFirmware: Firmware; opensRefusedAfterClose?: number; busyAtConnect?: boolean }) {
   board = new FakeUno(firmware, options);
   const fake = board;
@@ -311,7 +311,7 @@ describe("flash safe firmware, then check board power (issue #20)", () => {
   it("gives up after three retries, and never retries the first open at Connect (a busy port is another app)", async () => {
     const stuck = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: undefined, opensRefusedAfterClose: 9 });
     const failure = await stuck.flash().then(() => undefined, (error: unknown) => error);
-    expect(classifySerialError(failure).kind).toBe("busy");
+    expect(classifySerialError(failure).kind).toBe("open-failed");
     // Three retries for the flash's own open, then three more when it tries to leave the port open at 115200.
     expect(stuck.logged.filter((entry) => /^serial: reopen retry/.test(entry.message)).map((entry) => entry.message.slice(0, 24))).toEqual(
       ["1/3", "2/3", "3/3", "1/3", "2/3", "3/3"].map((n) => `serial: reopen retry ${n}`),
