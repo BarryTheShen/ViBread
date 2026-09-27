@@ -79,7 +79,7 @@ export const BREADBOARD_PROFILES: Record<BreadboardProfileId, BreadboardProfile>
     railsSplit: false,
     labels: PRINTED_DEFAULT,
     photoHint: "A long white board with 63 numbered rows, a centre channel, and an unbroken red/blue rail line along both long edges.",
-    identify: ["63 numbered rows", "rail lines run the full length without a break", "about 16.5 cm long"],
+    identify: ["holes numbered 1–63", "rail lines run the full length without a break", "about 16.5 cm long"],
     pitchMm: 2.54,
   },
   "bb-400": {
@@ -93,7 +93,7 @@ export const BREADBOARD_PROFILES: Record<BreadboardProfileId, BreadboardProfile>
     railsSplit: false,
     labels: PRINTED_DEFAULT,
     photoHint: "A white board about the size of a phone with 30 numbered rows, a centre channel, and red/blue rails along both long edges.",
-    identify: ["30 numbered rows", "red and blue rails on both long edges", "about 8.3 cm long"],
+    identify: ["holes numbered 1–30", "red and blue rails on both long edges", "about 8.3 cm long"],
     pitchMm: 2.54,
   },
   "bb-170": {
@@ -107,7 +107,7 @@ export const BREADBOARD_PROFILES: Record<BreadboardProfileId, BreadboardProfile>
     railsSplit: false,
     labels: PRINTED_DEFAULT,
     photoHint: "A small square-ish board (often coloured) with 17 rows of 10 holes split by a centre channel and no red/blue rails at all.",
-    identify: ["only 17 rows", "no red or blue power rails", "about 4.5 cm long"],
+    identify: ["holes numbered only 1–17", "no red or blue power rails", "about 4.5 cm long"],
     pitchMm: 2.54,
   },
   "bb-830-split": {
@@ -122,7 +122,7 @@ export const BREADBOARD_PROFILES: Record<BreadboardProfileId, BreadboardProfile>
     railSplitAfter: 31,
     labels: PRINTED_DEFAULT,
     photoHint: "A long white board with 63 numbered rows whose red/blue rail lines stop in the middle, leaving a visible gap between two rail halves.",
-    identify: ["63 numbered rows", "the red and blue rail lines break in the middle", "a wider gap between rail hole groups at the centre"],
+    identify: ["holes numbered 1–63", "the red and blue rail lines break in the middle", "a wider gap between rail hole groups at the centre"],
     pitchMm: 2.54,
   },
 };
