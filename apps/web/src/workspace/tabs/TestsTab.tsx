@@ -126,6 +126,7 @@ export function TestsTab({ revision, recording }: { revision: RevisionDetail; re
                   startIcon={<SlideshowIcon />}
                   aria-expanded={open}
                   aria-controls={`replay-${scenario.id}`}
+                  data-tour="replay"
                   onClick={() => setReplaying(open ? undefined : scenario.id)}
                   sx={{ ml: 1, mt: 0.5, flexShrink: 0, width: 104 }}
                 >
