@@ -307,9 +307,81 @@ function slotCost(ctx: Ctx, slots: Slot[], spanPenalty: number): number | undefi
   return cost;
 }
 
+/** Hole and strip ids by column/row, made once: the part search looks them up for every candidate position. */
+const HOLE_IDS: Partial<Record<Column, HoleId[]>> = {};
+const STRIP_IDS: Record<Side, string[]> = { left: [], right: [] };
+
+function holeId(column: Column, row: number): HoleId {
+  return ((HOLE_IDS[column] ??= [])[row] ??= `${column}${row}`);
+}
+
+function cachedStripId(side: Side, row: number): string {
+  return (STRIP_IDS[side][row] ??= stripId(side, row));
+}
+
 function slot(ctx: Ctx, part: Part, column: Column, row: number, pin?: string): Slot {
-  const hole = `${column}${row}`;
-  return { hole, row, group: stripId(column <= "e" ? "left" : "right", row), ...(pin === undefined ? {} : { net: ctx.pinNet.get(`${part.id}.${pin}`)! }) };
+  const hole = holeId(column, row);
+  return { hole, row, group: cachedStripId(column <= "e" ? "left" : "right", row), ...(pin === undefined ? {} : { net: ctx.pinNet.get(`${part.id}.${pin}`)! }) };
+}
+
+/** The board as one part search reads it, by row (nothing is placed during a search). */
+interface SearchView {
+  /** Hole taken, by column and row. */
+  taken: Partial<Record<Column, boolean[]>>;
+  /** Strip keeps `reserve` free holes after one more leg, by side and row. */
+  roomy: Record<Side, boolean[]>;
+  /** Strip's owning net, by side and row. */
+  owner: Record<Side, (string | undefined)[]>;
+}
+
+function searchView(ctx: Ctx): SearchView {
+  const view: SearchView = { taken: {}, roomy: { left: [], right: [] }, owner: { left: [], right: [] } };
+  for (const side of ["left", "right"] as const) {
+    for (let row = 1; row <= ctx.profile.rows; row += 1) {
+      const group = cachedStripId(side, row);
+      view.roomy[side][row] = (ctx.freeCount.get(group) ?? 5) - 1 >= ctx.strategy.reserve;
+      view.owner[side][row] = ctx.stripNet.get(group);
+    }
+    for (const column of PART_COLUMNS[side]) {
+      const taken: boolean[] = (view.taken[column] = []);
+      for (let row = 1; row <= ctx.profile.rows; row += 1) taken[row] = ctx.occupied.has(holeId(column, row));
+    }
+  }
+  return view;
+}
+
+/**
+ * slotCost for a part whose legs and covered holes all lie in one column (so every slot is on its own strip), without
+ * building the slots: the same checks and the same additions in the same order, so the same cost.
+ */
+function columnCost(ctx: Ctx, view: SearchView, side: Side, column: Column, base: number, offsets: readonly number[], nets: readonly (string | undefined)[], coveredOffsets: readonly number[], spanPenalty: number): number | undefined {
+  const taken = view.taken[column]!;
+  const roomy = view.roomy[side];
+  const owners = view.owner[side];
+  let cost = spanPenalty;
+  for (let index = 0; index < offsets.length; index += 1) {
+    const row = base + offsets[index]!;
+    if (taken[row] || !roomy[row]) return undefined;
+    const net = nets[index]!;
+    const owner = owners[row];
+    if (owner !== undefined) {
+      if (owner !== net) return undefined;
+      continue;
+    }
+    cost += 4;
+    if (ctx.railOf.has(net)) cost += 2 + (side === "right" ? 2 : 0);
+    else {
+      const distance = nearestOwnStrip(ctx, net, row);
+      if (Number.isFinite(distance)) cost += 6 + distance * 0.1;
+    }
+    const home = ctx.homeRow.get(net);
+    if (home !== undefined) cost += Math.abs(row - home) * 0.06;
+  }
+  for (const offset of coveredOffsets) {
+    const row = base + offset;
+    if (taken[row] || !roomy[row]) return undefined;
+  }
+  return cost;
 }
 
 /**
@@ -383,8 +455,7 @@ function commit(ctx: Ctx, part: Part, pins: Record<string, HoleId>, covered: Hol
 /** Cheapest legal position for `part` (optionally also passing `accept`), or undefined. */
 function search(ctx: Ctx, part: Part, accept?: (pins: Record<string, HoleId>) => boolean, extraCost?: (pins: Record<string, HoleId>) => number): Candidate | undefined {
   let best: Candidate | undefined;
-  const consider = (pins: Record<string, HoleId>, slots: Slot[], spanPenalty: number) => {
-    const base = slotCost(ctx, slots, spanPenalty);
+  const consider = (pins: Record<string, HoleId>, base: number | undefined, covered: () => HoleId[]) => {
     const cost = base === undefined ? undefined : base + (extraCost?.(pins) ?? 0);
     if (cost === undefined || (best && cost >= best.cost - 1e-9)) return;
     if (accept && !accept(pins)) return;
@@ -395,7 +466,7 @@ function search(ctx: Ctx, part: Part, accept?: (pins: Record<string, HoleId>) =>
         if (body.left < other.right + margin && other.left < body.right + margin && body.top < other.bottom + margin && other.top < body.bottom + margin) return;
       }
     }
-    best = { pins, covered: slots.filter((entry) => entry.net === undefined).map((entry) => entry.hole), body, cost };
+    best = { pins, covered: covered(), body, cost };
   };
   const rows = ctx.profile.rows;
   const variant = partVariant(part)?.footprint;
@@ -414,16 +485,30 @@ function search(ctx: Ctx, part: Part, accept?: (pins: Record<string, HoleId>) =>
           if (row !== first && row !== second) slots.push(slot(ctx, part, left, row), slot(ctx, part, right, row));
           if (left !== "e") slots.push(slot(ctx, part, "e", row), slot(ctx, part, "f", row));
         }
-        consider(pins, slots, (flip ? 0.01 : 0) + base * 0.02);
+        consider(pins, slotCost(ctx, slots, (flip ? 0.01 : 0) + base * 0.02), () => slots.filter((entry) => entry.net === undefined).map((entry) => entry.hole));
       }
     }
   } else {
+    const view = searchView(ctx);
     for (const shape of footprintShapes(part)) {
       const extent = shape.offsets.at(-1)!;
+      const nets = shape.pins.map((pin) => ctx.pinNet.get(`${part.id}.${pin}`));
+      const coveredOffsets: number[] = [];
+      for (let offset = 1; offset < extent; offset += 1) if (!shape.offsets.includes(offset)) coveredOffsets.push(offset);
+      // Legs with nets on distinct rows of one column: each slot on its own strip, so columnCost applies.
+      const ownStrips = new Set(shape.offsets).size === shape.offsets.length && nets.every((net) => net !== undefined);
       for (const side of ["left", "right"] as const) {
         PART_COLUMNS[side].forEach((column, columnIndex) => {
           for (let base = 1; base + extent <= rows; base += 1) {
+            const spanPenalty = shape.spanPenalty + base * 0.02 + columnIndex * 0.01;
             const pins: Record<string, HoleId> = {};
+            if (ownStrips) {
+              const cost = columnCost(ctx, view, side, column, base, shape.offsets, nets, coveredOffsets, spanPenalty);
+              if (cost === undefined) continue;
+              shape.pins.forEach((pin, index) => (pins[pin] = holeId(column, base + shape.offsets[index]!)));
+              consider(pins, cost, () => coveredOffsets.map((offset) => holeId(column, base + offset)));
+              continue;
+            }
             const slots: Slot[] = [];
             shape.pins.forEach((pin, index) => {
               const entry = slot(ctx, part, column, base + shape.offsets[index]!, pin);
@@ -431,7 +516,7 @@ function search(ctx: Ctx, part: Part, accept?: (pins: Record<string, HoleId>) =>
               slots.push(entry);
             });
             for (let row = base + 1; row < base + extent; row += 1) if (!shape.offsets.includes(row - base)) slots.push(slot(ctx, part, column, row));
-            consider(pins, slots, shape.spanPenalty + base * 0.02 + columnIndex * 0.01);
+            consider(pins, slotCost(ctx, slots, spanPenalty), () => slots.filter((entry) => entry.net === undefined).map((entry) => entry.hole));
           }
         });
       }

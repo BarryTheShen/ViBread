@@ -81,23 +81,54 @@ function runLocally(input: { circuit: Circuit; hex: string; suite: TestSuite }):
   return input.suite.scenarios.map((scenario) => executeScenario({ circuit: input.circuit, hex: input.hex, scenario }));
 }
 
-async function runWorker(request: WorkerRequest): Promise<ScenarioExecution> {
-  return new Promise((resolve, reject) => {
-    const sourceEntry = new URL("./worker-entry.ts", import.meta.url);
-    const sourceMode = sourceEntry.pathname.endsWith(".ts");
-    const entry = sourceMode ? new URL("./worker-loader.mjs", import.meta.url) : new URL("./worker-entry.js", import.meta.url);
-    const options = sourceMode ? { execArgv: ["--import", import.meta.resolve("tsx/esm")] } : {};
-    const worker = new Worker(entry, options);
-    const finish = (error?: Error, result?: ScenarioExecution) => {
-      void worker.terminate();
-      if (error) reject(error);
-      else if (result) resolve(result);
-      else reject(new Error("simulation worker returned no result"));
-    };
-    worker.once("message", (message: ScenarioPayload) => finish(undefined, message.result));
-    worker.once("error", (error: Error) => finish(error));
-    worker.postMessage(request);
+/**
+ * Idle simulation workers, kept between suites: starting one (the tsx loader, the engine and avr8js) costs about 350 ms,
+ * which every evaluation paid on its compile → simulate critical path. Unref'd, so they never keep a process alive; a
+ * worker that errors or exits is dropped, never reused.
+ */
+const idleWorkers: Worker[] = [];
+const IDLE_LIMIT = 8;
+
+function startWorker(): Worker {
+  const sourceEntry = new URL("./worker-entry.ts", import.meta.url);
+  const sourceMode = sourceEntry.pathname.endsWith(".ts");
+  const entry = sourceMode ? new URL("./worker-loader.mjs", import.meta.url) : new URL("./worker-entry.js", import.meta.url);
+  const options = sourceMode ? { execArgv: ["--import", import.meta.resolve("tsx/esm")] } : {};
+  const worker = new Worker(entry, options);
+  // An error while idle (nobody waiting for it) ends the worker; the exit handler drops it from the idle list.
+  worker.on("error", () => undefined);
+  worker.once("exit", () => {
+    const index = idleWorkers.indexOf(worker);
+    if (index >= 0) idleWorkers.splice(index, 1);
   });
+  return worker;
+}
+
+async function runWorker(request: WorkerRequest): Promise<ScenarioExecution> {
+  const worker = idleWorkers.pop() ?? startWorker();
+  // Held while it runs a scenario; an idle worker never keeps the process alive.
+  worker.ref();
+  const { promise, resolve, reject } = Promise.withResolvers<ScenarioExecution>();
+  const finish = (error?: Error, result?: ScenarioExecution) => {
+    worker.off("message", onMessage);
+    worker.off("error", onError);
+    worker.off("exit", onExit);
+    if (!error && result && idleWorkers.length < IDLE_LIMIT) {
+      worker.unref();
+      idleWorkers.push(worker);
+    } else void worker.terminate();
+    if (error) reject(error);
+    else if (result) resolve(result);
+    else reject(new Error("simulation worker returned no result"));
+  };
+  const onMessage = (message: ScenarioPayload) => finish(undefined, message.result);
+  const onError = (error: Error) => finish(error);
+  const onExit = (code: number) => finish(new Error(`simulation worker exited (code ${code})`));
+  worker.once("message", onMessage);
+  worker.once("error", onError);
+  worker.once("exit", onExit);
+  worker.postMessage(request);
+  return promise;
 }
 
 async function runPool(input: { circuit: Circuit; hex: string; suite: TestSuite }): Promise<ScenarioExecution[]> {

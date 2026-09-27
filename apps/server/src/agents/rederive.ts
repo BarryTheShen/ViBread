@@ -1,5 +1,5 @@
 import { setTimeout as sleep } from "node:timers/promises";
-import { CONSOLE_LABELS, type ConsoleId, type MissionStore, type Revision, type Verdict } from "@vibread/core";
+import { CONSOLE_LABELS, type ConsoleId, type Mission, type MissionStore, type Revision, type Verdict } from "@vibread/core";
 import { DETERMINISTIC_CONSOLES, SYSTEM_ACTOR, deterministicGo, errorMessage, statusReport, type Pipeline } from "@vibread/tools";
 import type { Logger } from "pino";
 import type { DebugLog } from "../services/debug-log.js";
@@ -111,11 +111,23 @@ export function createDerivedRefresher(deps: {
   async function run(): Promise<RefreshSummary> {
     const started = Date.now();
     const summary: RefreshSummary = { refreshed: [], failed: [], skipped: 0, ms: 0 };
+    // One unreadable mission (corrupt stored JSON) is reported and skipped; the others are still refreshed.
+    const unreadable = (missionId: string, revision: number, error: unknown) => {
+      summary.failed.push({ missionId, revision, error: errorMessage(error) });
+      debug.event(null, "pipeline", `couldn't read mission ${missionId} to re-derive it: ${errorMessage(error)}`.slice(0, 300), { missionId, revision, error: errorMessage(error) }, "warn");
+      deps.log.warn({ missionId, revision, err: errorMessage(error) }, "reading a mission to re-derive it failed");
+    };
     // Current revisions first (what every mission shows), then released ones that are no longer current.
     const targets: { missionId: string; n: number }[] = [];
     const released: { missionId: string; n: number }[] = [];
     for (const missionId of await deps.missionIds()) {
-      const mission = await store.getMission(missionId);
+      let mission: Mission | null;
+      try {
+        mission = await store.getMission(missionId);
+      } catch (error) {
+        unreadable(missionId, 0, error);
+        continue;
+      }
       if (mission?.currentRevision !== undefined) targets.push({ missionId, n: mission.currentRevision });
       if (mission?.releasedRevision !== undefined && mission.releasedRevision !== mission.currentRevision) released.push({ missionId, n: mission.releasedRevision });
     }
@@ -130,7 +142,13 @@ export function createDerivedRefresher(deps: {
     summary.version = version;
     const due: { missionId: string; revision: Revision }[] = [];
     for (const { missionId, n } of [...targets, ...released]) {
-      const revision = await store.getRevision(missionId, n);
+      let revision: Revision | null;
+      try {
+        revision = await store.getRevision(missionId, n);
+      } catch (error) {
+        unreadable(missionId, n, error);
+        continue;
+      }
       if (!revision) continue;
       if (revision.results.derivation === version) summary.skipped++;
       else due.push({ missionId, revision });
@@ -158,7 +176,7 @@ export function createDerivedRefresher(deps: {
       }
     }
     summary.ms = Date.now() - started;
-    if (due.length) {
+    if (due.length || summary.failed.length) {
       debug.event(null, "pipeline", `derived results refreshed: ${summary.refreshed.length} of ${due.length} revisions in ${(summary.ms / 1000).toFixed(1)} s${summary.failed.length ? ` (${summary.failed.length} failed)` : ""}${stopped ? " — stopped early" : ""}`, { version, refreshed: summary.refreshed.length, failed: summary.failed.length, skipped: summary.skipped, ms: summary.ms }, summary.failed.length ? "warn" : "info");
     }
     return summary;

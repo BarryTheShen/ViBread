@@ -1,9 +1,13 @@
+import { randomUUID } from "node:crypto";
+import { rmSync } from "node:fs";
 import type { Actor, Layout, Revision, StepList } from "@vibread/core";
 import { GOLDEN } from "@vibread/fixtures";
 import { createPipeline } from "@vibread/tools";
 import { describe, expect, it } from "vitest";
+import { openDatabase } from "../db/index.js";
 import { BUILD_PROGRESS_EVENT } from "../services/build-progress.js";
 import { WIRE_COLOR_EVENT } from "../services/wire-colors.js";
+import { createMissionStore } from "../store/missions.js";
 import { createAgentRuntime } from "./index.js";
 import { createDerivedRefresher } from "./rederive.js";
 import { mockModels, scriptedDesign, scriptedJson, testDeps } from "./testing.js";
@@ -121,4 +125,42 @@ describe("derived results made by older code are refreshed on start", () => {
     await deps.store.appendEvent({ missionId: mission.id, channel: "web", actor: FLIGHT, kind: "build.step", text: `Step ${k + 3} done`, revision: 1, data: { n: k + 3 } });
     expect((await runtime.missions.build(mission.id)).current).toBe(k + 4);
   }, 180_000);
+});
+
+describe("one unreadable mission doesn't stop the start-up refresh", () => {
+  it("reports the missions whose stored JSON is corrupt and still refreshes every other mission", async () => {
+    const dir = `/tmp/vb-vitest-${randomUUID()}`;
+    const opened = openDatabase(dir);
+    try {
+      const deps = testDeps();
+      const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
+      const author: Actor = { kind: "system", id: "golden", channel: "system" };
+      const ids: string[] = [];
+      for (const title of ["Corrupt mission", "Corrupt revision", "Healthy"]) {
+        const mission = await store.createMission({ title, brief: golden.brief, ownerId: "operator", inventory: golden.inventory });
+        const revision = await store.createRevision(mission.id, { circuit: golden.circuit, suite: golden.suite, author });
+        await store.saveResults(mission.id, revision.n, { derivation: "old" });
+        await store.updateMission(mission.id, { currentRevision: revision.n });
+        ids.push(mission.id);
+      }
+      const [brokenMission, brokenRevision, healthy] = ids as [string, string, string];
+      opened.sqlite.prepare('UPDATE "missions" SET "inventory" = ? WHERE "id" = ?').run("{not json", brokenMission);
+      opened.sqlite.prepare('UPDATE "revisions" SET "results" = ? WHERE "missionId" = ?').run("{not json", brokenRevision);
+      // Re-deriving only stamps the running version: this test is about which missions get re-derived, not how.
+      const evaluated: string[] = [];
+      const pipeline = { evaluate: async (missionId: string, n: number) => (evaluated.push(missionId), (await store.saveResults(missionId, n, { derivation: "new" })).results) };
+      const refresher = createDerivedRefresher({ store, pipeline, debug: deps.debug, log: deps.log, version: async () => "new", missionIds: async () => ids });
+
+      const summary = await refresher.run();
+
+      expect(evaluated).toEqual([healthy]);
+      expect(summary.refreshed).toMatchObject([{ missionId: healthy, revision: 1 }]);
+      expect(summary.failed.map((f) => f.missionId)).toEqual([brokenMission, brokenRevision]);
+      expect(summary.failed.every((f) => f.error.length > 0)).toBe(true);
+      expect((await store.getRevision(healthy, 1))!.results.derivation).toBe("new");
+    } finally {
+      opened.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
