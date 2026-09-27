@@ -14,7 +14,7 @@ import type {
   SafetyOverride,
   SelfTestPlan,
 } from "@vibread/core";
-import { HARDWARE_KINDS, MODULES, isPracticeRun, normalizeObservation, parsePartsText, type HardwareKind, type HardwareView } from "@vibread/core";
+import { DeviceLineSchema, HARDWARE_KINDS, MODULES, isPracticeRun, normalizeObservation, parsePartsText, type DeviceLine, type HardwareKind, type HardwareView } from "@vibread/core";
 import type { CatalogView, InventoryEntry, InventoryUpsertRequest, PartType, ScanAcceptRequest, ScanItem } from "@vibread/core";
 import { applyCalibration, compileBenchFirmware, compileSketch, uploadCommand } from "@vibread/firmware";
 import { calibrationMacros, evaluateRun, planSelfTest } from "@vibread/bench";
@@ -46,6 +46,16 @@ const inventoryUpsertSchema = z.object({
     photoUrl: z.string().optional(),
     note: z.string().optional(),
   })).min(1),
+});
+/** PATCH /inventory/items/:id: any subset of an item's editable fields (the quantity stepper goes down to 0). */
+const inventoryPatchSchema = z.object({
+  typeId: z.string().min(1).optional(),
+  values: z.record(z.string(), fieldValueSchema).optional(),
+  quantity: z.number().int().nonnegative().optional(),
+  status: z.enum(["ready", "needs-look"]).optional(),
+  source: z.enum(["scan", "typed", "manual", "preset"]).optional(),
+  photoUrl: z.string().optional(),
+  note: z.string().optional(),
 });
 
 interface WebUser {
@@ -162,7 +172,9 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.patch("/inventory/items/:id", async (req, res) => {
     const user = actorUser(res, ctx);
-    res.json(await ctx.inventory.update(user.id, String(req.params.id), req.body as Partial<InventoryEntry>));
+    const parsed = inventoryPatchSchema.safeParse(req.body ?? {});
+    if (!parsed.success) throw httpError(400, "INVALID_INVENTORY", parsed.error.message);
+    res.json(await ctx.inventory.update(user.id, String(req.params.id), parsed.data));
   });
   router.delete("/inventory/items/:id", async (req, res) => {
     const user = actorUser(res, ctx);
@@ -709,15 +721,27 @@ export function mountApi(app: Express, ctx: AppContext): void {
   mountNativeFlashRoutes(router, ctx, (missionId, kind) => missionFirmware(ctx, missionId, kind));
   router.post("/missions/:id/bench/runs", async (req, res) => {
     const missionId = String(req.params.id);
-    const body = req.body as BenchRunRequest & { runId?: unknown };
+    const body = (req.body ?? {}) as Partial<BenchRunRequest> & { runId?: unknown };
+    const n = parsePositiveInt(body.revision);
+    if (body.kind !== "rails" && body.kind !== "checkpoint" && body.kind !== "selftest") throw httpError(400, "INVALID_REQUEST", "kind must be rails, checkpoint or selftest");
+    if (!Array.isArray(body.lines)) throw httpError(400, "INVALID_REQUEST", "lines must be an array of device lines");
+    const answers: unknown = body.answers ?? {};
+    if (typeof answers !== "object" || answers === null || Array.isArray(answers) || Object.values(answers).some((value) => typeof value !== "string")) {
+      throw httpError(400, "INVALID_REQUEST", "answers must map ask ids to strings");
+    }
+    // The contract drops lines that don't decode (boot noise); a client that sent one anyway gets the same treatment.
+    const lines = body.lines.flatMap((line): DeviceLine[] => {
+      const parsed = DeviceLineSchema.safeParse(line);
+      return parsed.success ? [parsed.data] : [];
+    });
     const runPrefix = typeof body.runId === "string" && isPracticeRun({ runId: body.runId }) ? "virtual" : "run";
-    const revision = await ctx.store.getRevision(missionId, body.revision);
+    const revision = await ctx.store.getRevision(missionId, n);
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
     const serverPlan = revision.results.selftest;
     if (!serverPlan) throw httpError(409, "SELFTEST_PLAN_REQUIRED", "This revision has no server-generated self-test plan.");
     // A Build Steps checkpoint runs a few of the plan's tests (issue 21); judge only those, and only ones the server's
     // own plan has. Everything else about the plan stays the server's.
-    const requested = Array.isArray(body.plan?.tests) ? serverPlan.tests.filter((test) => body.plan.tests.includes(test)) : [];
+    const requested = Array.isArray(body.plan?.tests) ? serverPlan.tests.filter((test) => body.plan!.tests.includes(test)) : [];
     const plan = requested.length > 0 && requested.length < serverPlan.tests.length ? { ...serverPlan, tests: requested } : serverPlan;
     // PLAN item 14: rank single-fault mutants when the background fault dictionary (faults.json) is ready.
     const faultDictionary = await loadFaultDictionary(ctx.store, revision.results.artifacts);
@@ -725,8 +749,8 @@ export function mountApi(app: Express, ctx: AppContext): void {
       circuit: revision.circuit,
       layout: revision.results.layout,
       plan,
-      lines: body.lines,
-      answers: body.answers,
+      lines,
+      answers: answers as Record<string, string>,
       kind: body.kind,
       revision: revision.n,
       runId: `${runPrefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
@@ -806,7 +830,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     res.json({ ok: true });
   });
   router.get("/phone/missions", async (_req, res) => {
-    const missions = await ctx.store.listMissions("operator");
+    const missions = await ctx.store.listMissions(actorUser(res, ctx).id);
     const result: { id: string; title: string; currentStep: number }[] = [];
     for (const mission of missions) {
       if (mission.releasedRevision === undefined) continue;

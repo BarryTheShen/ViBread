@@ -22,14 +22,30 @@ export interface RunningServer {
   close(): Promise<void>;
 }
 
+/**
+ * A request the client got wrong before any route ran: body-parser's http-errors (malformed JSON, body too large) carry
+ * an exposable 4xx status and a `type`; multer's upload limits carry only a `code`.
+ */
+function clientRequestError(error: unknown): { status: number; code: string; message: string } | undefined {
+  if (!(error instanceof Error)) return undefined;
+  if (error.name === "MulterError" && "code" in error && typeof error.code === "string") {
+    return { status: error.code === "LIMIT_FILE_SIZE" ? 413 : 400, code: error.code, message: error.message };
+  }
+  if ("status" in error && typeof error.status === "number" && error.status >= 400 && error.status < 500 && "expose" in error && error.expose === true) {
+    return { status: error.status, code: "type" in error && typeof error.type === "string" ? error.type : "BAD_REQUEST", message: error.message };
+  }
+  return undefined;
+}
+
 export function createApiErrorHandler(log: Logger, debug?: DebugLog): ErrorRequestHandler {
   return (error, req, res, next) => {
     if (res.headersSent) return next(error);
     const deliberate = typeof error?.status === "number" && typeof error?.code === "string";
-    const status = deliberate ? error.status : 500;
-    const code = deliberate ? error.code : "INTERNAL_ERROR";
-    const message = deliberate && error instanceof Error ? error.message : "internal server error";
-    if (!deliberate || status >= 500) log.error({ err: error }, "request failed");
+    const client = deliberate ? undefined : clientRequestError(error);
+    const status = client?.status ?? (deliberate ? error.status : 500);
+    const code = client?.code ?? (deliberate ? error.code : "INTERNAL_ERROR");
+    const message = client?.message ?? (deliberate && error instanceof Error ? error.message : "internal server error");
+    if ((!deliberate && !client) || status >= 500) log.error({ err: error }, "request failed");
     if (debug) {
       const mission = /^\/api\/missions\/([^/]+)/.exec(req.path)?.[1] ?? null;
       debug.event(mission, status >= 500 ? "error" : "http", `${req.method} ${req.path} failed`, { status, code, durationMs: Date.now() - Number(res.locals.debugStartedAt ?? Date.now()) }, status >= 500 ? "error" : "warn");

@@ -55,8 +55,9 @@ async function server(): Promise<TestServer> {
   const app = express();
   app.use(express.json());
   app.use((req, res, next) => {
+    // x-user "-" = signed out.
     const id = req.header("x-user") ?? "owner";
-    res.locals.user = { id, name: id };
+    if (id !== "-") res.locals.user = { id, name: id };
     next();
   });
   app.use("/api/missions/:id", missionOwnerMiddleware(ctx));
@@ -145,6 +146,29 @@ describe("mission action routes", () => {
       expect(running.runtime.stop).toHaveBeenCalledWith(mission.id);
       expect(running.order).toEqual(["stop", "delete"]);
       expect(running.deleted.id).toBe(mission.id);
+    } finally {
+      await running.close();
+    }
+  });
+
+  it("lists the signed-in user's released missions for the phone, never another account's, and nothing signed out", async () => {
+    const running = await server();
+    try {
+      const released = async (ownerId: string, title: string) => {
+        const mission = await running.store.createMission({ title, brief: fixture.brief, ownerId, inventory: fixture.inventory });
+        const revision = await running.store.createRevision(mission.id, { circuit: fixture.circuit, suite: fixture.suite, author: { kind: "human", id: ownerId, channel: "web" } });
+        await running.store.updateMission(mission.id, { releasedRevision: revision.n });
+        return mission;
+      };
+      const mine = await released("owner", "Mine");
+      await released("operator", "Operator's");
+      await released("other", "Theirs");
+
+      const list = await fetch(`${running.base}/api/phone/missions`);
+      expect(list.status).toBe(200);
+      expect(((await list.json()) as { id: string; title: string }[]).map((mission) => mission.id)).toEqual([mine.id]);
+      const signedOut = await fetch(`${running.base}/api/phone/missions`, { headers: { "x-user": "-" } });
+      expect(signedOut.status).toBe(401);
     } finally {
       await running.close();
     }

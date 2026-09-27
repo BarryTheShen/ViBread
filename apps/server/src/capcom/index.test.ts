@@ -17,6 +17,7 @@ import { loadConfig } from "../config.js";
 import { createAppContext, type AppContext, type AppContextHandle } from "../context.js";
 import { createApiErrorHandler } from "../main.js";
 import { mountApi } from "../routes.js";
+import { SqlMissionStore } from "../store/missions.js";
 import {
   alreadyAnsweredText,
   approvalOutcome,
@@ -402,6 +403,24 @@ describe("CAPCOM delivery (end to end)", () => {
       "While you were in quiet hours:\n• Launch Control r1 is ready — EECOM GO · GUIDO GO · FIDO GO · FAO GO · RETRO GO. Reply GO to start building.\n(about Launch Control; reply `mission` to switch)",
     );
     expect(ctx.capcom.prefs.queuedUsers()).toEqual([]);
+  });
+
+  it("forgets a deleted mission: its held notices are dropped and later texts don't hit a snag on it", async () => {
+    const now = new Date("2026-09-27T05:00:00Z"); // 00:00 in Chicago
+    const { ctx, bot, mission, texts, receive } = await harness({ script: [PROPOSE, { text: "Ready." }], now: () => now });
+    ctx.capcom.prefs.save(OWNER, mergeCapcomPrefs(DEFAULT_CAPCOM_PREFS, { quietHours: { enabled: true, start: "23:00", end: "07:00", timeZone: "America/Chicago" } }));
+    await ctx.missions.say(mission.id, golden.brief, WEB);
+    await bot.idle();
+    expect(ctx.capcom.prefs.queuedUsers()).toEqual([OWNER]);
+    receive({ type: "text", text: "mission 1" });
+    await vi.waitFor(() => expect(texts()).toContain("Attached to mission 1: Launch Control."), { timeout: 5_000 });
+
+    (ctx.store as SqlMissionStore).deleteMission(mission.id);
+    expect(ctx.capcom.prefs.queuedUsers()).toEqual([]);
+    expect((await ctx.capcomSpaces.get(SPACE))?.missionId).toBeUndefined();
+
+    receive({ type: "text", text: "status" });
+    await vi.waitFor(() => expect(texts().at(-1)).toBe("No active mission. Reply `mission` to choose one or `brief <what you want to build>` to begin."), { timeout: 5_000 });
   });
 
   it("respects a switched-off category", async () => {

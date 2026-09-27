@@ -373,12 +373,16 @@ export function runCapcom(ctx: AppContext, transport: CapcomTransport, options: 
     }
   };
 
+  /** The handle's attached mission, if it still exists (a mission deleted in the web app is forgotten). */
   const activeMission = async (handle: string, spaceId: string): Promise<string | undefined> => {
-    const active = activeMissions.get(handle);
-    if (active) return active;
-    const binding = await ctx.capcomSpaces.get(spaceId);
-    if (binding?.missionId) activeMissions.set(handle, binding.missionId);
-    return binding?.missionId ?? undefined;
+    const missionId = activeMissions.get(handle) ?? (await ctx.capcomSpaces.get(spaceId))?.missionId;
+    if (!missionId) return undefined;
+    if (!(await ctx.store.getMission(missionId))) {
+      activeMissions.delete(handle);
+      return undefined;
+    }
+    activeMissions.set(handle, missionId);
+    return missionId;
   };
 
   /** Makes the notice's mission the handle's active one (replies go there); says so when that changed. */

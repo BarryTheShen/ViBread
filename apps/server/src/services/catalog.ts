@@ -34,19 +34,23 @@ export class SqlCatalogService implements CatalogService {
   }
 
   async upsert(ownerId: string, input: PartType): Promise<PartType> {
-    const type: PartType = { ...input, id: typeof input.id === "string" && input.id.startsWith("u-") ? input.id : `u-${randomUUID()}`, builtIn: false };
-    this.deps.sqlite.prepare('INSERT INTO "part_types" ("id", "ownerId", "json", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?) ON CONFLICT("id") DO UPDATE SET "json" = excluded."json", "updatedAt" = excluded."updatedAt"').run(type.id, ownerId, JSON.stringify(type), Date.now(), Date.now());
+    // A client-supplied id is kept only when it's new or already this owner's: another account's id gets a fresh one.
+    const requested = typeof input.id === "string" && input.id.startsWith("u-") ? input.id : undefined;
+    const holder = requested ? (this.deps.sqlite.prepare('SELECT "ownerId" FROM "part_types" WHERE "id" = ?').get(requested) as { ownerId: string } | undefined) : undefined;
+    const id = requested && (!holder || holder.ownerId === ownerId) ? requested : `u-${randomUUID()}`;
+    const type: PartType = { ...input, id, builtIn: false };
+    this.deps.sqlite.prepare('INSERT INTO "part_types" ("id", "ownerId", "json", "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?) ON CONFLICT("id") DO UPDATE SET "json" = excluded."json", "updatedAt" = excluded."updatedAt" WHERE "part_types"."ownerId" = excluded."ownerId"').run(type.id, ownerId, JSON.stringify(type), Date.now(), Date.now());
     return type;
   }
 
   async update(ownerId: string, id: string, patch: Partial<PartType>): Promise<PartType> {
     const current = await this.get(ownerId, id);
-    if (!current || current.builtIn) throw new Error("user part type not found");
+    if (!current || current.builtIn) throw Object.assign(new Error("user part type not found"), { status: 404, code: "PART_TYPE_NOT_FOUND" });
     return this.upsert(ownerId, { ...current, ...patch, id, builtIn: false });
   }
 
   async remove(ownerId: string, id: string, force = false): Promise<void> {
-    if (BUILT_IN_PART_TYPES.some((type) => type.id === id)) throw new Error("built-in part types cannot be deleted");
+    if (BUILT_IN_PART_TYPES.some((type) => type.id === id)) throw Object.assign(new Error("built-in part types cannot be deleted"), { status: 400, code: "BUILT_IN_PART_TYPE" });
     const count = this.deps.sqlite.prepare('SELECT COUNT(*) AS count FROM "inventory_items" WHERE "ownerId" = ? AND "typeId" = ?').get(ownerId, id) as { count: number };
     if (count.count > 0 && !force) throw Object.assign(new Error("part type has inventory entries"), { status: 409, code: "TYPE_IN_USE" });
     this.deps.sqlite.prepare('DELETE FROM "part_types" WHERE "id" = ? AND "ownerId" = ?').run(id, ownerId);
