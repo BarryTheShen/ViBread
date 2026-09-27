@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GOLDEN } from "@vibread/fixtures";
-import { layoutBoard } from "@vibread/assembly/layout";
-import { revisionHash, type BenchRunResult, type DeviceLine } from "@vibread/core";
+import { asBuiltCircuit, layoutBoard } from "@vibread/assembly/layout";
+import { revisionHash, type BenchRunResult, type Circuit, type DeviceLine, type Layout } from "@vibread/core";
 import { FAULT_IDS, applyFault, evaluateRun, planSelfTest, rankFaults } from "./index.js";
 
 const moon = GOLDEN.find((entry) => entry.key === "moon-phase-lamp");
@@ -23,14 +23,57 @@ function observed(cause: string): BenchRunResult {
   };
 }
 
+function netPartition(circuit: Circuit, layout: Layout): string[] {
+  return asBuiltCircuit(circuit, layout).nets.map((net) => net.pins.map((ref) => `${ref.part}.${ref.pin}`).sort().join(" ")).sort();
+}
+
 describe("shared fault catalog", () => {
-  it("applies every catalog mutation to a layout and as-built circuit", () => {
+  it("applies every catalog mutation that fits the moon layout", () => {
     const layout = layoutBoard(moon.circuit);
-    for (const fault of FAULT_IDS) {
+    for (const fault of FAULT_IDS.filter((id) => id !== "button-rotated-90")) {
       const applied = applyFault({ circuit: moon.circuit, layout, fault });
       expect(applied.description.length, fault).toBeGreaterThan(0);
       expect(applied.circuit.nets.length, fault).toBeGreaterThan(0);
     }
+  });
+
+  it("only injects wiring faults that change a golden's as-built connections", () => {
+    for (const golden of GOLDEN) {
+      const layout = layoutBoard(golden.circuit);
+      const base = netPartition(golden.circuit, layout);
+      for (const fault of FAULT_IDS.filter((id) => id !== "wrong-resistor-value")) {
+        let applied;
+        try {
+          applied = applyFault({ circuit: golden.circuit, layout, fault });
+        } catch {
+          continue;
+        }
+        expect(netPartition(golden.circuit, applied.layout), `${golden.key} ${fault}`).not.toEqual(base);
+      }
+    }
+  });
+
+  it("injects a moved lead on the button designs, but no rotation when D2 and GND sit on opposite channel halves", () => {
+    for (const key of ["moon-phase-lamp", "launch-control"]) {
+      const golden = GOLDEN.find((entry) => entry.key === key);
+      if (golden === undefined) throw new Error(`${key} fixture is required`);
+      const layout = layoutBoard(golden.circuit);
+      expect(() => applyFault({ circuit: golden.circuit, layout, fault: "moved-lead" }), key).not.toThrow();
+      expect(() => applyFault({ circuit: golden.circuit, layout, fault: "button-rotated-90" }), key).toThrow(/not applicable/);
+    }
+  });
+
+  it("injects the rotation when the button's GND wiring shares the signal side of the channel", () => {
+    const layout = layoutBoard(moon.circuit);
+    const button = layout.placements.find((placement) => placement.part === "BTN1");
+    const signal = layout.jumpers.find((jumper) => jumper.net === "D2");
+    const ground = layout.jumpers.find((jumper) => "hole" in jumper.to && jumper.to.hole === button?.pins["3"].replace(/^e/, "a"));
+    if (button === undefined || signal === undefined || ground === undefined || !("hole" in signal.to) || !("hole" in ground.to)) throw new Error("moon layout no longer wires BTN1 as e/f straddle with a GND jumper in column a");
+    // Put the GND jumper on the same (f–j) half as the D2 jumper: a 90° turn now ties D2 to GND permanently.
+    ground.to = { hole: ground.to.hole.replace(/^a/, "j") };
+    const applied = applyFault({ circuit: moon.circuit, layout, fault: "button-rotated-90" });
+    const d2 = applied.circuit.nets.find((net) => net.pins.some((ref) => ref.part === "board" && ref.pin === "D2"));
+    expect(d2?.pins.some((ref) => ref.part === "board" && ref.pin === "GND")).toBe(true);
   });
 
   it("keeps five representative true faults in the top two ranked candidates", () => {

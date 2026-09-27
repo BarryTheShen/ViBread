@@ -160,6 +160,18 @@ function finishFault(circuit: Circuit, layout: Layout, id: FaultId): AppliedFaul
   return { layout, circuit: built, description: definition(id).description };
 }
 
+/** Net partition of the as-built circuit, independent of generated net ids. */
+function connectivity(circuit: Circuit, layout: Layout): string {
+  return asBuiltCircuit(circuit, layout).nets.map((net) => net.pins.map((ref) => `${ref.part}.${ref.pin}`).sort().join(" ")).sort().join("|");
+}
+
+function occupiedHoles(layout: Layout): Set<string> {
+  const holes = new Set<string>();
+  for (const placement of layout.placements) for (const hole of Object.values(placement.pins)) holes.add(hole);
+  for (const jumper of layout.jumpers) for (const hole of [endpointHole(jumper.from), endpointHole(jumper.to)]) if (hole !== undefined) holes.add(hole);
+  return holes;
+}
+
 export function applyFault(input: ApplyFaultInput): AppliedFault {
   const layout = structuredClone(input.layout);
   const circuit = structuredClone(input.circuit);
@@ -185,7 +197,10 @@ export function applyFault(input: ApplyFaultInput): AppliedFault {
       if (placement === undefined) throw new Error("button rotation requires a placed button");
       const old = { ...placement.pins };
       if (old["1"] === undefined || old["2"] === undefined || old["3"] === undefined || old["4"] === undefined) throw new Error("button rotation requires four pins");
+      const before = connectivity(circuit, layout);
       placement.pins = { "1": old["2"], "2": old["4"], "3": old["1"], "4": old["3"] };
+      // Both 90° turns give the same pairs, so when the signal and GND wiring sit on opposite halves the turn is a no-op.
+      if (connectivity(circuit, layout) === before) throw new Error("button rotation is not applicable: rotating the button leaves every connection unchanged in this layout");
       break;
     }
     case "led-jumpers-swapped": {
@@ -237,14 +252,27 @@ export function applyFault(input: ApplyFaultInput): AppliedFault {
       break;
     }
     case "moved-lead": {
-      const candidates = layout.placements.flatMap((placement) => Object.entries(placement.pins).map(([pin, hole]) => ({ placement, pin, hole })));
-      const selected = candidates.find((candidate) => (input.params?.part === undefined || candidate.placement.part === input.params.part) && (input.params?.pin === undefined || candidate.pin === input.params.pin));
-      if (selected === undefined) throw new Error("moved lead fault requires a placed part");
-      const parsed = parseHole(selected.hole);
-      if (parsed?.kind !== "terminal") throw new Error("moved lead fault requires a terminal hole");
       const profile = BREADBOARD_PROFILES[layout.breadboard];
-      const row = parsed.row < profile.rows ? parsed.row + 1 : parsed.row - 1;
-      selected.placement.pins[selected.pin] = `${parsed.column}${row}`;
+      const before = connectivity(circuit, layout);
+      const occupied = occupiedHoles(layout);
+      const candidates = layout.placements
+        .flatMap((placement) => Object.entries(placement.pins).map(([pin, hole]) => ({ placement, pin, hole })))
+        .filter((candidate) => (input.params?.part === undefined || candidate.placement.part === input.params.part) && (input.params?.pin === undefined || candidate.pin === input.params.pin));
+      if (candidates.length === 0) throw new Error("moved lead fault requires a placed part");
+      // Pick the first lead whose one-row move into a free hole actually changes a connection.
+      const moved = candidates.some((candidate) => {
+        const parsed = parseHole(candidate.hole);
+        if (parsed?.kind !== "terminal") return false;
+        for (const row of [parsed.row + 1, parsed.row - 1]) {
+          const target = `${parsed.column}${row}`;
+          if (row < 1 || row > profile.rows || occupied.has(target)) continue;
+          candidate.placement.pins[candidate.pin] = target;
+          if (connectivity(circuit, layout) !== before) return true;
+          candidate.placement.pins[candidate.pin] = candidate.hole;
+        }
+        return false;
+      });
+      if (!moved) throw new Error("moved lead fault is not applicable: no one-row lead move changes a connection in this layout");
       break;
     }
     case "missing-jumper": {
