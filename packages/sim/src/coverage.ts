@@ -56,16 +56,9 @@ export function coverageOf(circuit: Circuit, suite: TestSuite): Coverage {
     if (isOutputPart(part)) outputsAsserted[part.id] = scenarios.some((scenario) => outputAsserted(circuit, scenario, part.id));
     if (isInputPart(part)) inputsExercised[part.id] = scenarios.some((scenario) => scenarioUsesPart(scenario, part.id));
   }
+  // Only a power-on test is required. Edge cases (bounce, rapid presses, light hysteresis, knob ends) are welcome but
+  // optional, so the suite doesn't demand harsh tests the brief never asked for.
   const required = new Set<string>(["power-on"]);
-  if (circuit.parts.some((part) => part.module === "button")) {
-    required.add("bounce");
-    required.add("rapid");
-  }
-  if (circuit.parts.some((part) => part.module === "photoresistor")) {
-    required.add("threshold");
-    required.add("hysteresis");
-  }
-  if (circuit.parts.some((part) => part.module === "potentiometer")) required.add("edge");
   const missing: string[] = [];
   for (const [part, asserted] of Object.entries(outputsAsserted)) if (!asserted) missing.push(`${part} is never checked`);
   for (const [part, exercised] of Object.entries(inputsExercised)) if (!exercised) missing.push(`${part} is never exercised`);

@@ -15,7 +15,21 @@ import {
   type Scenario,
 } from "@vibread/core";
 import { GOLDEN } from "@vibread/fixtures";
+import {
+  BRIGHTNESS_SLACK,
+  LATE_GRACE_MS,
+  LOOKBACK_MS,
+  PIN_WAIT_MS,
+  PWM_SLACK,
+  SERIAL_EXTRA_MS,
+  SERIAL_WAIT_FACTOR,
+  STATE_MIN_SHARE,
+  TONE_HIGH_FACTOR,
+  TONE_LOW_FACTOR,
+} from "@vibread/sim";
 import { circuitInterface, type CircuitInterface } from "@vibread/tools";
+
+const pct = (share: number): string => `${Math.round(share * 100)}%`;
 
 function golden(key: (typeof GOLDEN)[number]["key"]) {
   const design = GOLDEN.find((g) => g.key === key);
@@ -36,7 +50,7 @@ ${JSON.stringify({ ...golden("launch-control").circuit, sketch: { source: "<comp
 
 const TEST_EXAMPLE = `Example — brief: "${golden("launch-control").brief}"
 Design interface: ${JSON.stringify(circuitInterface(golden("launch-control").circuit))}
-A suite that passes coverage: ${JSON.stringify(golden("launch-control").suite)}`;
+A suite in the right format (it also tests bounce and rapid presses, which are optional — skip them unless the brief asks): ${JSON.stringify(golden("launch-control").suite)}`;
 
 function moduleLibrary(): string {
   return MODULE_KEYS.map((key) => {
@@ -269,21 +283,23 @@ Write the test suite now.`;
 const SIM_TIME_RULES = `Steps run one after another, and time only moves forward. These steps ADVANCE virtual time:
 - {"wait": ms} by ms; {"press": …} by holdMs + gapMs; {"bounce": …} by ms;
 - {"expect-part": …}, {"expect-parts": …}, {"expect-pwm": …} and {"expect-tone": …} by their windowMs — an expectation is not
-  a snapshot, it watches the part over the NEXT windowMs and the clock ends at the window's end;
-- {"expect-serial": …} by up to max(2 × withinMs, withinMs + 500 ms) (it stops as soon as the text appears).
+  a snapshot, it watches the part over the NEXT windowMs. Timing is lenient: an expectation also passes when its state
+  shows up to ${LOOKBACK_MS} ms before the window or up to ${LATE_GRACE_MS} ms after it (for a late one the clock runs on until it
+  shows, so later steps start that much later);
+- {"expect-serial": …} by up to max(${SERIAL_WAIT_FACTOR} × withinMs, withinMs + ${SERIAL_EXTRA_MS} ms) (it stops as soon as the text appears).
 Only set-digital, set-light and set-analog take no time; expect-pin takes none when the level already holds, else up to
-100 ms. So consecutive expect-part steps check consecutive
+${PIN_WAIT_MS} ms. So consecutive expect-part steps check consecutive
 windows (t..t+50, then t+50..t+100, …), never the same moment: to check several parts at the same moment, use ONE
 {"expect-parts": {checks: [{part, state}, …], windowMs}} step.
 Write the timeline down before choosing waits: start at the intent's numbers (a 1000 ms start delay, a 500 ms gap after
-a hit), subtract the windows and presses that already elapsed, and keep every window ≥ 150 ms away from any moment the
+a hit), subtract the windows and presses that already elapsed, and keep every window ≥ 300 ms away from any moment the
 output is meant to change.
 Worked example — intent: "At power-on all lights are off; 1 s later the first light turns on."
   WRONG:  expect-part LED1 off 50 (t 0–50) · expect-part LED2 off 50 (t 50–100) · expect-part LED3 off 50 (t 100–150) ·
           wait 900 (t 150–1050) · expect-part LED1 off 50 (t 1050–1100 — LED1 already came on at 1000, so this fails
           although the firmware is right)
-  RIGHT:  expect-parts [LED1 off, LED2 off, LED3 off] 50 (t 0–50) · wait 750 (t 50–800) · expect-parts [LED1 off, LED2 off,
-          LED3 off] 50 (t 800–850) · wait 350 (t 850–1200) · expect-part LED1 on 100 (t 1200–1300)`;
+  RIGHT:  expect-parts [LED1 off, LED2 off, LED3 off] 50 (t 0–50) · wait 550 (t 50–600) · expect-parts [LED1 off, LED2 off,
+          LED3 off] 100 (t 600–700) · wait 600 (t 700–1300) · expect-part LED1 on 200 (t 1300–1500)`;
 
 export const TEST_AUTHOR_SYSTEM = `You are ViBread's independent test author. You write simulation tests (schema "vibread.sim/v1")
 that check a design does what the person asked. You never see the firmware, on purpose: test the intent, not the code.
@@ -294,12 +310,13 @@ Semantics (the ATmega328P simulator implements exactly this):
 - {"bounce": {part, to, edges=6, ms=8}} simulates contact bounce ending in state "to" (true = held down, false = released).
   A bouncy press is bounce to true, then later bounce to false; releasing a button is never a press by itself.
 - {"set-digital": {part, value}}, {"set-light": {part, level 0..1}}, {"set-analog": {part, value 0..1}}.
-- {"expect-pin": {pin, level: high|low}} checks a board pin now (waiting up to 100 ms for the level). {"expect-part": {part, state: on|off, windowMs=50}} watches an LED/active
+- {"expect-pin": {pin, level: high|low}} checks a board pin now (waiting up to ${PIN_WAIT_MS} ms for the level). {"expect-part": {part, state: on|off, windowMs=50}} watches an LED/active
   buzzer over a window. Windows are open-ended: the state may start or end anywhere in the window, so "on" = lit for at
-  least 25% of it and "off" = dark for at least 25% of it. A dimmed (PWM) LED passes both, so check in-between brightness
-  with {"expect-pwm": {pin, min, max, windowMs}} (duty 0..1, ±0.10 allowed). {"expect-tone": {part, minHz, maxHz, windowMs=200}}:
-  the note must sound for at least 25% of the window, anywhere in it, at a pitch within minHz–maxHz (±15% allowed).
-  {"expect-parts": {checks: [{part, state: on|off}, …], windowMs=50}} watches several parts over ONE shared window.
+  least ${pct(STATE_MIN_SHARE)} of it and "off" = dark for at least ${pct(STATE_MIN_SHARE)} of it. A dimmed (PWM) LED passes both, so check in-between brightness
+  with {"expect-pwm": {pin, min, max, windowMs}} (duty 0..1, ±${PWM_SLACK} allowed). {"expect-tone": {part, minHz, maxHz, windowMs=200}}:
+  the note must sound for at least ${pct(STATE_MIN_SHARE)} of the window, anywhere in it, at a pitch within minHz–maxHz (−${pct(1 - TONE_LOW_FACTOR)} / +${pct(TONE_HIGH_FACTOR - 1)} allowed).
+  {"expect-parts": {checks: [{part, state: on|off, minBrightness?, maxBrightness?}, …], windowMs=50}} watches several parts over ONE shared window
+  (brightness bounds get ±${BRIGHTNESS_SLACK} slack).
   {"expect-serial": {contains, withinMs}} passes when anything printed since reset contains the text (so text printed
   earlier already passes it) — avoid unless the intent names serial output.
 
@@ -307,27 +324,29 @@ Time:
 ${SIM_TIME_RULES}
 
 Rules:
+- Write a small, forgiving suite: about 3–6 scenarios that check the main behaviours a person would notice, one clear
+  expectation per behaviour. A correct design must pass it easily; don't try to catch every edge case.
 - Scenario ids T1, T2, …; each has a plain-language "title" a beginner reads ("In the dark, pressing the button 3 times lights 3 LEDs from the right"),
   the intent clause ids it covers, and categories from: ${SCENARIO_CATEGORIES.join(", ")}.
-- Coverage (checked by code; missing any one makes the simulation console NO-GO):
-  - every output part (LED, buzzer) asserted with expect-part / expect-parts / expect-pin / expect-pwm / expect-tone in some scenario;
-  - every input part (button, photoresistor, potentiometer) exercised with press/bounce/set-digital/set-light/set-analog;
-  - every intent clause id listed in at least one scenario's "clauses";
-  - categories: always "power-on" (state right after reset, before any input); with a button also "bounce" (a bounce step
-    must count as ONE press) and "rapid" (several quick presses); with a photoresistor also "threshold" (clearly dark vs
-    clearly bright) and "hysteresis" (a small change near the switch point must not flip the output back); with a
-    potentiometer also "edge" (both ends of the knob travel).
-- Give the sketch time: wait ≥ 60 ms after a change before expecting its effect. A press acts on its press edge (after
-  debounce), not on release.
+- Coverage (checked by code): every intent clause id must be listed in at least one scenario's "clauses" (a missing one
+  makes the simulation console NO-GO). Also check every output part (LED, buzzer) somewhere, exercise every input part
+  (button, photoresistor, potentiometer), and include one "power-on" scenario (state right after reset, before any input);
+  missing any of these only warns.
+- Edge cases are optional: add "bounce", "rapid" (several quick presses), "hysteresis" or "edge" (both knob ends)
+  scenarios only when the brief asks for that behaviour.
+- Be generous with time: wait ≥ 300 ms after a press or any change before expecting its effect; use windows of 200–500 ms;
+  keep windows ≥ 300 ms away from moments the output changes. Never assert an exact duration unless the brief states
+  it, and then check well inside it (for "on for 2 s", check it is on between 0.5 s and 1.5 s). A press acts on its press
+  edge (after debounce), not on release.
 - Test only what the intent says. Where the intent leaves something open (random order, exact timing not stated), don't
   assert it: check what must hold in every case instead.
 - Every expectation must be able to fail if the behavior were wrong (never e.g. expect-pwm min 0 max 1).
 - Light: set-light levels give these A0 readings (photoresistor to 5V, 10 kΩ to GND; wired the other way, 1023 minus
-  them): ${lightTable()}. "threshold" tests use clearly dark (≤ 0.1) and clearly bright (≥ 0.8). "hysteresis" tests need
-  the switch readings from the intent or assumptions (if none are stated, ViBread's default: dark below 300, bright again
-  above 340): pick a level whose reading is between them, reach it once from clearly dark (the dark behavior must hold)
-  and once from clearly bright (the bright behavior must hold).
-- Keep each scenario under ~5 s of virtual time. author must be "test-author".
+  them): ${lightTable()}. Test light with clearly dark (≤ 0.1) and clearly bright (≥ 0.8) levels only. If the brief asks for
+  hysteresis, use the switch readings from the intent or assumptions (if none are stated, ViBread's default: dark below
+  300, bright again above 340): pick a level whose reading is between them, reach it once from clearly dark (the dark
+  behavior must hold) and once from clearly bright (the bright behavior must hold).
+- Keep each scenario under ~8 s of virtual time. author must be "test-author".
 
 ${TEST_EXAMPLE}`;
 
@@ -340,8 +359,9 @@ never see the firmware. For each failing scenario decide, from the brief, the in
   If you judge a test wrong but can't write a correction, say why in "reason": ViBread then sets that test aside and it
   stops blocking the design (it only warns).
 - "design-wrong": the scenario matches the intent and the time rules, and the failure shows the design doesn't do what the
-  intent says (wrong output, wrong timing, missing behavior). Keep it.
-- "unsure": you can't tell from the timeline. Explain in one sentence what makes it unclear.
+  intent says (wrong output, wrong timing, missing behavior). Keep it. Only this verdict keeps a test blocking the design.
+- "unsure": you can't tell from the timeline. Explain in one sentence what makes it unclear. ViBread sets an unsure test
+  aside too (it only warns), so pick "design-wrong" only when the intent clearly requires what the test checks.
 Never weaken a test just to make it pass: a corrected scenario must still fail if the intended behavior were missing.
 
 ${SIM_TIME_RULES}`;

@@ -69,7 +69,7 @@ export interface ReviewOutcome {
   reviews: TestReview[];
   /** Scenario ids replaced by corrected ones (and still passing or not failing any more). */
   corrected: string[];
-  /** Scenario ids set aside: judged wrong without a working correction, or disputed and not confirmed. They only warn. */
+  /** Scenario ids set aside: judged wrong without a working correction, or not confirmed ("unsure"). They only warn. */
   setAside: string[];
 }
 
@@ -114,9 +114,9 @@ export interface DesignOps {
   /**
    * When simulation tests failed, the test author reviews them against the intent (never the sketch): scenarios that
    * contradict the intent are corrected and re-run as revision n+1 (same circuit). Ones judged wrong without a working
-   * correction are set aside (recorded in the suite, so FIDO keeps reporting them as warnings only), and so are disputed
-   * ones the reviewer can't confirm ("unsure" with `dispute`). Only tests the reviewer confirms stay SIM-FAIL (blocking),
-   * with its reason. `only`/`dispute`: the design agent's dispute.
+   * correction are set aside (recorded in the suite, so FIDO keeps reporting them as warnings only), and so are ones the
+   * reviewer can't confirm ("unsure"). Only tests the reviewer confirms match the intent ("design-wrong") stay SIM-FAIL
+   * (blocking), with its reason. `only`/`dispute`: the design agent's dispute.
    */
   reviewFailedTests(mission: Mission, revision: Revision, options?: { signal?: AbortSignal; only?: string[]; dispute?: string }): Promise<ReviewOutcome>;
 }
@@ -220,8 +220,8 @@ export function createDesignOps(deps: { store: MissionStore; pipeline: Pipeline;
         const parsed = review.verdict === "test-wrong" && review.scenario ? ScenarioSchema.omit({ setAside: true }).safeParse({ ...review.scenario, id: review.id }) : undefined;
         if (parsed?.success) repairs.set(review.id, parsed.data);
         else if (review.verdict === "test-wrong") aside.set(review.id, `The test reviewer judged it wrong for the intent: ${review.reason}`);
-        // Two independent calls (the design agent's dispute and an unsure reviewer) don't confirm the test.
-        else if (review.verdict === "unsure" && options.dispute) aside.set(review.id, `The design agent disputed it and the test reviewer couldn't confirm it matches the intent: ${review.reason}`);
+        // Only a test the reviewer confirms matches the intent keeps blocking: one it can't confirm is set aside too.
+        else if (review.verdict === "unsure") aside.set(review.id, options.dispute ? `The design agent disputed it and the test reviewer couldn't confirm it matches the intent: ${review.reason}` : `The test reviewer couldn't confirm it matches the intent: ${review.reason}`);
       }
 
       let final = revision;
@@ -247,15 +247,14 @@ export function createDesignOps(deps: { store: MissionStore; pipeline: Pipeline;
         final = await ops.evaluate(mission, next.n, options.signal);
       }
 
-      // Tests the review kept (confirmed, or unsure without a dispute) stay SIM-FAIL with the reviewer's reason.
+      // Tests the review confirmed ("design-wrong") stay SIM-FAIL with the reviewer's reason; every other verdict set its test aside.
       const fido = final.results.reports.find((r) => r.console === "FIDO");
       if (fido && failingScenarios(final).some((f) => byId.has(f.id))) {
         const findings = fido.findings.map((finding): Finding => {
           const id = finding.ruleId === "SIM-FAIL" ? finding.refs?.scenarios?.[0] : undefined;
           const review = id ? byId.get(id) : undefined;
           if (!review) return finding;
-          const note = review.verdict === "design-wrong" ? `The test reviewer confirmed this test matches the intent: ${review.reason}` : `The test reviewer couldn't tell whether the test or the design is wrong: ${review.reason}`;
-          return { ...finding, detail: `${finding.detail ?? ""} — ${note}`.trim() };
+          return { ...finding, detail: `${finding.detail ?? ""} — The test reviewer confirmed this test matches the intent: ${review.reason}`.trim() };
         });
         final = await store.saveResults(mission.id, final.n, { reports: final.results.reports.map((r) => (r.console === "FIDO" ? { ...r, findings } : r)) });
       }

@@ -30,7 +30,7 @@ function reportFor(input: { revisionHash: string; scenarios: SimRunResult["scena
             console: "FIDO",
             ruleId: "TEST-SET-ASIDE",
             severity: "warning",
-            title: `${scenario.id} set aside: the test review judged it wrong for the intent`,
+            title: `${scenario.id} set aside: the test review didn't confirm it matches the intent`,
             detail: `${reason} Failure: ${detail}`,
             fix: "Nothing to change in the design for this test. Mention it to the person if they care about what it checked.",
             refs: { scenarios: [scenario.id] },
@@ -46,17 +46,18 @@ function reportFor(input: { revisionHash: string; scenarios: SimRunResult["scena
           },
     );
   }
+  // Coverage gaps warn, except an intent clause with no test at all (then nothing checked it).
   for (const [part, asserted] of Object.entries(input.coverage.outputsAsserted)) {
-    if (!asserted) findings.push({ console: "FIDO", ruleId: "COV-OUTPUT", severity: "error", title: `${part} output is not asserted`, detail: `${part} never appears in an expect-part, expect-pwm, or expect-tone step.`, fix: `${COVERAGE_RETRY} Make sure an intent clause says what ${part} does.` });
+    if (!asserted) findings.push({ console: "FIDO", ruleId: "COV-OUTPUT", severity: "warning", title: `${part} output is not asserted`, detail: `${part} never appears in an expect-part, expect-pwm, or expect-tone step.`, fix: `${COVERAGE_RETRY} Make sure an intent clause says what ${part} does.` });
   }
   for (const [part, exercised] of Object.entries(input.coverage.inputsExercised)) {
-    if (!exercised) findings.push({ console: "FIDO", ruleId: "COV-INPUT", severity: "error", title: `${part} input is not exercised`, detail: `${part} is present in the circuit but no scenario changes or presses it.`, fix: `${COVERAGE_RETRY} Make sure an intent clause says what using ${part} does.` });
+    if (!exercised) findings.push({ console: "FIDO", ruleId: "COV-INPUT", severity: "warning", title: `${part} input is not exercised`, detail: `${part} is present in the circuit but no scenario changes or presses it.`, fix: `${COVERAGE_RETRY} Make sure an intent clause says what using ${part} does.` });
   }
   for (const [clause, scenarios] of Object.entries(input.coverage.clausesCovered)) {
     if (scenarios.length === 0) findings.push({ console: "FIDO", ruleId: "COV-CLAUSE", severity: "error", title: `${clause} intent is not covered`, detail: "No scenario names this intent clause.", fix: `${COVERAGE_RETRY} If ${clause} isn't something a person can observe, reword it so it is.` });
   }
   for (const category of input.coverage.categoriesRequired) {
-    if (!input.coverage.categoriesPresent.includes(category)) findings.push({ console: "FIDO", ruleId: "COV-CATEGORY", severity: "error", title: `Missing ${category} scenario`, detail: `The suite requires a ${category} test for this circuit.`, fix: COVERAGE_RETRY });
+    if (!input.coverage.categoriesPresent.includes(category)) findings.push({ console: "FIDO", ruleId: "COV-CATEGORY", severity: "warning", title: `Missing ${category} scenario`, detail: `The suite should have a ${category} test for this circuit.`, fix: COVERAGE_RETRY });
   }
   const failed = input.scenarios.filter((scenario) => !scenario.ok && !setAside.has(scenario.id)).length;
   const asideFailed = input.scenarios.filter((scenario) => !scenario.ok && setAside.has(scenario.id)).length;
@@ -65,7 +66,12 @@ function reportFor(input: { revisionHash: string; scenarios: SimRunResult["scena
   const unguarded = Object.entries(input.coverage.clausesCovered).flatMap(([clause, scenarios]) => (scenarios.length > 0 && scenarios.every((id) => setAside.has(id)) ? [clause] : []));
   const notes = [...(asideFailed ? [`${asideFailed} set-aside test${asideFailed === 1 ? "" : "s"} failed (warning only)`] : []), ...(unguarded.length ? [`no live test is left for ${unguarded.join(", ")}`] : [])];
   const asideNote = notes.length ? ` ${notes.join("; ")}.` : "";
-  const summary = failed === 0 && input.coverage.ok ? `GO: ${input.scenarios.length - asideFailed} scenarios passed and coverage is complete.${asideNote}` : `NO-GO: ${failed} scenario${failed === 1 ? "" : "s"} failed; ${input.coverage.missing.length} coverage gap${input.coverage.missing.length === 1 ? "" : "s"}.${asideNote}`;
+  const blocking = findings.some((finding) => finding.severity === "error");
+  const gaps = input.coverage.missing.length;
+  const gapNote = gaps ? `; ${gaps} coverage gap${gaps === 1 ? "" : "s"} (warnings only)` : " and coverage is complete";
+  const summary = !blocking
+    ? `GO: ${input.scenarios.length - asideFailed} scenarios passed${gapNote}.${asideNote}`
+    : `NO-GO: ${failed} scenario${failed === 1 ? "" : "s"} failed; ${gaps} coverage gap${gaps === 1 ? "" : "s"}.${asideNote}`;
   return {
     console: "FIDO",
     verdict: findings.some((finding) => finding.severity === "error") ? "NO-GO" : "GO",

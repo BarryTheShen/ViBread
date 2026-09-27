@@ -133,7 +133,7 @@ describe("avr8js golden simulation", () => {
     expect(failed.result.ok).toBe(false);
     expect(failureMessage).toContain("but was lit 0%");
   }, 30_000);
-  it("expect-part windows are open-ended: an LED that turns on 30% into an 'on' window passes; one that never lights fails", async () => {
+  it("expect-part windows are open-ended and allow timing grace: a late LED passes; one that never lights, or comes on far too late, fails", async () => {
     const design = GOLDEN.find((entry) => entry.key === "knob-night-light");
     if (!design) throw new Error("knob fixture is required");
     // LED1 (D9) turns on at t = 1030 ms and stays on; the "never" sketch keeps it dark.
@@ -146,18 +146,21 @@ describe("avr8js golden simulation", () => {
       clauses: ["C1"],
       categories: ["normal"],
       setup: {},
-      steps: [{ wait: 1000 }, { "expect-part": { part: "LED1", state: "on", windowMs: 100 } }, { "expect-parts": { checks: [{ part: "LED1", state: "off" }], windowMs: 100 } }],
+      steps: [{ wait: 1000 }, { "expect-part": { part: "LED1", state: "on", windowMs: 100 } }, { wait: 500 }, { "expect-parts": { checks: [{ part: "LED1", state: "off" }], windowMs: 100 } }],
     };
-    // Window 1000–1100 ms: lit 70% → "on"; window 1100–1200 ms: lit 100% → not "off".
+    // Window 1000–1100 ms: lit 70% → "on". Window 1600–1700 ms: lit the whole time, also 150 ms before and 300 ms after → not "off".
     const passed = await runScenario({ circuit: design.circuit, hex: late.hex, scenario });
-    expect(passed.result.steps.map((step) => step.ok)).toEqual([true, true, false]);
+    expect(passed.result.steps.map((step) => step.ok)).toEqual([true, true, true, false]);
     const onWindow = { ...scenario, steps: scenario.steps.slice(0, 2) };
     const dark = await runScenario({ circuit: design.circuit, hex: never.hex, scenario: onWindow });
     expect(dark.result.ok).toBe(false);
     expect(dark.result.steps[1]?.message).toContain("but was lit 0%");
-    // A late start that leaves the LED lit for only 10% of the window is still not "on".
-    const tooLate = await runScenario({ circuit: design.circuit, hex: late.hex, scenario: { ...onWindow, steps: [{ wait: 940 }, { "expect-part": { part: "LED1", state: "on", windowMs: 100 } }] } });
-    expect(tooLate.result.ok).toBe(false);
+    // Lenient timing: the LED lit only the last 10% of the 940–1040 ms window, but it keeps coming on within the 300 ms grace.
+    const slightlyLate = await runScenario({ circuit: design.circuit, hex: late.hex, scenario: { ...onWindow, steps: [{ wait: 940 }, { "expect-part": { part: "LED1", state: "on", windowMs: 100 } }] } });
+    expect(slightlyLate.result.ok).toBe(true);
+    // More than 300 ms after the window is still too late.
+    const farTooLate = await runScenario({ circuit: design.circuit, hex: late.hex, scenario: { ...onWindow, steps: [{ wait: 600 }, { "expect-part": { part: "LED1", state: "on", windowMs: 100 } }] } });
+    expect(farTooLate.result.ok).toBe(false);
   }, 120_000);
   it("expect-pin as the first step waits for setup() to drive the pin instead of failing at t = 0", async () => {
     const design = GOLDEN.find((entry) => entry.key === "knob-night-light");
@@ -246,6 +249,9 @@ void loop() { tone(8, 440); delay(100); noTone(8); delay(100); }
     const late = `void setup() { pinMode(8, OUTPUT); }
 void loop() { if (millis() >= 130) tone(8, 262); }
 `;
+    const muchLater = `void setup() { pinMode(8, OUTPUT); }
+void loop() { if (millis() >= 800) tone(8, 262); }
+`;
     const circuit = {
       ...moon.circuit,
       title: "Tone window check",
@@ -275,14 +281,16 @@ void loop() { if (millis() >= 130) tone(8, 262); }
     expect((await run(beeper, tone(430, 450))).ok).toBe(true);
     // The note starts 130 ms into a 200 ms window (35 % of it): still 262 Hz.
     expect((await run(late, tone(255, 270))).ok).toBe(true);
-    // Wrong pitch still fails, with the pitch it really played.
+    // Wrong pitch still fails, with the pitch it really played (the range allows −25 % / +25 %).
     const wrong = await run(late, tone(400, 420));
     expect(wrong.ok).toBe(false);
-    expect(wrong.steps[0]!.message).toMatch(/BZ1 tone 26\d\.\d Hz is outside the range; expected 340\.0–483\.0 Hz/);
-    // A note that sounds for under 25 % of the window (the last 20 ms of 150) isn't "playing" in it.
-    const tail = await run(late, tone(255, 270, 150));
-    expect(tail.ok).toBe(false);
-    expect(tail.steps[0]!.message).toMatch(/^t=0–150 ms BZ1 sounded for 1\d% of the window \(at least 25% needed, anywhere in it\) at 262\.\d Hz; expected/);
+    expect(wrong.steps[0]!.message).toMatch(/BZ1 tone 26\d\.\d Hz is outside the range; expected 300\.0–525\.0 Hz/);
+    // A note that starts 130 ms into a 150 ms window keeps playing within the timing grace: it passes.
+    expect((await run(late, tone(255, 270, 150))).ok).toBe(true);
+    // One that only starts 650 ms after the window is past the grace: silent in it.
+    const silent = await run(muchLater, tone(255, 270, 150));
+    expect(silent.ok).toBe(false);
+    expect(silent.steps[0]!.message).toMatch(/^t=0–150 ms BZ1 was silent; expected/);
   }, 120_000);
   it("lights an LED whose cathode is on an INPUT_PULLUP key pin when pressed", async () => {
     const circuit = structuredClone(moon.circuit);
@@ -355,13 +363,15 @@ void loop(){bool first=millis()>=1000; digitalWrite(8,first); digitalWrite(9,LOW
     const corrected = await runScenario({ circuit, hex: compiled.hex, scenario: sharedWindow });
     expect(corrected.result.ok, corrected.result.steps.map((step) => step.message).join("; ")).toBe(true);
 
+    // Three 200 ms checks treated as one moment: the author thinks the last check is at 900 ms; it is really at 1500 ms,
+    // far past the timing grace around LED1 coming on at 1000 ms.
     const drifting: Scenario = {
       ...sharedWindow,
       id: "T91",
       steps: [
-        { "expect-part": { part: "LED1", state: "off", windowMs: 50 } },
-        { "expect-part": { part: "LED2", state: "off", windowMs: 50 } },
-        { "expect-part": { part: "LED3", state: "off", windowMs: 50 } },
+        { "expect-part": { part: "LED1", state: "off", windowMs: 200 } },
+        { "expect-part": { part: "LED2", state: "off", windowMs: 200 } },
+        { "expect-part": { part: "LED3", state: "off", windowMs: 200 } },
         { wait: 900 },
         { "expect-part": { part: "LED1", state: "off", windowMs: 50 } },
       ],
@@ -369,11 +379,12 @@ void loop(){bool first=millis()>=1000; digitalWrite(8,first); digitalWrite(9,LOW
     const drifted = await runScenario({ circuit, hex: compiled.hex, scenario: drifting });
     const failure = drifted.result.steps.find((step) => !step.ok);
     expect(drifted.result.ok).toBe(false);
-    expect(failure?.message).toContain("t=1050–1100 ms");
+    expect(failure?.message).toContain("t=1500–1550 ms");
     expect(failure?.message).toContain("LED1 turned on at t=1000 ms");
-    expect(failure?.startMs).toBe(1050);
+    expect(failure?.startMs).toBe(1500);
     expect(failure?.index).toBe(4);
-    expect(failure?.endMs).toBe(1100);
+    // The step waited out the whole 300 ms grace before failing.
+    expect(failure?.endMs).toBe(1850);
   }, 120_000);
 
   it("supports a SimSession serial round trip without RX overrun", () => {
@@ -405,10 +416,11 @@ describe("simulation coverage", () => {
     expect(coverage.missing).toContain("LED1 is never checked");
   });
 
-  it("requires a bounce category whenever a button exists", () => {
-    const suite = { ...moon.suite, scenarios: moon.suite.scenarios.filter((scenario) => scenario.id !== "T6") };
-    const coverage = coverageOf(moon.circuit, suite);
-    expect(coverage.ok).toBe(false);
-    expect(coverage.missing).toContain("no bounce test");
+  it("requires only a power-on test: bounce and rapid-press tests are optional even with a button", () => {
+    const withoutBounce = coverageOf(moon.circuit, { ...moon.suite, scenarios: moon.suite.scenarios.filter((scenario) => scenario.id !== "T6") });
+    expect(withoutBounce.categoriesRequired).toEqual(["power-on"]);
+    expect(withoutBounce.missing).not.toContain("no bounce test");
+    const withoutPowerOn = coverageOf(moon.circuit, { ...moon.suite, scenarios: moon.suite.scenarios.map((scenario) => ({ ...scenario, categories: scenario.categories.filter((category) => category !== "power-on") })) });
+    expect(withoutPowerOn.missing).toContain("no power-on test");
   });
 });

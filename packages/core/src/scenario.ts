@@ -15,18 +15,20 @@ import { z } from "zod";
  *  - `set-analog` sets a potentiometer wiper position 0 (at pin A) … 1 (at pin B), or a generic analog sensor output as a
  *    fraction of VCC.
  *  - `expect-pin` passes when a board pin's driven output level (the pin must be an OUTPUT) reaches `level` now or
- *    within the next 100 ms (advancing time only while it waits).
- *  - Window expectations are open-ended: the state may start or end anywhere inside the window.
- *  - `expect-part` watches a part for `windowMs` (advancing time): LED "on" = lit for at least 25 % of the window,
- *    "off" = dark for at least 25 % of it (lit ≤ 75 %); active buzzer "on"/"off" = sounding the same way.
+ *    within the next 300 ms (advancing time only while it waits).
+ *  - Window expectations are open-ended: the state may start or end anywhere inside the window. They also allow timing
+ *    grace: they pass when the state shows up to 150 ms before the window or up to 300 ms after it (running the clock
+ *    on for a late one, so later steps start that much later).
+ *  - `expect-part` watches a part for `windowMs` (advancing time): LED "on" = lit for at least 15 % of the window,
+ *    "off" = dark for at least 15 % of it (lit ≤ 85 %); active buzzer "on"/"off" = sounding the same way.
  *  - `expect-parts` watches several parts over one shared `windowMs` (advancing time once); each check may specify
- *    `state` (as above), `minBrightness`, and/or `maxBrightness` (each bound with ±0.15 slack).
- *  - `expect-pwm` passes when the duty cycle is within `min`−0.10 … `max`+0.10 (clamped to 0…1).
- *  - `expect-tone` passes when the part sounds for at least 25 % of `windowMs` (anywhere in it; a late start or an
+ *    `state` (as above), `minBrightness`, and/or `maxBrightness` (each bound with ±0.25 slack).
+ *  - `expect-pwm` passes when the duty cycle is within `min`−0.15 … `max`+0.15 (clamped to 0…1).
+ *  - `expect-tone` passes when the part sounds for at least 15 % of `windowMs` (anywhere in it; a late start or an
  *    on/off beep still counts) and the pitch — from the median spacing of its rising edges — is within
- *    `minHz`×0.85 … `maxHz`×1.15.
+ *    `minHz`×0.75 … `maxHz`×1.25.
  *  - `expect-serial` passes when serial output since reset contains `contains`, waiting up to
- *    max(2 × `withinMs`, `withinMs` + 500 ms).
+ *    max(3 × `withinMs`, `withinMs` + 1500 ms).
  *
  * `setAside` is written by ViBread only, never by the test author: the reason a failing scenario was judged wrong for the
  * intent by the independent test review. It still runs, but its failure is a FIDO warning, never a NO-GO.

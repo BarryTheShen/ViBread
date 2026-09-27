@@ -17,7 +17,7 @@ Built for the HackWashU Fall Build Challenge (Sep 25–27, 2026; theme "Fly Me t
 |---|---|---|
 | **EECOM** electrical | Typed ERC + Uno rule table (current per pin/total, LED resistor, floating button, PWM/I²C/SPI/serial pins, shorts, KiCad-style pin-type conflicts) at worst-case corners; ngspice cross-check | json-rules-engine, ngspice |
 | **GUIDO** firmware | The sketch compiles for the chosen board; flash/RAM budget; pin modes observed in simulation match the design | arduino-cli, avr8js |
-| **FIDO** simulation | An independent test author's scenarios pass against the exact binary, with coverage rules (every output asserted, every input exercised, bounce/threshold/hysteresis cases) | avr8js |
+| **FIDO** simulation | An independent test author's scenarios pass against the exact binary, with lenient timing (open-ended windows plus 150 ms before / 300 ms after grace). Every intent clause must be tested; other coverage gaps (an output never asserted, an input never exercised, no power-on test) only warn, and failures the test review doesn't confirm are set aside | avr8js |
 | **FAO** assembly | A deterministic breadboard layout fits, and LVS proves the layout's nets equal the design's nets | our allocator + LVS |
 | **RETRO** review | A separate agent compares brief, design, sketch and results and votes GO/NO-GO | Claude |
 

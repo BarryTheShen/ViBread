@@ -190,7 +190,10 @@ const SHARED: Scenario[] = [
   },
 ];
 
-/** The issue's mistake: consecutive expect-part steps treated as one moment, so the waits after them are too long. */
+/**
+ * The issue's mistake: consecutive expect-part steps treated as one moment, so the waits after them are too long. The
+ * windows here are long enough that the drift is far past the checks' timing grace, so these still fail.
+ */
 const NAIVE: Scenario[] = [
   {
     id: "T1",
@@ -198,8 +201,8 @@ const NAIVE: Scenario[] = [
     clauses: ["C1"],
     categories: ["power-on"],
     setup: {},
-    // Author's belief: all three checks at t=0, wait 900 → t=900 (red still off). Really t=1050, after red came on.
-    steps: [off("LED1"), off("LED2"), off("LED3"), { wait: 900 }, off("LED1"), { wait: 100 }, on("LED1")],
+    // Author's belief: all three checks at t=0, wait 900 → t=900 (red still off). Really t=1500, long after red came on.
+    steps: [off("LED1", 200), off("LED2", 200), off("LED3", 200), { wait: 900 }, off("LED1"), { wait: 100 }, on("LED1")],
   },
   {
     id: "T2",
@@ -207,8 +210,8 @@ const NAIVE: Scenario[] = [
     clauses: ["C2"],
     categories: ["normal"],
     setup: {},
-    // Hit at t=1100 → mole 3 at t=1600. The author checks "still in the gap" at t=1500; really t=1650.
-    steps: [{ wait: 1100 }, { press: { part: "BTN1", holdMs: 100, gapMs: 0 } }, off("LED1"), off("LED2"), off("LED3"), { wait: 300 }, off("LED3"), { wait: 100 }, on("LED3")],
+    // Hit at t=1100 → mole 3 at t=1600. The author checks "still in the gap" at t=1500; really t=2100.
+    steps: [{ wait: 1100 }, { press: { part: "BTN1", holdMs: 100, gapMs: 0 } }, off("LED1", 200), off("LED2", 200), off("LED3", 200), { wait: 300 }, off("LED3"), { wait: 100 }, on("LED3")],
   },
 ];
 

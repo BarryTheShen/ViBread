@@ -79,12 +79,12 @@ describe("independent tests that contradict the intent (issue #16, whack-a-mole)
     expect(result.verdicts).toMatchObject({ EECOM: "GO", GUIDO: "GO", FIDO: "GO", FAO: "GO" });
     expect(result.findings.filter((f) => f.ruleId === "SIM-FAIL")).toEqual([]);
     const aside = result.findings.filter((f) => f.ruleId === "TEST-SET-ASIDE");
-    expect(aside.map((f) => [f.severity, f.title])).toEqual([
-      ["warning", "T1 set aside: the test review judged it wrong for the intent"],
-      ["warning", "T2 set aside: the test review judged it wrong for the intent"],
+    expect(aside.map((f) => [f.severity, f.title.split(" ")[0]])).toEqual([
+      ["warning", "T1"],
+      ["warning", "T2"],
     ]);
     // The failure still shows, with the reviewer's reason: the test really fails, it just doesn't block.
-    expect(aside[0]!.detail).toContain("t=1050–1100 ms");
+    expect(aside[0]!.detail).toContain("t=1500–1550 ms");
     expect(aside[0]!.detail).toContain(STACKED);
     expect(result.testReview?.map((r) => [r.scenario, r.setAside])).toEqual([["T1", true], ["T2", true]]);
     expect(result.summary).toContain("ViBread set aside T1, T2");
@@ -100,28 +100,31 @@ describe("independent tests that contradict the intent (issue #16, whack-a-mole)
     expect(fido.findings.map((f) => [f.ruleId, f.severity])).toEqual([["TEST-SET-ASIDE", "warning"], ["TEST-SET-ASIDE", "warning"]]);
   }, 180_000);
 
-  it("tests the review confirms stay design findings, with the reviewer's reason and a pointer to dispute_test", async () => {
+  it("tests the review confirms stay design findings with the reviewer's reason; ones it is unsure about are set aside", async () => {
     const { outputs, revisions } = await run([propose, { text: "Done." }], () => [
-      { id: "T1", verdict: "design-wrong", reason: "C1 says red lights at 1 s; checked at 1.05 s it was on." },
+      { id: "T1", verdict: "design-wrong", reason: "C1 says red lights at 1 s; checked at 1.5 s it was on." },
       { id: "T2", verdict: "unsure", reason: "The intent doesn't say when the gap starts." },
     ]);
     const result = outputs.find((o) => o.tool === "propose_design")!.output;
 
-    expect(revisions).toHaveLength(1);
+    // r2 records T2 as set aside; the sketch never changed.
+    expect(revisions.map((r) => [r.n, r.circuit.sketch.source === WHACK_A_MOLE.sketch.source])).toEqual([[1, true], [2, true]]);
     expect(result.findings.filter((f) => f.ruleId === "SIM-FAIL").map((f) => f.detail)).toEqual([
       expect.stringContaining("The test reviewer confirmed this test matches the intent: C1 says red"),
-      expect.stringContaining("The test reviewer couldn't tell whether the test or the design is wrong"),
     ]);
-    expect(result.summary).toContain("call dispute_test — never remove or change user-visible behavior just to pass a test");
+    expect(result.findings.filter((f) => f.ruleId === "TEST-SET-ASIDE").map((f) => [f.severity, f.detail])).toEqual([
+      ["warning", expect.stringContaining("The test reviewer couldn't confirm it matches the intent: The intent doesn't say when the gap starts.")],
+    ]);
     // T1 was just confirmed: the agent is told to fix the design, not to dispute it again.
     expect(result.summary).toContain("The test review confirmed T1 matches the intent");
+    expect(result.summary).not.toContain("dispute_test");
   }, 180_000);
 
   it("the design agent can dispute a failing test instead of changing the design; the corrected tests pass", async () => {
     const dispute: ScriptStep = { toolCalls: [{ name: "dispute_test", input: { revision: 1, scenarios: ["T1", "T2"], reason: "C1 fixes red at 1 s; the test checks at 1.05 s because its three off-windows moved the clock." } }] };
     const { outputs, revisions, reviewCalls, fast } = await run([propose, dispute, { text: "The tests were wrong; the game passes." }], (call) =>
       call === 0
-        ? [{ id: "T1", verdict: "unsure", reason: "Can't tell." }, { id: "T2", verdict: "unsure", reason: "Can't tell." }]
+        ? [{ id: "T1", verdict: "design-wrong", reason: "C1 says red lights at 1 s." }, { id: "T2", verdict: "design-wrong", reason: "C2 says mole 3 lights 0.5 s after a hit." }]
         : [
             { id: "T1", verdict: "test-wrong", reason: STACKED, scenario: corrected("T1") },
             { id: "T2", verdict: "test-wrong", reason: STACKED, scenario: corrected("T2") },
@@ -139,10 +142,10 @@ describe("independent tests that contradict the intent (issue #16, whack-a-mole)
     const dispute: ScriptStep = { toolCalls: [{ name: "dispute_test", input: { revision: 1, scenarios: ["T1", "T2"], reason: "C1 fixes red at 1 s; the test checks at 1.05 s because its three off-windows moved the clock." } }] };
     const { outputs, revisions } = await run([propose, dispute, { text: "Done." }], (call) =>
       call === 0
-        ? [{ id: "T1", verdict: "unsure", reason: "Can't tell." }, { id: "T2", verdict: "unsure", reason: "Can't tell." }]
-        : [{ id: "T1", verdict: "unsure", reason: "The intent doesn't say when the gap starts." }, { id: "T2", verdict: "design-wrong", reason: "C1 says red lights at 1 s; checked at 1.05 s it was on." }],
+        ? [{ id: "T1", verdict: "design-wrong", reason: "C1 says red lights at 1 s." }, { id: "T2", verdict: "design-wrong", reason: "C2 says mole 3 lights 0.5 s after a hit." }]
+        : [{ id: "T1", verdict: "unsure", reason: "The intent doesn't say when the gap starts." }, { id: "T2", verdict: "design-wrong", reason: "C1 says red lights at 1 s; checked at 1.5 s it was on." }],
     );
-    // Without a dispute, "unsure" alone doesn't set a test aside.
+    // The first review confirmed both, so both block until the dispute.
     const proposed = outputs.find((o) => o.tool === "propose_design")!.output;
     expect(proposed.findings.filter((f) => f.ruleId === "SIM-FAIL").map((f) => f.title.split(":")[0])).toEqual(["T1", "T2"]);
     const disputed = outputs.find((o) => o.tool === "dispute_test")!.output;
