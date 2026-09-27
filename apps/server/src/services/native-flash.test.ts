@@ -75,6 +75,8 @@ describe("classifyUpload", () => {
     ["silent port (avrdude 8 also says unable to open port)", SILENT_PORT_V8, "not_in_sync"],
     ["linux permission", "OS error: cannot open port /dev/ttyUSB0: Permission denied\n", "permission_denied"],
     ["wrong chip", "Error: expected signature for ATmega328P is 1E 95 0F\n", "wrong_chip"],
+    ["avrdude 8 read-back mismatch", "Writing | ################################################## | 100% 0.40 s\nReading | ################################################## | 100% 0.30 s\nError: flash verification mismatch\n        device 0x0c != input 0x0d at addr 0x0000 (error)\n", "verify_failed"],
+    ["avrdude 6 read-back mismatch", "avrdude: verification error, first mismatch at byte 0x0000\n         0x0c != 0x0d\navrdude: verification error; content mismatch\n", "verify_failed"],
     ["anything else", "Error: something new\n", "upload_failed"],
   ])("%s", (_name, output, code) => {
     const verdict = classifyUpload({ code: 1, output, timedOut: false });
@@ -114,6 +116,8 @@ describe("createNativeFlasher", () => {
     expect(at("--fqbn")).toBe("arduino:avr:nano:cpu=atmega328old");
     expect(at("--port")).toBe("COM3");
     expect(at("--input-file")).toMatch(/firmware\.hex$/);
+    // avrdude reads the flash back (the platform's -V is dropped), like the Web Serial flasher's verify.
+    expect(upload.args).toContain("--verify");
     expect(upload.args.at(-1)).toBe("--verbose");
     expect(lines).toContain("2462 bytes of flash written");
   });

@@ -55,6 +55,12 @@ interface UnoOptions {
    * holds at most 3 received bytes (2-byte FIFO + shift register); later bytes are lost.
    */
   deafAfterResetMs?: number;
+  /** The chip resets this long after the DTR edge (or the open) that resets it: a slow bridge or a large reset RC. */
+  resetLatencyMs?: number;
+  /** The bridge loses the first byte the page writes after each open (a CH340 still settling after the open). */
+  dropsFirstByteAfterOpen?: boolean;
+  /** The sketch prints a line every this many ms, forever (an old sketch that spams serial from loop()). */
+  chatterEveryMs?: number;
 }
 
 /**
@@ -85,6 +91,9 @@ class FakeUno {
   /** Opens still to refuse after the latest close (a Windows CH340/FTDI driver releasing the handle). */
   private refusals = 0;
   refusedOpens = 0;
+  private dropNextByte = false;
+  /** Each sketch start; a chatter loop from an earlier run stops. */
+  private appRuns = 0;
 
   constructor(
     private firmware: Firmware,
@@ -112,17 +121,24 @@ class FakeUno {
     }
     this.baud = baud;
     this.opens.push(baud);
+    this.dropNextByte = this.options.dropsFirstByteAfterOpen ?? false;
     this.dtr = true;
-    this.reset();
+    this.resetSoon();
   }
 
   private signals(signals: SerialOutputSignals): void {
     if (signals.dataTerminalReady === undefined) return;
-    if (!this.dtr && signals.dataTerminalReady) this.reset();
+    if (!this.dtr && signals.dataTerminalReady) this.resetSoon();
     this.dtr = signals.dataTerminalReady;
   }
 
-  private write(data: Uint8Array): void {
+  private write(bytes: Uint8Array): void {
+    let data = bytes;
+    if (this.dropNextByte && data.length > 0) {
+      this.dropNextByte = false;
+      data = data.subarray(1);
+      if (data.length === 0) return;
+    }
     if (this.mode === "app") {
       this.appText += new TextDecoder().decode(data);
       const lines = this.appText.split("\n");
@@ -172,6 +188,11 @@ class FakeUno {
     this.port.receive(command);
   }
 
+  /** The next `count` reset pulses don't reach the chip. */
+  missResets(count: number): void {
+    this.missedResets = count;
+  }
+
   stop(): void {
     for (const timer of this.timers) clearTimeout(timer);
     clearTimeout(this.boot);
@@ -211,12 +232,19 @@ class FakeUno {
     }
   }
 
+  private resetSoon(): void {
+    const latency = this.options.resetLatencyMs ?? 0;
+    if (latency > 0) this.later(latency, () => this.reset());
+    else this.reset();
+  }
+
   private reset(): void {
     if (this.missedResets > 0) {
       this.missedResets -= 1;
       return;
     }
     this.mode = "bootloader";
+    this.appRuns += 1;
     this.lostSyncs = this.options.lostSyncsAfterReset ?? 0;
     this.uart = [];
     const deafMs = this.options.deafAfterResetMs ?? 0;
@@ -238,6 +266,16 @@ class FakeUno {
       this.mode = "app";
       this.appText = "";
       this.hello(); // setup() prints the banner
+      const run = ++this.appRuns;
+      const every = this.options.chatterEveryMs;
+      if (every) {
+        const chatter = () => {
+          if (run !== this.appRuns || this.mode !== "app") return;
+          this.emit({ t: "log", msg: "old sketch loop" });
+          this.later(every, chatter);
+        };
+        this.later(every, chatter);
+      }
     }, ms);
   }
 
@@ -320,16 +358,16 @@ describe("flash safe firmware, then check board power (issue #20)", () => {
     await bench.startRail();
     expect(bench.runner.state.seenHello).toMatchObject({ design: DESIGN, board: BOARD });
     expect(bench.runner.state.seenVcc?.mv).toBe(5001);
-    // Connect, the flash, and the reopen at the bench firmware's speed.
-    expect(bench.board.opens).toEqual([115_200, 115_200, 115_200]);
+    // Connect, then the reopen at the bench firmware's speed; the flash reuses the port already open at 115200.
+    expect(bench.board.opens).toEqual([115_200, 115_200]);
     // The runner heard none of the STK500 traffic.
     expect(bench.runner.state.rawLines.every((line) => line.startsWith("{"))).toBe(true);
     const messages = bench.messages();
-    for (const stage of [/open port at 115200/, /reset round 1\/3 at 115200/, /drained \d+ stale bytes/, /bootloader in sync on GET_SYNC 1/, /sync OK on attempt 1/, /first reply 14 10/, /Verifying signature/, /Uploading 75%/, /Verifying 95%/, /Complete 100%/, /reopen port at 115200/, /hello design design-r2 board uno-r3/, /VCC 5001 mV/]) {
+    for (const stage of [/port already open at 115200/, /reset round 1\/3 at 115200/, /drained \d+ stale bytes/, /bootloader in sync on GET_SYNC 1/, /sync OK on attempt 1/, /first reply 14 10/, /Verifying signature/, /Uploading 75%/, /Verifying 95%/, /Complete 100%/, /reopen port at 115200/, /hello design design-r2 board uno-r3/, /VCC 5001 mV/]) {
       expect(messages.some((message) => stage.test(message)), String(stage)).toBe(true);
     }
     // Chrome's receive buffer is set explicitly: its 255-byte default is ~22 ms of traffic at 115200.
-    expect(bench.board.port.openOptions.map((options) => options.bufferSize)).toEqual([8_192, 8_192, 8_192]);
+    expect(bench.board.port.openOptions.map((options) => options.bufferSize)).toEqual([8_192, 8_192]);
   });
 
   it("ignores the old firmware's banner from before the flash", async () => {
@@ -348,7 +386,8 @@ describe("flash safe firmware, then check board power (issue #20)", () => {
     await expect(bench.flash()).resolves.toEqual({ baud: 57_600, bytes: 16, reopened: true });
     await bench.startRail();
     expect(bench.runner.state.seenVcc?.mv).toBe(5001);
-    expect(bench.board.opens).toEqual([115_200, 115_200, 57_600, 115_200]);
+    // Connect's open, the reopen at 57600 for the fallback, and the reopen at the bench firmware's speed.
+    expect(bench.board.opens).toEqual([115_200, 57_600, 115_200]);
     expect(bench.logged.some((entry) => entry.level === "warn" && /failed at 115200 baud, trying 57600/.test(entry.message))).toBe(true);
     // Three reset rounds at the board's own baud before the fallback.
     expect(bench.messages().filter((message) => /reset round \d\/3 at 115200/.test(message))).toHaveLength(3);
@@ -377,13 +416,13 @@ describe("flash safe firmware, then check board power (issue #20)", () => {
 
   it("waits out a Windows driver that refuses to reopen the port right after we closed it", async () => {
     // Every reopen after our own close fails twice before the driver lets go (CH340/FTDI on Windows).
-    const bench = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, opensRefusedAfterClose: 2 });
-    await expect(bench.flash()).resolves.toEqual({ baud: 115_200, bytes: 16, reopened: true });
+    const bench = await connect(undefined, { bootloaderBaud: 57_600, flashedFirmware: { design: DESIGN, board: BOARD }, opensRefusedAfterClose: 2 });
+    await expect(bench.flash()).resolves.toEqual({ baud: 57_600, bytes: 16, reopened: true });
     await bench.startRail();
     expect(bench.runner.state.seenVcc?.mv).toBe(5001);
-    // Both reopens (before the flash and at 115200 after it) were refused twice, then worked.
+    // Both reopens (at 57600 for the fallback and at 115200 after it) were refused twice, then worked.
     expect(bench.board.refusedOpens).toBe(4);
-    expect(bench.board.opens).toEqual([115_200, 115_200, 115_200]);
+    expect(bench.board.opens).toEqual([115_200, 57_600, 115_200]);
     const retries = bench.logged.filter((entry) => /^serial: reopen retry/.test(entry.message)).map((entry) => entry.message);
     expect(retries).toEqual([
       "serial: reopen retry 1/3 after NetworkError: Failed to execute 'open' on 'SerialPort': Failed to open serial port.",
@@ -394,10 +433,10 @@ describe("flash safe firmware, then check board power (issue #20)", () => {
   });
 
   it("gives up after three retries, and never retries the first open at Connect (a busy port is another app)", async () => {
-    const stuck = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: undefined, opensRefusedAfterClose: 9 });
+    const stuck = await connect(undefined, { bootloaderBaud: 57_600, flashedFirmware: undefined, opensRefusedAfterClose: 9 });
     const failure = await stuck.flash().then(() => undefined, (error: unknown) => error);
     expect(classifySerialError(failure).kind).toBe("open-failed");
-    // Three retries for the flash's own open, then three more when it tries to leave the port open at 115200.
+    // Three retries for the reopen at 57600, then three more when it tries to leave the port open at 115200.
     expect(stuck.logged.filter((entry) => /^serial: reopen retry/.test(entry.message)).map((entry) => entry.message.slice(0, 24))).toEqual(
       ["1/3", "2/3", "3/3", "1/3", "2/3", "3/3"].map((n) => `serial: reopen retry ${n}`),
     );
@@ -430,7 +469,7 @@ describe("flashing a real CH340 Uno over Web Serial (issue #20)", () => {
     expect(messages).toContainEqual(expect.stringMatching(/^flash: bootloader in sync on GET_SYNC 2/));
     expect(messages).toContain("flash: sync OK on attempt 1");
     expect(messages.filter((message) => /reset round/.test(message))).toEqual([expect.stringMatching(/^flash: reset round 1\/3 at 115200/)]);
-    expect(bench.board.opens).toEqual([115_200, 115_200, 115_200]);
+    expect(bench.board.opens).toEqual([115_200, 115_200]);
   });
 
   it("doesn't overrun Optiboot while it blinks the LED after a reset (answers once, then the sketch starts)", async () => {
@@ -446,8 +485,8 @@ describe("flashing a real CH340 Uno over Web Serial (issue #20)", () => {
   });
 
   it("resets again at the board's own baud when a reset pulse doesn't take, before trying 57600", async () => {
-    // The resets on Connect's open and on the flash's own open, and the first explicit pulse, don't reach the chip.
-    const bench = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, missedResets: 3 });
+    // The reset on Connect's open and the first explicit pulse don't reach the chip.
+    const bench = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, missedResets: 2 });
     await expect(bench.flash()).resolves.toEqual({ baud: 115_200, bytes: 16, reopened: true });
     const messages = bench.messages();
     expect(messages).toContainEqual(expect.stringMatching(/^flash: no answer at 115200 baud after reset round 1\/3; resetting again/));
@@ -480,6 +519,46 @@ describe("flashing a real CH340 Uno over Web Serial (issue #20)", () => {
     // A disconnect event from earlier in the session; the port is connected now.
     bench.transport.markDisconnected();
     await expect(bench.flash()).resolves.toEqual({ baud: 57_600, bytes: 16, reopened: true });
-    expect(bench.board.opens).toEqual([115_200, 115_200, 57_600, 115_200]);
+    expect(bench.board.opens).toEqual([115_200, 57_600, 115_200]);
+  });
+
+  it("reuses the open port for the flash: a Windows driver that is slow to give the handle back never blocks it", async () => {
+    // The driver refuses every open after a close for longer than the reopen retries last.
+    const bench = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, opensRefusedAfterClose: 9 });
+    // Written and verified; only the reopen after it (which resets into the new firmware) needs the driver.
+    await expect(bench.flash()).resolves.toEqual({ baud: 115_200, bytes: 16, reopened: false });
+    expect(bench.board.opens).toEqual([115_200]);
+  });
+
+  it.each<[string, Partial<UnoOptions>]>([
+    ["a slow bridge that resets the chip 150 ms after the DTR edge", { resetLatencyMs: 150 }],
+    ["a late bootloader, deaf for 700 ms after the reset", { deafAfterResetMs: 700 }],
+    ["an old sketch that prints every 5 ms until the reset", { chatterEveryMs: 5 }],
+  ])("syncs on the first reset round with %s", async (_name, variant) => {
+    const bench = await connect({ design: "design-r1", board: BOARD }, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, deafAfterResetMs: 440, ...variant });
+    await expect(bench.flash()).resolves.toEqual({ baud: 115_200, bytes: 16, reopened: true });
+    expect(bench.messages().filter((message) => /reset round/.test(message))).toHaveLength(1);
+    await bench.startRail();
+    expect(bench.runner.state.seenVcc?.mv).toBe(5001);
+  });
+
+  it("resets again when a CH340 drops the first byte after the open, without falling back to 57600", async () => {
+    const bench = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, deafAfterResetMs: 440, dropsFirstByteAfterOpen: true });
+    await expect(bench.flash()).resolves.toEqual({ baud: 115_200, bytes: 16, reopened: true });
+    expect(bench.messages()).toContainEqual(expect.stringMatching(/^flash: reset round 2\/3 at 115200/));
+    expect(bench.board.opens).not.toContain(57_600);
+  });
+
+  it("logs what the line carried when a reset didn't take, so a bug report shows the old sketch still talking", async () => {
+    // The old sketch prints every 5 ms; the flash's first reset pulse misses the chip.
+    const bench = await connect({ design: "design-r1", board: BOARD }, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, chatterEveryMs: 5 });
+    await until(() => bench.runner.state.seenHello?.design === "design-r1");
+    bench.board.missResets(1);
+    await expect(bench.flash()).resolves.toEqual({ baud: 115_200, bytes: 16, reopened: true });
+    // `{"t":"log"` in hex: the sketch's own NDJSON, not a bootloader at another baud.
+    const heard = bench.logged.filter((entry) => entry.level === "warn" && /^flash: no INSYNC to GET_SYNC 1\/2 within 600 ms; heard \d+ bytes \(/.test(entry.message));
+    expect(heard.length).toBeGreaterThan(0);
+    expect(heard[0].message).toContain("7b 22 74 22 3a 22 6c 6f 67 22");
+    expect(bench.logged).toContainEqual(expect.objectContaining({ message: expect.stringMatching(/^flash: drained \d+ stale bytes$/), data: { sample: expect.stringMatching(/^\d+ bytes \([0-9a-f]{2}( [0-9a-f]{2}){15} …\)$/) } }));
   });
 });

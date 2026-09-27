@@ -27,6 +27,7 @@ export type NativeFlashErrorCode =
   | "permission_denied"
   | "not_in_sync"
   | "wrong_chip"
+  | "verify_failed"
   | "timeout"
   | "toolchain_missing"
   | "upload_failed";
@@ -158,6 +159,10 @@ export function classifyUpload(outcome: Pick<ProcessOutcome, "code" | "output" |
   }
   if (/invalid device signature|expected signature|signature .*does not match|device signature = 0x000000|double check chip/i.test(output)) {
     return { ok: false, error: { code: "wrong_chip", message: "The chip on this port is not the ATmega328P this design was built for.", hint: "Check the port and the board type." } };
+  }
+  // avrdude 8: "flash verification mismatch"; avrdude 6: "verification error, first mismatch at byte 0x…".
+  if (/verification mismatch|verification error|content mismatch/i.test(output)) {
+    return { ok: false, error: { code: "verify_failed", message: "The firmware was written but did not read back the same, so the board may not run it.", hint: "Flash again; if it repeats, try another USB cable or USB port." } };
   }
   const line = lastErrorLine(output);
   return { ok: false, error: { code: "upload_failed", message: line ? `The upload failed: ${line}` : `The uploader exited with code ${String(outcome.code)}.` } };

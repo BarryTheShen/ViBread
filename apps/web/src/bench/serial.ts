@@ -101,6 +101,8 @@ export class BufferedTransport implements ISTKTransport {
   /** Set once this adapter has closed the port itself; only then can a failed open be the driver still letting go. */
   private closedByUs = false;
   private reading = false;
+  /** Whether the read loop is still delivering: it ends on close(), a lost device, or an unrecoverable read error. */
+  private listening = false;
   private reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   private readLoop: Promise<void> = Promise.resolve();
   private writes: Promise<void> = Promise.resolve();
@@ -131,23 +133,32 @@ export class BufferedTransport implements ISTKTransport {
     for (const listener of session.listeners) listener(chunk);
   }
 
-  /** Drop the flash session's queued bytes; returns how many there were. */
-  private discardQueued(): number {
+  /** Drop the flash session's queued bytes; returns how many there were and the first 16 of them. */
+  private discardQueued(): { count: number; sample: Uint8Array } {
     const session = this.session;
-    if (!session) return 0;
+    if (!session) return { count: 0, sample: new Uint8Array(0) };
     const count = session.queuedBytes;
+    const sample = new Uint8Array(Math.min(16, count));
+    let offset = 0;
+    for (const chunk of session.queued) {
+      if (offset >= sample.length) break;
+      const part = chunk.subarray(0, sample.length - offset);
+      sample.set(part, offset);
+      offset += part.length;
+    }
     session.queued.length = 0;
     session.queuedBytes = 0;
-    return count;
+    return { count, sample };
   }
 
   /**
    * Active drain (esptool-js): wait until nothing has arrived for `quietMs` (at most `maxMs`), then discard everything
-   * queued. Returns the number of stale bytes discarded.
+   * queued. Returns the number of stale bytes discarded and the first 16 (for Diagnostics: an old sketch's text, noise
+   * at the wrong baud, or a late bootloader answer).
    */
-  async drain(quietMs = DRAIN_QUIET_MS, maxMs = DRAIN_MAX_MS): Promise<number> {
+  async drain(quietMs = DRAIN_QUIET_MS, maxMs = DRAIN_MAX_MS): Promise<{ count: number; sample: Uint8Array }> {
     const session = this.session;
-    if (!session) return 0;
+    if (!session) return { count: 0, sample: new Uint8Array(0) };
     const started = Date.now();
     for (;;) {
       const now = Date.now();
@@ -198,7 +209,10 @@ export class BufferedTransport implements ISTKTransport {
     this.openBaud = baudRate;
     this.discardQueued();
     this.reading = true;
-    this.readLoop = this.readPort();
+    this.listening = true;
+    this.readLoop = this.readPort().finally(() => {
+      this.listening = false;
+    });
   }
 
   /** The spec's read loop: a fresh reader after each recoverable error, until close() or the device is lost. */
@@ -235,6 +249,11 @@ export class BufferedTransport implements ISTKTransport {
 
   get isOpen(): boolean {
     return this.openBaud !== undefined;
+  }
+
+  /** Open, and its read loop still delivering what the board sends. */
+  get isListening(): boolean {
+    return this.openBaud !== undefined && this.listening;
   }
 
   /** The speed the port is open at, if it is open. */
@@ -496,12 +515,20 @@ function progressLogger(log: BenchLog | undefined): (stage: string, percent: num
 const BOOT_SYNC_WAIT_MS = 600;
 const BOOT_SYNC_ATTEMPTS = 2;
 
-/** Wait for Optiboot's INSYNC OK (0x14 0x10) on the flash session, or time out. */
-function awaitInSync(session: FlashSession, timeoutMs: number): Promise<boolean> {
+/**
+ * Wait for Optiboot's INSYNC OK (0x14 0x10) on the flash session, or time out. Also counts what else arrived and keeps
+ * the first 16 bytes, so a failed sync says whether the line was silent, carried the old sketch's text (the reset
+ * didn't take), or noise (the bootloader talks at another baud).
+ */
+function awaitInSync(session: FlashSession, timeoutMs: number): Promise<{ ok: boolean; heard: number; sample: Uint8Array }> {
   return new Promise((resolve) => {
     let previous = -1;
+    let heard = 0;
+    const sample: number[] = [];
     const onData = (chunk: Uint8Array) => {
+      heard += chunk.byteLength;
       for (const byte of chunk) {
+        if (sample.length < 16) sample.push(byte);
         if (previous === 0x14 && byte === 0x10) return finish(true);
         previous = byte;
       }
@@ -510,10 +537,15 @@ function awaitInSync(session: FlashSession, timeoutMs: number): Promise<boolean>
     function finish(ok: boolean): void {
       clearTimeout(timer);
       session.off("data", onData);
-      resolve(ok);
+      resolve({ ok, heard, sample: new Uint8Array(sample) });
     }
     session.on("data", onData);
   });
+}
+
+/** "12 bytes (7b 22 74 …)" for the Diagnostics log. */
+function describeBytes(count: number, sample: Uint8Array): string {
+  return count === 0 ? "0 bytes" : `${count} byte${count === 1 ? "" : "s"} (${toHex(sample)}${count > sample.length ? " …" : ""})`;
 }
 
 /**
@@ -529,14 +561,17 @@ async function resetIntoBootloader(raw: BufferedTransport, session: FlashSession
   await session.setSignals({ dtr: true });
   await session.setSignals({ dtr: false });
   await sleep(RESET_SETTLE_MS);
-  log?.("info", `flash: drained ${await raw.drain()} stale bytes`);
+  const stale = await raw.drain();
+  log?.("info", `flash: drained ${stale.count} stale bytes`, stale.count > 0 ? { sample: describeBytes(stale.count, stale.sample) } : undefined);
   for (let attempt = 1; attempt <= BOOT_SYNC_ATTEMPTS; attempt += 1) {
     const answered = awaitInSync(session, BOOT_SYNC_WAIT_MS);
     await session.write(STK_GET_SYNC);
-    if (await answered) {
-      log?.("info", `flash: bootloader in sync on GET_SYNC ${attempt}; drained ${await raw.drain()} bytes after it`);
+    const reply = await answered;
+    if (reply.ok) {
+      log?.("info", `flash: bootloader in sync on GET_SYNC ${attempt}; drained ${(await raw.drain()).count} bytes after it`);
       return;
     }
+    log?.("warn", `flash: no INSYNC to GET_SYNC ${attempt}/${BOOT_SYNC_ATTEMPTS} within ${BOOT_SYNC_WAIT_MS} ms; heard ${describeBytes(reply.heard, reply.sample)}`);
   }
   throw new STK500SyncError(BOOT_SYNC_ATTEMPTS);
 }
@@ -568,9 +603,14 @@ export async function flashHex(input: FlashInput): Promise<FlashResult> {
     for (let index = 0; index < bauds.length && flashedBaud === undefined; index += 1) {
       const baud = bauds[index];
       try {
-        if (raw.isOpen) await raw.close();
-        log?.("info", `flash: open port at ${baud} baud`, { board: connection.profile.id, bytes });
-        await raw.open(baud);
+        // Reuse the port when it is already open and reading at this baud: a Windows CH340/FTDI driver can refuse the
+        // reopen that follows a close for seconds, and the reset below restarts the bootloader either way.
+        if (raw.isListening && raw.baud === baud) log?.("info", `flash: port already open at ${baud} baud`, { board: connection.profile.id, bytes });
+        else {
+          if (raw.isOpen) await raw.close();
+          log?.("info", `flash: open port at ${baud} baud`, { board: connection.profile.id, bytes });
+          await raw.open(baud);
+        }
         for (let round = 1; flashedBaud === undefined; round += 1) {
           try {
             await resetIntoBootloader(raw, session, baud, round, log);

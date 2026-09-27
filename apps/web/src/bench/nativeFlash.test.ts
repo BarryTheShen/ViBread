@@ -38,4 +38,9 @@ describe("nativeFlash", () => {
     await expect(nativeFlash("m1", { port: "COM3", which: "app" }, json(200, { ok: true, output: "written", fqbn: "arduino:avr:uno", durationMs: 1800, calibration: "measured" })))
       .resolves.toMatchObject({ ok: true, calibration: "measured" });
   });
+
+  it("reports the bootloader speed the server's uploader reached the board at", async () => {
+    await expect(nativeFlash("m1", { port: "COM3", which: "bench" }, json(200, { ok: true, output: "written", fqbn: "arduino:avr:nano:cpu=atmega328old", durationMs: 9000, board: "nano-atmega328p-old-5v", baud: 57_600 })))
+      .resolves.toEqual({ ok: true, output: "written", fqbn: "arduino:avr:nano:cpu=atmega328old", durationMs: 9000, baud: 57_600 });
+  });
 });
