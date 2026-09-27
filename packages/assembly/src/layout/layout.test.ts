@@ -805,12 +805,21 @@ describe("LEGO-style build steps (issue #22)", () => {
         for (const end of [jumper.from, jumper.to]) expect(step.text, `${key} step ${step.n}: ${id}`).toContain(endName(end));
         if (step.kind === "jumper") expect(step.text).toMatch(new RegExp(`End 1: ${endName(jumper.from).replace(/[+]/g, "\\+")}[^.]*\\. End 2: ${endName(jumper.to).replace(/[+]/g, "\\+")}`));
         for (const n of [1, 2]) expect(svg, `${key} step ${step.n}: badge ${id}:${n}`).toContain(`data-wire-end="${id}:${n}"`);
-        // Badge 2 sits exactly on the hole it names (badge 1 on a header pin is checked by the text above).
+        // Badge 2 sits exactly on the hole it names; badge 1 on a header pin sits beside the pin, clear of its name.
         if ("hole" in jumper.to) {
           const hole = svg.match(new RegExp(`id="hole-${jumper.to.hole.replace(/[+]/g, "\\+")}" cx="([\\d.]+)" cy="([\\d.]+)"`))!;
           const badge = svg.match(new RegExp(`data-wire-end="${id}:2"><circle cx="([\\d.]+)" cy="([\\d.]+)"`))!;
           expect(Number(badge[1])).toBeCloseTo(Number(hole[1]), 0);
           expect(Number(badge[2])).toBeCloseTo(Number(hole[2]), 0);
+        }
+        if ("board" in jumper.from) {
+          const pin = svg.match(new RegExp(`<g id="pin-${jumper.from.board}"><circle cx="([\\d.]+)" cy="([\\d.]+)"[^>]*/><text x="([\\d.]+)" y="([\\d.]+)"`))!.slice(1).map(Number) as [number, number, number, number];
+          const [x, y] = svg.match(new RegExp(`data-wire-end="${id}:1"><circle cx="([\\d.]+)" cy="([\\d.]+)" r="11"`))!.slice(1).map(Number) as [number, number];
+          expect(Math.hypot(x - pin[0], y - pin[1]), `${key} step ${step.n}: badge ${id}:1 at its pin`).toBeLessThan(20);
+          // The name's box (11 px text, up to 3 characters) and the badge's circle (radius 11 plus its stroke) don't touch.
+          const [left, right, top, bottom] = [pin[2] - 12, pin[2] + 12, pin[3] - 10, pin[3] + 2];
+          const gap = Math.hypot(x - Math.max(left, Math.min(x, right)), y - Math.max(top, Math.min(y, bottom)));
+          expect(gap, `${key} step ${step.n}: badge ${id}:1 covers the name ${jumper.from.board}`).toBeGreaterThan(12);
         }
       }
     }

@@ -113,8 +113,15 @@ function pinNames(part: Part): string[] {
   return modulePins(part).map((pin) => pin.id);
 }
 
-function boardPinPoints(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard" | "boardOrientation">): Map<string, Point> {
+/** Header pin positions per board, breadboard, facing and Nano anchor, made once: every wire end and route reads them. */
+const PIN_POINTS = new Map<string, ReadonlyMap<string, Point>>();
+
+function boardPinPoints(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard" | "boardOrientation">): ReadonlyMap<string, Point> {
+  const key = `${layout.board}|${layout.breadboard}|${layout.boardOrientation ?? ""}|${layout.boardAnchor ? `${layout.boardAnchor.topRow}${layout.boardAnchor.columns.join("")}` : ""}`;
+  const known = PIN_POINTS.get(key);
+  if (known) return known;
   const points = new Map<string, Point>();
+  PIN_POINTS.set(key, points);
   const profile = BOARD_PROFILES[layout.board];
   if (profile.placement === "straddle" && layout.boardAnchor) {
     const header = profile.headers[0]?.pins ?? [];
@@ -166,7 +173,7 @@ export function endpointPosition(layout: Pick<Layout, "board" | "boardAnchor" | 
   return endpointPoint(layout, endpoint, boardPinPoints(layout));
 }
 
-function endpointPoint(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard" | "boardOrientation">, endpoint: Jumper["from"], pins: Map<string, Point>): Point {
+function endpointPoint(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard" | "boardOrientation">, endpoint: Jumper["from"], pins: ReadonlyMap<string, Point>): Point {
   if ("hole" in endpoint) return holePoint(layout, endpoint.hole) ?? { x: BOARD_LEFT, y: TOP_HOLE_Y };
   return pins.get(endpoint.board) ?? { x: BOARD_LEFT, y: 620 };
 }
@@ -214,7 +221,7 @@ export function jumperRoute(layout: RouteLayout, jumper: Pick<Jumper, "from" | "
   return edgeRoute(layout, jumper, boardPinPoints(layout))?.points;
 }
 
-function edgeRoute(layout: RouteLayout, jumper: Pick<Jumper, "from" | "to">, pins: Map<string, Point>): EdgeRoute | undefined {
+function edgeRoute(layout: RouteLayout, jumper: Pick<Jumper, "from" | "to">, pins: ReadonlyMap<string, Point>): EdgeRoute | undefined {
   const profile = BREADBOARD_PROFILES[layout.breadboard];
   if ("hole" in jumper.from && "hole" in jumper.to) {
     const rail = parseHole(jumper.from.hole);
@@ -338,7 +345,7 @@ function viewState(steps: StepList | undefined, upToStep: number | undefined): V
 }
 type ViewBox = { x: number; y: number; width: number; height: number };
 
-function focusViewBox(input: RenderInput, state: ViewState, pins: Map<string, Point>): ViewBox | undefined {
+function focusViewBox(input: RenderInput, state: ViewState, pins: ReadonlyMap<string, Point>): ViewBox | undefined {
   if (!input.focus || !input.steps || input.upToStep === undefined) return undefined;
   const step = input.steps.steps[input.upToStep - 1];
   if (!step || (step.adds.parts.length === 0 && step.adds.jumpers.length === 0)) return undefined;
@@ -498,7 +505,7 @@ function renderHoles(layout: Layout, highlight: RenderInput["highlight"]): strin
   return chunks.join("");
 }
 
-function renderBoard(layout: Layout, pins: Map<string, Point>): string {
+function renderBoard(layout: Layout, pins: ReadonlyMap<string, Point>): string {
   const profile = BOARD_PROFILES[layout.board];
   if (profile.placement === "straddle" && layout.boardAnchor) {
     const start = rowX(layout, layout.boardAnchor.topRow);
@@ -506,13 +513,18 @@ function renderBoard(layout: Layout, pins: Map<string, Point>): string {
     const left = Math.min(start, end) - 18;
     const width = Math.abs(end - start) + 36;
     const unique = [...pins.entries()];
-    return `<rect x="${left}" y="${CHANNEL_Y - 35}" width="${width}" height="70" rx="8" class="mcu nano"/><text x="${left + width / 2}" y="${CHANNEL_Y + 5}" text-anchor="middle" class="board-title">Arduino Nano</text>${unique.map(([pin, point]) => `<g id="pin-${escapeSvg(pin)}"><circle cx="${point.x}" cy="${point.y}" r="6" class="header-pin"/><text x="${point.x}" y="${point.y + (point.y < CHANNEL_Y ? -10 : 17)}" text-anchor="middle" class="pin-label">${escapeSvg(pin)}</text></g>`).join("")}`;
+    return `<rect x="${left}" y="${CHANNEL_Y - 35}" width="${width}" height="70" rx="8" class="mcu nano"/><text x="${left + width / 2}" y="${CHANNEL_Y + 5}" text-anchor="middle" class="board-title">Arduino Nano</text>${unique.map(([pin, point]) => `<g id="pin-${escapeSvg(pin)}"><circle cx="${point.x}" cy="${point.y}" r="6" class="header-pin"/><text x="${point.x}" y="${point.y + pinLabelOffset(layout, point)}" text-anchor="middle" class="pin-label">${escapeSvg(pin)}</text></g>`).join("")}`;
   }
   const left = 56;
   const width = 1088;
   return `<rect x="${left}" y="582" width="${width}" height="108" rx="12" class="mcu uno"/><text x="${left + width / 2}" y="603" text-anchor="middle" class="board-title">Arduino Uno R3</text>${layout.boardOrientation === "usb-right"
     ? `<text x="${left + width - 12}" y="612" text-anchor="end" class="header-label">POWER / ANALOG HEADER</text><text x="${left + width - 12}" y="662" text-anchor="end" class="header-label">DIGITAL HEADER</text><text x="${left + width - 12}" y="637" text-anchor="end" class="header-label">USB END ▶</text>`
-    : `<text x="${left + 12}" y="612" class="header-label">DIGITAL HEADER</text><text x="${left + 12}" y="662" class="header-label">POWER / ANALOG HEADER</text><text x="${left + 12}" y="637" class="header-label">◀ USB END</text>`}${[...pins.entries()].map(([pin, point]) => `<g id="pin-${escapeSvg(pin)}"><circle cx="${point.x}" cy="${point.y}" r="6" class="header-pin"/><text x="${point.x}" y="${point.y + (point.y < 620 ? -10 : 17)}" text-anchor="middle" class="pin-label">${escapeSvg(pin)}</text></g>`).join("")}`;
+    : `<text x="${left + 12}" y="612" class="header-label">DIGITAL HEADER</text><text x="${left + 12}" y="662" class="header-label">POWER / ANALOG HEADER</text><text x="${left + 12}" y="637" class="header-label">◀ USB END</text>`}${[...pins.entries()].map(([pin, point]) => `<g id="pin-${escapeSvg(pin)}"><circle cx="${point.x}" cy="${point.y}" r="6" class="header-pin"/><text x="${point.x}" y="${point.y + pinLabelOffset(layout, point)}" text-anchor="middle" class="pin-label">${escapeSvg(pin)}</text></g>`).join("")}`;
+}
+
+/** Baseline of an Arduino pin's name from the pin: below it, or above it for a Nano pin on the top half. */
+function pinLabelOffset(layout: Pick<Layout, "board">, point: Point): number {
+  return BOARD_PROFILES[layout.board].placement === "straddle" && point.y < CHANNEL_Y ? -10 : 17;
 }
 
 function partGeometry(layout: Pick<Layout, "breadboard">, part: Part, placement: Pick<Layout["placements"][number], "pins">): { pins: Map<string, Point>; center: Point; angle: number } {
@@ -766,7 +778,7 @@ function jumperGeometry(from: Point, to: Point, labelWidth: number, labelHeight:
  * A wire's drawn path, its label spot, and its points: an edge-hugging route (issue #28, `edge`, outlined light so a
  * black wire still shows on the dark canvas), else the curve above.
  */
-function wireShape(layout: RouteLayout, jumper: Pick<Jumper, "from" | "to">, pins: Map<string, Point>, labelWidth: number, labelHeight: number): { path: string; label: Point; points: Point[]; edge: boolean } {
+function wireShape(layout: RouteLayout, jumper: Pick<Jumper, "from" | "to">, pins: ReadonlyMap<string, Point>, labelWidth: number, labelHeight: number): { path: string; label: Point; points: Point[]; edge: boolean } {
   const route = edgeRoute(layout, jumper, pins);
   if (route) return { path: roundedPath(route.points), label: route.label(labelWidth, labelHeight), points: route.points, edge: true };
   const from = endpointPoint(layout, jumper.from, pins);
@@ -774,15 +786,21 @@ function wireShape(layout: RouteLayout, jumper: Pick<Jumper, "from" | "to">, pin
   return { ...jumperGeometry(from, to, labelWidth, labelHeight), points: [from, to], edge: false };
 }
 
-/** "1" and "2" badges on a new wire's two ends, matching "End 1" / "End 2" in the step text. */
-function endBadges(jumper: Jumper, from: Point, to: Point, stroke: string): string {
-  return ([[from, 1], [to, 2]] as const)
-    .map(([point, n]) => `<g class="wire-end" data-wire-end="${escapeSvg(jumper.id)}:${n}"><circle cx="${point.x}" cy="${point.y}" r="11" class="end-badge" stroke="${stroke}"/><text x="${point.x}" y="${point.y + 4.5}" text-anchor="middle" class="end-badge-text">${n}</text></g>`)
+/**
+ * "1" and "2" badges on a new wire's two ends, matching "End 1" / "End 2" in the step text. A badge on an Arduino pin
+ * sits just off the pin, on the side away from the pin's name, so the name ("D3") still reads.
+ */
+function endBadges(layout: Pick<Layout, "board">, jumper: Jumper, from: Point, to: Point, stroke: string): string {
+  return ([[jumper.from, from, 1], [jumper.to, to, 2]] as const)
+    .map(([end, pin, n]) => {
+      const point = "board" in end ? { x: pin.x, y: pin.y + (pinLabelOffset(layout, pin) > 0 ? -17 : 17) } : pin;
+      return `<g class="wire-end" data-wire-end="${escapeSvg(jumper.id)}:${n}"><circle cx="${point.x}" cy="${point.y}" r="11" class="end-badge" stroke="${stroke}"/><text x="${point.x}" y="${point.y + 4.5}" text-anchor="middle" class="end-badge-text">${n}</text></g>`;
+    })
     .join("");
 }
 
 /** The wire itself, and (for the step that adds it) its label, drawn in a layer above everything else. */
-function renderJumper(input: RenderInput, jumper: Jumper, pins: Map<string, Point>, state: ViewState): { wire: string; label: string } {
+function renderJumper(input: RenderInput, jumper: Jumper, pins: ReadonlyMap<string, Point>, state: ViewState): { wire: string; label: string } {
   if (state.visibleJumpers && !state.visibleJumpers.has(jumper.id)) return { wire: "", label: "" };
   const from = endpointPoint(input.layout, jumper.from, pins);
   const to = endpointPoint(input.layout, jumper.to, pins);
@@ -794,7 +812,7 @@ function renderJumper(input: RenderInput, jumper: Jumper, pins: Map<string, Poin
   const newItem = state.newJumpers.has(jumper.id);
   const highlighted = isHighlighted("jumper", jumper.id, input.highlight);
   const label = newItem
-    ? `<g class="wire-tag" data-jumper-label="${escapeSvg(jumper.id)}"><rect x="${at.x - labelWidth / 2}" y="${at.y - labelHeight / 2}" width="${labelWidth}" height="${labelHeight}" rx="5" class="wire-bg" stroke="${stroke}"/><text x="${at.x}" y="${at.y + 4}" text-anchor="middle" class="wire-label">${escapeSvg(text)}</text></g>${endBadges(jumper, from, to, stroke)}`
+    ? `<g class="wire-tag" data-jumper-label="${escapeSvg(jumper.id)}"><rect x="${at.x - labelWidth / 2}" y="${at.y - labelHeight / 2}" width="${labelWidth}" height="${labelHeight}" rx="5" class="wire-bg" stroke="${stroke}"/><text x="${at.x}" y="${at.y + 4}" text-anchor="middle" class="wire-label">${escapeSvg(text)}</text></g>${endBadges(input.layout, jumper, from, to, stroke)}`
     : "";
   const wire = `<g id="wire-${escapeSvg(jumper.id)}" data-jumper="${escapeSvg(jumper.id)}" data-net="${escapeSvg(jumper.net)}" class="${classes("wire", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(jumper.id)} ${escapeSvg(jumper.net)}"><title>${escapeSvg(jumper.id)} — ${escapeSvg(jumper.net)}: ${escapeSvg(endpointLabel(jumper.from))} to ${escapeSvg(endpointLabel(jumper.to))}</title><path d="${path}" class="${classes("wire-casing", edge && "edge-route")}"/><path d="${path}" stroke="${stroke}" class="wire-path"/></g>`;
   return { wire, label };

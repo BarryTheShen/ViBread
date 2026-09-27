@@ -42,19 +42,28 @@ export interface LayoutQuality {
 
 type Point = { x: number; y: number };
 
+export type Segment = [Point, Point];
+
+/** A jumper as drawn for crossing checks: its straight end-to-end line, or its edge-hugging route. */
+export function jumperSegments(layout: Layout, jumper: Pick<Layout["jumpers"][number], "from" | "to">): Segment[] {
+  const points = jumperRoute(layout, jumper) ?? [endpointPosition(layout, jumper.from), endpointPosition(layout, jumper.to)];
+  return points.slice(1).map((point, index): Segment => [points[index]!, point]);
+}
+
+export function wiresCross(a: Segment[], b: Segment[]): boolean {
+  return a.some((first) => b.some((second) => segmentsCross(first, second)));
+}
+
 /**
  * Pairs of jumpers that cross in the drawing: each wire's straight end-to-end line, or the route an edge-hugging wire
  * (an Uno rail feed, a split-rail bridge) is drawn along.
  */
 export function jumperCrossings(layout: Layout): [string, string][] {
-  const wires = layout.jumpers.map((jumper) => {
-    const points = jumperRoute(layout, jumper) ?? [endpointPosition(layout, jumper.from), endpointPosition(layout, jumper.to)];
-    return { id: jumper.id, segments: points.slice(1).map((point, index) => [points[index]!, point] as [Point, Point]) };
-  });
+  const wires = layout.jumpers.map((jumper) => ({ id: jumper.id, segments: jumperSegments(layout, jumper) }));
   const pairs: [string, string][] = [];
   for (let i = 0; i < wires.length; i += 1) {
     for (let j = i + 1; j < wires.length; j += 1) {
-      if (wires[i]!.segments.some((a) => wires[j]!.segments.some((b) => segmentsCross(a, b)))) pairs.push([wires[i]!.id, wires[j]!.id]);
+      if (wiresCross(wires[i]!.segments, wires[j]!.segments)) pairs.push([wires[i]!.id, wires[j]!.id]);
     }
   }
   return pairs;

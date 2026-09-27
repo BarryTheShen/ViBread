@@ -115,16 +115,24 @@ describe("design philosophy in the layout (issue #26)", () => {
     expect(repeatedUnits(GOLDEN.find((design) => design.key === "knob-night-light")!.circuit)).toEqual([]);
   });
 
-  it("whack-a-mole: each button+resistor+light group built as identical copies in pin order, fewer wires and crossings than before", () => {
+  it("whack-a-mole: each button+resistor+light group built as identical copies in pin order, no crossing wires", () => {
     const circuit = fixture("whack-a-mole");
     const layout = layoutBoard(circuit);
     const quality = layoutQuality(circuit, layout);
+    expect(lvs(circuit, layout).ok).toBe(true);
+    expect(assemblyReport({ circuit, layout, lvs: lvs(circuit, layout), revisionHash: "test" }).verdict).toBe("GO");
     expect(placementSummary(circuit, layout).groups.every((group) => group.met)).toBe(true);
     expect(quality.repeats).toEqual([expect.objectContaining({ regular: true, copies: [["BTN1", "R1", "LED1"], ["BTN2", "R2", "LED2"], ["BTN3", "R3", "LED3"]] })]);
     // Before issue #26: 12 wires and 14 crossings (drawn with the real Uno header order).
     expect(quality.wires).toBeLessThanOrEqual(10);
-    // Its two pin families (buttons D2–D4, lights D8–D10) interleave copy by copy, so some wires must cross.
-    expect(quality.crossings).toBeLessThanOrEqual(5);
+    // Its two pin families (buttons D2–D4, lights D8–D10) interleave copy by copy: straight into row j they cross
+    // (3 crossings), so the button wires land on the buttons' far half instead, the same hole in every copy.
+    expect(jumperCrossings(layout)).toEqual([]);
+    const landing = (net: string) => {
+      const end = layout.jumpers.find((jumper) => jumper.net === net && "board" in jumper.from)!.to;
+      return "hole" in end ? `${end.hole.replace(/\d+$/, "")}${column(end.hole) - column(pins(layout, `BTN${Number(net.slice(1)) - 1}`)["1"]!)}` : "board";
+    };
+    expect(new Set(["D2", "D3", "D4"].map(landing))).toEqual(new Set(["a0"]));
   });
 
   it.each(GOLDEN.map((design) => [design.key, design.circuit] as const))("%s: still GO, repeated units regular, no more wires than before", (key, circuit) => {
