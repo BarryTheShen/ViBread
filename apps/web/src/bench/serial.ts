@@ -484,10 +484,40 @@ function progressLogger(log: BenchLog | undefined): (stage: string, percent: num
 }
 
 /**
- * avrdude's arduino-programmer reset, then its sync preamble: DTR+RTS off long enough to discharge the reset capacitor,
- * a short on pulse (two back-to-back setSignals calls, a few ms in Web Serial) resets the chip into Optiboot, off again
- * so a direct connection to RESET works, and a short settle. Then drain what the old sketch (or Chrome's own reset on
- * open) left behind, and send two dummy GET_SYNCs, draining after each, so the real sync starts on a clean line.
+ * How long one GET_SYNC waits for its answer before the next is sent. Optiboot (Uno/Nano) blinks the LED for ~375 ms
+ * after the ~65 ms start-up delay before it reads the UART, and the ATmega's receive FIFO holds only 2 bytes: a second
+ * GET_SYNC sent into that blink overruns it, Optiboot then reads a '0' where it expects the ' ' end-of-packet, and its
+ * watchdog starts the old sketch — one answer (to the buffered bytes), then silence. So one GET_SYNC at a time, each
+ * waiting past the end of the blink, keeps at most one command buffered.
+ */
+const BOOT_SYNC_WAIT_MS = 600;
+const BOOT_SYNC_ATTEMPTS = 2;
+
+/** Wait for Optiboot's INSYNC OK (0x14 0x10) on the flash session, or time out. */
+function awaitInSync(session: FlashSession, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    let previous = -1;
+    const onData = (chunk: Uint8Array) => {
+      for (const byte of chunk) {
+        if (previous === 0x14 && byte === 0x10) return finish(true);
+        previous = byte;
+      }
+    };
+    const timer = setTimeout(() => finish(false), timeoutMs);
+    function finish(ok: boolean): void {
+      clearTimeout(timer);
+      session.off("data", onData);
+      resolve(ok);
+    }
+    session.on("data", onData);
+  });
+}
+
+/**
+ * avrdude's arduino-programmer reset: DTR+RTS off long enough to discharge the reset capacitor, a short on pulse (two
+ * back-to-back setSignals calls, a few ms in Web Serial) resets the chip into the bootloader, off again so a direct
+ * connection to RESET works, and a short settle. Then drain what the old sketch left behind and sync one GET_SYNC at a
+ * time (see BOOT_SYNC_WAIT_MS), draining any late duplicate answer, so the library's own syncs start on a clean line.
  */
 async function resetIntoBootloader(raw: BufferedTransport, session: FlashSession, baud: number, round: number, log: BenchLog | undefined): Promise<void> {
   log?.("info", `flash: reset round ${round}/${RESET_ROUNDS} at ${baud} baud (DTR+RTS off ${RESET_DISCHARGE_MS} ms, pulse on, off, wait ${RESET_SETTLE_MS} ms)`);
@@ -497,12 +527,15 @@ async function resetIntoBootloader(raw: BufferedTransport, session: FlashSession
   await session.setSignals({ dtr: false });
   await sleep(RESET_SETTLE_MS);
   log?.("info", `flash: drained ${await raw.drain()} stale bytes`);
-  let answered = 0;
-  for (let dummy = 0; dummy < 2; dummy += 1) {
+  for (let attempt = 1; attempt <= BOOT_SYNC_ATTEMPTS; attempt += 1) {
+    const answered = awaitInSync(session, BOOT_SYNC_WAIT_MS);
     await session.write(STK_GET_SYNC);
-    answered += await raw.drain();
+    if (await answered) {
+      log?.("info", `flash: bootloader in sync on GET_SYNC ${attempt}; drained ${await raw.drain()} bytes after it`);
+      return;
+    }
   }
-  log?.("info", `flash: 2 dummy GET_SYNC sent; drained ${answered} bytes after them`);
+  throw new STK500SyncError(BOOT_SYNC_ATTEMPTS);
 }
 
 /**
