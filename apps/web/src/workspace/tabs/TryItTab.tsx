@@ -16,8 +16,11 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import type { Part, RevisionDetail } from "@vibread/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useArtifactText, useBuildState } from "../../api/hooks.js";
+import { reportClientError } from "../../components/ClientErrorReporter.js";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
 import { SERIAL_LIMIT, SerialMonitor } from "../../components/SerialMonitor.js";
+import { reloadForStaleChunk } from "../../staleChunks.js";
+import { WEB_VERSION, type VersionInfo } from "../../version.js";
 
 import { BuzzerAudio, isSounding } from "../buzzerAudio.js";
 import type { LiveSimInput, LiveSimOutput } from "../liveSimProtocol.js";
@@ -31,6 +34,32 @@ const DEFAULT_LIGHT = 0.8;
 const DEFAULT_KNOB = 0.5;
 
 const partName = (p: Part) => (p.label ? `${p.id} (${p.label})` : p.id);
+
+/** Why the board isn't running: it stopped (Reset restarts it), or its worker script never loaded (only a reload helps). */
+type SimProblem = { kind: "stopped"; reason?: string } | { kind: "not-loaded"; updated: boolean };
+
+/** An error text as one sentence for the banner: the browser's "Uncaught " dropped, exactly one full stop. */
+function sentence(text: string): string {
+  const trimmed = text.replace(/^Uncaught\s+/, "").replace(/[.\s]+$/, "");
+  return /[!?]$/.test(trimmed) ? trimmed : `${trimmed}.`;
+}
+
+/**
+ * Whether the server now serves a different build than this page's. A redeploy renames the hashed worker script, so a
+ * tab opened before it asks for a file that no longer exists (and gets the app's HTML back); a plain `error` event with
+ * no message is all the page hears.
+ */
+async function appWasUpdated(): Promise<boolean> {
+  try {
+    const response = await fetch("/version.json", { cache: "no-store" });
+    if (!response.ok) return false;
+    const served = (await response.json()) as Partial<VersionInfo>;
+    return typeof served.builtAt === "string" && (served.builtAt !== WEB_VERSION.builtAt || served.commit !== WEB_VERSION.commit);
+  } catch {
+    // No version.json (the dev server answers with HTML): not a redeploy we can detect.
+    return false;
+  }
+}
 
 /** A percentage in a fixed-width slot so "8%" → "100%" doesn't reflow the label. */
 function Percent({ value }: { value: number }) {
@@ -99,7 +128,7 @@ export function TryItTab({ missionId, revision, released }: { missionId: string;
   const [timeMs, setTimeMs] = useState(0);
   const [serial, setSerial] = useState("");
   const [line, setLine] = useState("");
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<SimProblem | null>(null);
   const [light, setLight] = useState<Record<string, number>>({});
   const [knob, setKnob] = useState<Record<string, number>>({});
   const [pressed, setPressed] = useState<Record<string, boolean>>({});
@@ -148,6 +177,7 @@ export function TryItTab({ missionId, revision, released }: { missionId: string;
     setError(null);
     pressedRef.current = {};
     setPressed({});
+    let disposed = false;
     const worker = new Worker(new URL("../liveSim.worker.ts", import.meta.url), { type: "module" });
     workerRef.current = worker;
     let lastPaint = 0;
@@ -173,12 +203,32 @@ export function TryItTab({ missionId, revision, released }: { missionId: string;
       } else if (message.type === "serial") {
         setSerial((s) => (s + message.text).slice(-SERIAL_LIMIT));
       } else if (message.type === "error") {
-        setError(message.message);
+        console.error(`Try it simulator stopped: ${message.message}`, message.stack ?? "");
+        reportClientError({ message: `Try it simulator stopped: ${message.message}`, stack: message.stack });
+        setError({ kind: "stopped", reason: message.message });
       }
     };
-    worker.onerror = (event) => setError(event.message || "The simulator stopped unexpectedly.");
+    worker.onerror = (event: ErrorEvent | Event) => {
+      if (event instanceof ErrorEvent && event.message) {
+        // The worker reports its own errors as messages, so this is one that escaped it; `error` is null across the boundary.
+        const where = event.filename ? ` (${event.filename}:${event.lineno}:${event.colno})` : "";
+        console.error(`Try it simulator stopped: ${event.message}${where}`, event.error ?? "");
+        reportClientError({ message: `Try it simulator stopped: ${event.message}${where}`, stack: event.error instanceof Error ? event.error.stack : undefined });
+        setError({ kind: "stopped", reason: event.message });
+        return;
+      }
+      // A plain Event: the worker script itself didn't load, and the browser gives no reason.
+      console.error("Try it simulator: its worker script failed to load", event);
+      void appWasUpdated().then((updated) => {
+        if (disposed) return;
+        reportClientError({ message: `Try it simulator: its worker script failed to load${updated ? " (a newer ViBread build is being served)" : ""}` });
+        if (updated && reloadForStaleChunk()) return;
+        setError({ kind: "not-loaded", updated });
+      });
+    };
     worker.postMessage({ type: "start", circuit, hex: hex.data, light: initialLight, analog: initialKnob } satisfies LiveSimInput);
     return () => {
+      disposed = true;
       worker.postMessage({ type: "stop" } satisfies LiveSimInput);
       worker.terminate();
       workerRef.current = null;
@@ -270,7 +320,25 @@ export function TryItTab({ missionId, revision, released }: { missionId: string;
           Reset
         </Button>
       </Stack>
-      {error && <Alert severity="error">The simulator stopped: {error}. Press Reset to start again.</Alert>}
+      {error?.kind === "stopped" && (
+        <Alert severity="error">
+          {error.reason ? `The simulator stopped: ${sentence(error.reason)}` : "The simulator stopped unexpectedly."} Press Reset to start again.
+        </Alert>
+      )}
+      {error?.kind === "not-loaded" && (
+        <Alert
+          severity="error"
+          action={
+            <Button color="inherit" size="small" onClick={() => window.location.reload()}>
+              Reload page
+            </Button>
+          }
+        >
+          {error.updated
+            ? "ViBread was updated since this page opened, so the simulator couldn't load. Reload the page to run it."
+            : "The simulator's code couldn't load. Reload the page to try again."}
+        </Alert>
+      )}
       <Paper
         variant="outlined"
         onPointerDown={(e) => {

@@ -181,6 +181,11 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
   const webDist = candidateWebDirs.find((directory) => existsSync(resolve(directory, "index.html")));
   if (process.env.VIBREAD_NO_STATIC !== "1" && webDist) {
     app.use(express.static(webDist, { index: false }));
+    // A hashed build file that's gone (a tab opened before a redeploy asking for the old name) is a 404, never the
+    // page: served as index.html it made the Try-it worker fail to load with no error at all (issue #29).
+    app.use("/assets", (req, res) => {
+      res.status(404).type("text/plain").send(`Not found: /assets${req.path}. ViBread was updated; reload the page.`);
+    });
     // Root-relative on purpose: `send` rejects absolute paths that pass through a dot-directory (AppImages run from
     // /tmp/.mount_*, many installs live under ~/.local), which would turn every SPA route into a 404.
     app.get("*splat", (_req, res) => res.sendFile("index.html", { root: webDist }));
