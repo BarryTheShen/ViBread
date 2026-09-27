@@ -1122,11 +1122,13 @@ function summaryOf(consoleId: "EECOM" | "GUIDO", findings: Finding[]): string {
   const errors = findings.filter((finding) => finding.severity === "error");
   const warnings = findings.filter((finding) => finding.severity === "warning");
   const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? "" : "s"}`;
+  // Finding titles are sentences and may end in their own full stop: the summary ends in exactly one.
+  const title = (finding: Finding): string => finding.title.replace(/[.\s]+$/, "");
   if (errors.length) {
     const also = warnings.length ? ` (and ${plural(warnings.length, "warning")})` : "";
-    return `${plural(errors.length, "error")}${also}: ${errors[0]!.title}${errors.length > 1 ? ", and more" : ""}.`;
+    return `${plural(errors.length, "error")}${also}: ${title(errors[0]!)}${errors.length > 1 ? ", and more" : ""}.`;
   }
-  if (warnings.length) return `${plural(warnings.length, "warning")}: ${warnings[0]!.title}${warnings.length > 1 ? ", and more" : ""}.`;
+  if (warnings.length) return `${plural(warnings.length, "warning")}: ${title(warnings[0]!)}${warnings.length > 1 ? ", and more" : ""}.`;
   return `All ${area} checks pass.`;
 }
 

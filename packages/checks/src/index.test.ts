@@ -173,11 +173,13 @@ describe("EECOM on adversarial beginner circuits", () => {
 
   it("summarises by naming the first problem instead of repeating the chip's counts", async () => {
     const warned = await reportFor(ledCircuit("blue", 100));
-    expect(warned.summary).toBe(`1 warning: ${warned.findings[0]!.title}.`);
+    expect(warned.summary).toBe(`1 warning: ${warned.findings[0]!.title.replace(/\.$/, "")}.`);
+    expect(warned.summary).not.toMatch(/\.\.$/);
     const blocked = await reportFor(ledCircuit("red", 100));
     const firstError = blocked.findings.find((finding) => finding.severity === "error")!;
     expect(blocked.summary).toMatch(/^\d+ errors?( \(and \d+ warnings?\))?: /);
-    expect(blocked.summary).toContain(firstError.title);
+    expect(blocked.summary).toContain(firstError.title.replace(/\.$/, ""));
+    expect(blocked.summary).not.toMatch(/\.\.$/);
     expect((await reportFor(ledCircuit("red", 220))).summary).toBe("All electrical checks pass.");
   });
 
