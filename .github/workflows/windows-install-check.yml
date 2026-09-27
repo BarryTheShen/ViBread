@@ -34,6 +34,15 @@ jobs:
             userData: 'C:\Users\runneradmin\AppData\Roaming\Bärry Shén\ViBread'
           - case: data-dir-cjk
             userData: 'C:\Users\runneradmin\AppData\Roaming\沈巴瑞\ViBread'
+          # A user whose Windows name isn't plain ASCII: the install, data and temp folders all carry it.
+          - case: profile-latin
+            installDir: 'C:\Users\Bärry Shén\AppData\Local\Programs\ViBread'
+            userData: 'C:\Users\Bärry Shén\AppData\Roaming\ViBread'
+            temp: 'C:\Users\Bärry Shén\AppData\Local\Temp'
+          - case: profile-cjk
+            installDir: 'C:\Users\沈巴瑞\AppData\Local\Programs\ViBread'
+            userData: 'C:\Users\沈巴瑞\AppData\Roaming\ViBread'
+            temp: 'C:\Users\沈巴瑞\AppData\Local\Temp'
     steps:
       - name: Download the installer
         shell: bash

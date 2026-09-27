@@ -1,7 +1,8 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, type WriteStream } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { homedir, tmpdir } from "node:os";
+import { join, win32 } from "node:path";
 import { app } from "electron";
 import { serverPath } from "./path-env.js";
 
@@ -12,22 +13,60 @@ export interface DesktopPaths {
   userData: string;
   data: string;
   toolchain: string;
+  /** Scratch folder for the server's compile and flash jobs when the system temp folder can't be used (see asciiWorkRoot). */
+  temp?: string;
   logs: string;
   /** The user's login-shell PATH, resolved once at startup (see loginShellPath). */
   userPath?: string;
 }
 
+const ASCII = /^[\x20-\x7e]*$/;
+
+/**
+ * avr-gcc and avrdude are MinGW programs: on Windows they can't open a path with characters outside the system's ANSI
+ * code page, and the paths they print come back in that code page. A user name like "Bärry" or "沈巴瑞" puts such
+ * characters in the data folder (…\AppData\Roaming\ViBread) and the temp folder, and then no sketch compiles. In that
+ * case the toolchain and the compile/flash scratch folder live under %ProgramData%\ViBread\<id> instead, one per profile.
+ */
+export function asciiWorkRoot(userData: string, temp: string, env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string | undefined {
+  if (platform !== "win32" || (ASCII.test(userData) && ASCII.test(temp))) return undefined;
+  const base = env.ProgramData ?? env.ALLUSERSPROFILE ?? "C:\\ProgramData";
+  if (!ASCII.test(base)) return undefined;
+  const id = createHash("sha256").update(userData.toLowerCase()).digest("hex").slice(0, 12);
+  return win32.join(base, "ViBread", id);
+}
+
+/** asciiWorkRoot, if it can be created (a locked-down %ProgramData% keeps the folders in the profile, as before). */
+function usableWorkRoot(userData: string): string | undefined {
+  const root = asciiWorkRoot(userData, tmpdir(), process.env, process.platform);
+  if (!root) return undefined;
+  try {
+    mkdirSync(join(root, "temp"), { recursive: true });
+    return root;
+  } catch {
+    return undefined;
+  }
+}
+
 export function desktopPaths(): DesktopPaths {
   const runtime = app.isPackaged ? join(process.resourcesPath, "runtime") : join(app.getAppPath(), ".stage", "runtime");
   const userData = app.getPath("userData");
+  const work = usableWorkRoot(userData);
   return {
     runtime,
     node: join(runtime, "node", "bin", process.platform === "win32" ? "node.exe" : "node"),
     userData,
     data: join(userData, "data"),
-    toolchain: join(userData, "toolchain"),
+    toolchain: join(work ?? userData, "toolchain"),
+    ...(work ? { temp: join(work, "temp") } : {}),
     logs: join(userData, "logs"),
   };
+}
+
+/** Sets `name` in a child environment, replacing any other spelling of it (Windows variable names ignore case). */
+function setEnv(env: NodeJS.ProcessEnv, name: string, value: string): void {
+  for (const key of Object.keys(env)) if (key.toUpperCase() === name) delete env[key];
+  env[name] = value;
 }
 
 // Development-only variables that would change how the bundled Node or the server behave.
@@ -43,6 +82,11 @@ export function childEnv(paths: DesktopPaths, extra: Record<string, string | und
   env.DATA_DIR = paths.data;
   env.VIBREAD_ARDUINO_CLI = join(paths.toolchain, "bin", `arduino-cli${exe}`);
   env.VIBREAD_ARDUINO_CONFIG = join(paths.toolchain, "arduino", "arduino-cli.yaml");
+  if (paths.temp) {
+    mkdirSync(paths.temp, { recursive: true });
+    setEnv(env, "TEMP", paths.temp);
+    setEnv(env, "TMP", paths.temp);
+  }
   for (const [key, value] of Object.entries(extra)) {
     if (value === undefined) delete env[key];
     else env[key] = value;
