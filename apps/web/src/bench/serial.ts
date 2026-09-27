@@ -284,7 +284,7 @@ export function isStkSyncFailure(error: unknown): boolean {
 }
 
 export interface SerialFailure {
-  kind: "disconnect" | "busy" | "sync-timeout" | "signature" | "verify" | "stalled" | "not-open" | "other";
+  kind: "disconnect" | "busy" | "open-failed" | "sync-timeout" | "signature" | "verify" | "stalled" | "not-open" | "other";
   message: string;
   technical: string;
 }
@@ -300,7 +300,10 @@ export function classifySerialError(error: unknown): SerialFailure {
   const detail = detailOf(error);
   const technical = `${error instanceof Error ? `${name}: ${message}` : message}${detail ? ` (${detail})` : ""}`;
   if (name === "NetworkError" && /lost|disconnect/i.test(message)) return { kind: "disconnect", message: "The board connection was lost. Check the USB cable and power, then retry.", technical };
-  if (name === "InvalidStateError" || /already open|failed to open serial port/i.test(message)) return { kind: "busy", message: "Another app is using this USB port. Close the Arduino IDE serial monitor or another ViBread tab, then retry.", technical };
+  // Chrome's "Failed to open serial port" covers another app holding the port, a port the OS hasn't released yet, and a
+  // board that went away; "already open" (InvalidStateError) is a port this page or tab still holds.
+  if (/failed to open serial port/i.test(message)) return { kind: "open-failed", message: "The USB port would not open. Another app may be holding it (close the Arduino IDE serial monitor or another ViBread tab), or the board was unplugged — check the cable, then retry.", technical };
+  if (name === "InvalidStateError" || /already open/i.test(message)) return { kind: "busy", message: "This USB port is already open, maybe in another ViBread tab. Close that tab, then retry.", technical };
   if (isStkSyncFailure(error)) return { kind: "sync-timeout", message: "No answer from the bootloader at 115200 or 57600. Check the board type, press the board's reset button right after Retry flash, or try another USB cable.", technical };
   if (name === "STK500SignatureMismatchError") return { kind: "signature", message: "This chip is not the ATmega328P this board type expects, so nothing was written. Check the board type.", technical };
   if (name === "STK500VerifyError") return { kind: "verify", message: "The firmware was written but did not read back the same, so the board may not run it. Retry flash; if it repeats, try another USB cable.", technical };
