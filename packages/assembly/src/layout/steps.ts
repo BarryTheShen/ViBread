@@ -78,7 +78,7 @@ function partCallout(part: Part): string {
   if (part.module === "potentiometer") return "1× potentiometer — outer legs A/B, middle leg W";
   if (part.module === "buzzer-active") return "1× active buzzer — + long leg, − short leg";
   if (part.module === "buzzer-passive") return "1× passive buzzer — + leg, − leg";
-  return `1× ${MODULES[part.module].name}`;
+  return `1× ${partVisual(part).name}`;
 }
 
 /** "220 Ω resistor R1 (red-red-brown-gold)", "red LED LED1", "push button BTN1". */
@@ -89,7 +89,8 @@ function partName(part: Part): string {
   }
   // "yellow LED LED1", or with a catalogue variant "yellow 3 mm LED LED1".
   if (part.module === "led") return `${typeof part.params.color === "string" ? part.params.color : "red"} ${partVisual(part).name} ${part.id}`;
-  return `${partVisual(part).name.toLowerCase()} ${part.id}`;
+  // The part's own name as written ("HC-SR04 distance sensor U1", "RGB LED U2"): lower-casing it breaks acronyms.
+  return `${partVisual(part).name} ${part.id}`;
 }
 
 function capitalize(text: string): string {
@@ -111,7 +112,7 @@ function placementText(circuit: Circuit, part: Part, layout: Layout, earlier: Ea
     const landmark = holeLandmark(layout, placement.pins[leg.pin]!, earlier);
     return landmark ? [{ leg, landmark }] : [];
   }).sort((a, b) => rank[a.landmark.kind] - rank[b.landmark.kind])[0];
-  const where = (hole: string) => `hole ${hole}${found && found.landmark.kind !== "header" && found.landmark.hole === hole ? `, ${found.landmark.text}` : ""}`;
+  const where = (hole: string) => `${endpointText({ hole })}${found && found.landmark.kind !== "header" && found.landmark.hole === hole ? `, ${found.landmark.text}` : ""}`;
   const holes = legs.map((leg) => placement.pins[leg.pin]!);
   const name = capitalize(partName(part));
   let text: string;
@@ -169,7 +170,8 @@ function inventoryText(circuit: Circuit): string {
     const values = resistors.map((group) => `${group.count}× ${formatOhms(Number(group.part.params.ohms))}`).join(", ");
     items.push(`${total} resistor${total === 1 ? "" : "s"} (${values})`);
   }
-  for (const group of other) items.push(`${group.count} ${MODULES[group.part.module].name.toLowerCase()}${group.count === 1 ? "" : "s"}`);
+  // A catalogue part outside the library ("generic") is named for what it is, not "other part".
+  for (const group of other) items.push(`${group.count} ${group.part.module === "generic" ? partVisual(group.part).name : MODULES[group.part.module].name.toLowerCase()}${group.count === 1 ? "" : "s"}`);
   return `Find these parts: ${items.join(", ")}. Do not connect USB yet.`;
 }
 
@@ -310,7 +312,7 @@ function singleUnits(circuit: Circuit, layout: Layout, placedParts: string[], ta
 function copyText(layout: Layout, copy: Omit<RepeatCopy, "index" | "text">, index: number, colorOf: (jumper: Jumper) => string): string {
   const parts = copy.parts.map((id) => {
     const holes = Object.values(layout.placements.find((entry) => entry.part === id)!.pins);
-    return `${id} in holes ${holes.join(" and ")}`;
+    return `${id} in holes ${holes.length > 2 ? `${holes.slice(0, -1).join(", ")} and ${holes.at(-1)}` : holes.join(" and ")}`;
   });
   const wires = copy.jumpers.map((id) => {
     const jumper = layout.jumpers.find((entry) => entry.id === id)!;
@@ -555,7 +557,7 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
     placedParts.push(part.id);
     push({
       kind: "place",
-      title: `Insert ${part.id} — ${MODULES[part.module].name}`,
+      title: `Insert ${part.id} — ${part.module === "generic" ? partVisual(part).name : MODULES[part.module].name}`,
       text: placed.text,
       plug: "unplugged",
       adds: { parts: [part.id], jumpers: [] },
@@ -585,7 +587,7 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
   push({
     kind: "checkpoint",
     title: "Subsection checkpoint — plug in",
-    text: "Plug in USB for the assembled subsection. Run the continuity and component-specific checks, then unplug before changing anything.",
+    text: "Plug in USB with everything so far in place. ViBread checks every connection and tries each part, then tells you to unplug before you change anything.",
     plug: "plugged",
     adds: { parts: [], jumpers: [] },
     holes: [],
@@ -595,7 +597,7 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
   push({
     kind: "unplug",
     title: "Unplug USB before final review",
-    text: "Unplug USB. Compare every visible part and jumper with its labelled hole before final power-up.",
+    text: "Unplug USB. Check every part and wire against the hole names in the picture before the final power-up.",
     plug: "unplugged",
     adds: { parts: [], jumpers: [] },
     holes: [],

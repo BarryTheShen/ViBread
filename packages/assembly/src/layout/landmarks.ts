@@ -49,7 +49,14 @@ export function legName(circuit: Circuit, layout: Layout, partId: string, pin: s
   const pins = layout.placements.find((placement) => placement.part === partId)?.pins ?? {};
   const own = column(pins[pin] ?? "") ?? 0;
   const other = column(Object.entries(pins).find(([id]) => id !== pin)?.[1] ?? "") ?? 0;
-  return own === other ? "leg" : own < other ? "left leg" : "right leg";
+  if (own !== other) return own < other ? "left leg" : "right leg";
+  // Both legs in one column (a resistor across the channel, e15 and f15): upper and lower, by row letter.
+  const row = (hole: HoleId | undefined) => {
+    const parsed = hole ? parseHole(hole) : null;
+    return parsed?.kind === "terminal" ? "abcdefghij".indexOf(parsed.column) : parsed?.kind === "rail" ? (parsed.rail.startsWith("T") ? -1 : 10) : 0;
+  };
+  const [mine, theirs] = [row(pins[pin]), row(Object.entries(pins).find(([id]) => id !== pin)?.[1])];
+  return mine === theirs ? "leg" : mine < theirs ? "upper leg" : "lower leg";
 }
 
 /** Everything placed or wired before a step, with plain names. */
@@ -71,6 +78,9 @@ export function earlierItems(circuit: Circuit, layout: Layout, parts: string[], 
   return items;
 }
 
+/** The farthest a "N columns left/right of …" landmark reaches. */
+const NEAR_COLUMNS = 10;
+
 /**
  * The best landmark for one new hole, or undefined: same strip (a part leg first, then a wire end), then the same
  * column across the channel, then the nearest earlier piece on the same side.
@@ -91,7 +101,8 @@ export function holeLandmark(layout: Layout, hole: HoleId, earlier: Earlier[]): 
   if (across) return { kind: "across-channel", hole, ref: across.ref, text: `same column as ${across.label}, across the channel` };
   const sameSide = legsFirst.filter((item) => side(item.ref.hole) === side(hole) || parseHole(item.ref.hole)?.kind === "rail");
   const nearest = [...sameSide].sort((a, b) => Math.abs(column(a.ref.hole)! - mine) - Math.abs(column(b.ref.hole)! - mine))[0];
-  if (!nearest) return undefined;
+  // "45 columns left of the red wire's end" helps nobody find a hole: past a hand's width the hole name says it better.
+  if (!nearest || Math.abs(mine - column(nearest.ref.hole)!) > NEAR_COLUMNS) return undefined;
   const columns = mine - column(nearest.ref.hole)!;
   if (columns === 0) return { kind: "near", hole, ref: nearest.ref, columns, text: `in line with ${nearest.label}` };
   const count = Math.abs(columns);

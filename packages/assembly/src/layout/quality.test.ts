@@ -181,7 +181,7 @@ describe("repeat ×N build steps (issue #25)", () => {
     expect(repeat.landmarks).toHaveLength(4);
   });
 
-  it("draws the ×5 badge with ghosted copies on the first unit, and the badge with the checklist on the repeat step", () => {
+  it("draws the ×5 badge with ghosted copies on the first unit; the repeat step's checklist under the whole board, a one-line banner under the focus crop", () => {
     const [template, repeat] = building as [Step, Step];
     for (const focus of [false, true]) {
       const first = renderBreadboardSvg({ circuit: counter, layout, steps, upToStep: template.n, focus });
@@ -189,8 +189,22 @@ describe("repeat ×N build steps (issue #25)", () => {
       expect([...first.matchAll(/class="repeat-ghost" data-repeat-copy="(\d)"/g)].map((match) => match[1])).toEqual(["2", "3", "4", "5"]);
       const rest = renderBreadboardSvg({ circuit: counter, layout, steps, upToStep: repeat.n, focus });
       expect(rest).toContain(">×5 · 3 columns apart</text>");
-      expect([...rest.matchAll(/data-repeat-check="(\d)"/g)].map((match) => match[1])).toEqual(["2", "3", "4", "5"]);
+      // Each copy keeps its number and Arduino pin on the board in both views.
+      expect([...rest.matchAll(/class="ghost-label" data-repeat-copy="(\d)"/g)].map((match) => match[1])).toEqual(["1", "2", "3", "4", "5"]);
+      const checks = [...rest.matchAll(/data-repeat-check="(\d)"/g)].map((match) => match[1]);
+      if (focus) {
+        expect(checks).toEqual([]);
+        expect(rest).toContain('data-repeat-banner="4"');
+        expect(rest).toContain(">Repeat ×4 more · 3 columns right each time</text>");
+      } else {
+        expect(checks).toEqual(["2", "3", "4", "5"]);
+      }
     }
+    // The banner leaves the phone picture mostly board: under a sixth of its height (the drawn checklist took ~40 %).
+    const focused = renderBreadboardSvg({ circuit: counter, layout, steps, upToStep: repeat.n, focus: true });
+    const total = Number(/^<svg[^>]* viewBox="[^ ]+ [^ ]+ [^ ]+ ([^"]+)"/.exec(focused)![1]);
+    const scale = Number(/id="parts-panel" transform="translate\([^)]*\) scale\(([^)]+)\)"/.exec(focused)![1]);
+    expect((96 * scale) / total).toBeLessThan(1 / 6);
   });
 
   it("falls back to one step per part and wire when the copies are not regular", () => {
