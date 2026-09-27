@@ -14,6 +14,7 @@ import List from "@mui/material/List";
 import ListItemButton from "@mui/material/ListItemButton";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
+import TextField from "@mui/material/TextField";
 import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
@@ -26,6 +27,7 @@ import { getJson } from "../api/client.js";
 import { ProjectImportButton } from "../project/ProjectImportButton.js";
 import { WEB_VERSION } from "../version.js";
 import { useConnections, useMissions } from "../api/hooks.js";
+import { MissionActions, normalizeMissionTitle, useMissionActions, validateMissionTitle } from "../workspace/MissionActions.js";
 const COLLAPSED_KEY = "vibread.sidebar.collapsed";
 const SIDEBAR_WIDTH = 260;
 const COLLAPSED_WIDTH = 72;
@@ -98,36 +100,118 @@ function MissionItem({ mission, collapsed }: { mission: MissionSummary; collapse
   const statusLabel = (mission.phase === "BRIEF" || mission.phase === "CLARIFY" || mission.phase === "DESIGN")
     ? (mission.agentBusy ? "Designing…" : "Waiting for you")
     : dot.label;
-  const item = (
-    <ListItemButton
-      component={RouterLink}
-      to={`/m/${encodeURIComponent(mission.id)}`}
-      selected={active}
-      aria-label={`${mission.title} · ${statusLabel}`}
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(mission.title);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const actions = useMissionActions({ missionId: mission.id, title: mission.title, navigateAfterDelete: active });
+  const displayTitle = mission.title || "Untitled mission";
+  const mutationError = actions.rename.isError
+    ? actions.rename.error instanceof Error ? actions.rename.error.message : "Couldn't rename the mission"
+    : null;
+
+  const startRename = () => {
+    actions.rename.reset();
+    setDraft(mission.title);
+    setValidationError(null);
+    setEditing(true);
+  };
+  const cancelRename = () => {
+    actions.rename.reset();
+    setDraft(mission.title);
+    setValidationError(null);
+    setEditing(false);
+  };
+  const commitRename = () => {
+    const next = normalizeMissionTitle(draft);
+    const error = validateMissionTitle(next);
+    if (error) {
+      setValidationError(error);
+      return;
+    }
+    if (next === mission.title) {
+      cancelRename();
+      return;
+    }
+    setValidationError(null);
+    actions.rename.mutate(next, {
+      onSuccess: () => setEditing(false),
+    });
+  };
+
+  const item = editing ? (
+    <Box sx={{ px: collapsed ? 0.25 : 0.5, py: 0.25 }}>
+      <TextField
+        autoFocus
+        fullWidth
+        size="small"
+        value={draft}
+        error={Boolean(validationError || mutationError)}
+        helperText={validationError || mutationError || " "}
+        onChange={(event) => {
+          setDraft(event.target.value);
+          if (validationError) setValidationError(null);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter") {
+            event.preventDefault();
+            commitRename();
+          } else if (event.key === "Escape") {
+            event.preventDefault();
+            cancelRename();
+          }
+        }}
+        slotProps={{ htmlInput: { maxLength: 80, "aria-label": `Rename ${displayTitle}` } }}
+      />
+    </Box>
+  ) : (
+    <Box
       sx={{
-        minHeight: 42,
-        px: collapsed ? 1.5 : 1.75,
-        borderRadius: 2,
-        justifyContent: collapsed ? "center" : "flex-start",
-        color: "text.primary",
-        "&.Mui-selected": { bgcolor: "action.selected" },
-        "&.Mui-selected:hover": { bgcolor: "action.hover" },
+        position: "relative",
+        minWidth: 0,
+        "& .mission-actions-trigger": { opacity: 0, pointerEvents: "none" },
+        "&:hover .mission-actions-trigger, &:focus-within .mission-actions-trigger": { opacity: 1, pointerEvents: "auto" },
+        "@media (hover: none)": { "& .mission-actions-trigger": { opacity: 1, pointerEvents: "auto" } },
       }}
     >
-      <Box component="span" aria-hidden sx={{ color: `${dot.color}.main`, fontSize: 18, lineHeight: 1, width: collapsed ? "auto" : 22, textAlign: "center", flexShrink: 0 }}>
-        {dot.glyph}
-      </Box>
-      {!collapsed && (
-        <ListItemText
-          primary={mission.title || "Untitled mission"}
-          secondary={statusLabel}
-          slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.9rem" } }, secondary: { noWrap: true, sx: { color: "text.secondary", fontSize: "0.72rem" } } }}
-          sx={{ minWidth: 0, ml: 1 }}
-        />
-      )}
-    </ListItemButton>
+      <ListItemButton
+        component={RouterLink}
+        to={`/m/${encodeURIComponent(mission.id)}`}
+        selected={active}
+        aria-label={`${displayTitle} · ${statusLabel}`}
+        sx={{
+          minHeight: 42,
+          px: collapsed ? 1.5 : 1.75,
+          pr: collapsed ? 1.5 : 5.5,
+          borderRadius: 2,
+          justifyContent: collapsed ? "center" : "flex-start",
+          color: "text.primary",
+          "&.Mui-selected": { bgcolor: "action.selected" },
+          "&.Mui-selected:hover": { bgcolor: "action.hover" },
+        }}
+      >
+        <Box component="span" aria-hidden sx={{ color: `${dot.color}.main`, fontSize: 18, lineHeight: 1, width: collapsed ? "auto" : 22, textAlign: "center", flexShrink: 0 }}>
+          {dot.glyph}
+        </Box>
+        {!collapsed && (
+          <ListItemText
+            primary={displayTitle}
+            secondary={statusLabel}
+            slotProps={{ primary: { noWrap: true, sx: { fontSize: "0.9rem" } }, secondary: { noWrap: true, sx: { color: "text.secondary", fontSize: "0.72rem" } } }}
+            sx={{ minWidth: 0, ml: 1 }}
+          />
+        )}
+      </ListItemButton>
+      <MissionActions
+        missionId={mission.id}
+        title={mission.title}
+        actions={actions}
+        onRename={startRename}
+        buttonLabel={`Actions for ${displayTitle}`}
+        triggerSx={{ position: "absolute", right: collapsed ? 0 : 4, top: "50%", transform: "translateY(-50%)" }}
+      />
+    </Box>
   );
-  return collapsed ? <Tooltip title={`${mission.title} · ${statusLabel}`} placement="right">{item}</Tooltip> : item;
+  return collapsed ? <Tooltip title={`${displayTitle} · ${statusLabel}`} placement="right">{item}</Tooltip> : item;
 }
 
 function MissionGroup({ title, missions, collapsed }: { title: string; missions: MissionSummary[]; collapsed: boolean }) {

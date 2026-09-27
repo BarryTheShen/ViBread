@@ -6,6 +6,7 @@ import {
   createProjectFileService,
   PROJECT_MAX_UPLOAD_BYTES,
   ProjectFileError,
+  type ProjectFileService,
 } from "../services/project-file.js";
 
 interface WebUser {
@@ -45,9 +46,9 @@ function projectUpload(): RequestHandler {
   };
 }
 
-/** Mounts portable mission project export/import before the parameterised mission-owner middleware. */
-export function mountProjectFileRoutes(app: Express, ctx: AppContext): void {
-  const service = createProjectFileService({
+/** The project-file service wired to this server's stores; shared by the export/import and duplicate routes. */
+export function projectFileService(ctx: AppContext): ProjectFileService {
+  return createProjectFileService({
     store: ctx.store,
     messages: ctx.messages,
     machine: ctx.machine,
@@ -57,6 +58,11 @@ export function mountProjectFileRoutes(app: Express, ctx: AppContext): void {
     },
     log: ctx.log,
   });
+}
+
+/** Mounts portable mission project export/import before the parameterised mission-owner middleware. */
+export function mountProjectFileRoutes(app: Express, ctx: AppContext): void {
+  const service = projectFileService(ctx);
 
   app.get("/api/missions/:id/project", async (req, res) => {
     const user = await currentUser(ctx, res);

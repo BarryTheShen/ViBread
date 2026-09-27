@@ -20,6 +20,7 @@ import { applyCalibration, compileBenchFirmware, compileSketch, uploadCommand } 
 import { calibrationMacros, evaluateRun, planSelfTest } from "@vibread/bench";
 import { loadFaultDictionary } from "@vibread/tools";
 import { z } from "zod";
+import { projectFileService } from "./routes/project-file.js";
 import { runs } from "./db/schema.js";
 import { parseMyHardware } from "./services/hardware.js";
 import { SqlApprovalBroker } from "./services/approvals.js";
@@ -328,10 +329,27 @@ export function mountApi(app: Express, ctx: AppContext): void {
     if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
     res.json(toSummary(mission));
   });
+  router.post("/missions/:id/duplicate", async (req, res) => {
+    const missionId = String(req.params.id);
+    const mission = await ctx.store.getMission(missionId);
+    if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
+    // Built per request: mountApi runs before ctx.runtime is wired in some hosts (and tests mount with a bare context).
+    const projectFiles = projectFileService(ctx);
+    const project = await projectFiles.export(missionId);
+    const result = await projectFiles.import({
+      bytes: project.bytes,
+      ownerId: mission.ownerId,
+      fileName: project.fileName,
+      title: `${mission.title.slice(0, 80 - " (copy)".length).trimEnd()} (copy)`,
+      sourceLabel: `Made as a copy of “${mission.title}”`,
+    });
+    res.status(201).json(result);
+  });
   router.delete("/missions/:id", async (req, res) => {
     const missionId = String(req.params.id);
     const mission = await ctx.store.getMission(missionId);
     if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
+    await ctx.runtime.stop(missionId);
     (ctx.store as SqlMissionStore).deleteMission(missionId);
     res.json({ ok: true });
   });

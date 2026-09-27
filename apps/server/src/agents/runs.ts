@@ -442,6 +442,7 @@ export function createRunManager(
         prepared = await setup(run, input);
       } catch (error) {
         runs.delete(missionId);
+        resolveFinished({ messages: [], aborted: true, text: "", error: errorMessage(error) });
         debug.event(missionId, "agent", `design run couldn't start: ${errorMessage(error)}`.slice(0, 300), { runId: run.id, actor: actorForLog(input.actor), error: errorMessage(error) }, "warn");
         if (!(error instanceof ToolInputError)) await recordFailedStart(missionId, input, friendlyError(error)).catch((cause: unknown) => log.warn({ missionId, err: errorMessage(cause) }, "couldn't record the failed start"));
         throw error;

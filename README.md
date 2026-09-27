@@ -192,6 +192,7 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
    and everything the board reported). The view and design version are kept in the address (`?panel=…&rev=…`). The status
    dots show EECOM · GUIDO · FIDO · FAO · RETRO. **GO for build** (you are the Flight Director) is a human action from the
    web button or iMessage `GO`.
+   From the sidebar or the mission header's ⋯ menu, rename, duplicate, export, or delete a mission.
 3. **Build Mode on the phone** — scan the QR code in Build steps (`/b/<mission>`): one step at a time, focused picture,
    exact holes, plug state, "I did this", "Check with camera". After the inventory and the board-orientation steps comes
    a bare-board check: plug in just the Arduino, connect, flash the safe firmware and check its power before anything

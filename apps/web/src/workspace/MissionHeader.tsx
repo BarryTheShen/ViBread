@@ -1,14 +1,10 @@
 import CancelIcon from "@mui/icons-material/Cancel";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
-import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
-import DownloadIcon from "@mui/icons-material/Download";
 import DoneAllIcon from "@mui/icons-material/DoneAll";
-import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import HistoryIcon from "@mui/icons-material/History";
 import HourglassBottomIcon from "@mui/icons-material/HourglassBottom";
 import LinkOffIcon from "@mui/icons-material/LinkOff";
 import ListAltIcon from "@mui/icons-material/ListAlt";
-import MoreHorizIcon from "@mui/icons-material/MoreHoriz";
 import PhoneIphoneIcon from "@mui/icons-material/PhoneIphone";
 import RadioButtonUncheckedIcon from "@mui/icons-material/RadioButtonUnchecked";
 import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutlineOutlined";
@@ -21,31 +17,23 @@ import Button from "@mui/material/Button";
 import ButtonBase from "@mui/material/ButtonBase";
 import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
-import Dialog from "@mui/material/Dialog";
-import DialogActions from "@mui/material/DialogActions";
-import DialogContent from "@mui/material/DialogContent";
-import DialogTitle from "@mui/material/DialogTitle";
-import IconButton from "@mui/material/IconButton";
 import InputBase from "@mui/material/InputBase";
 import ListItemIcon from "@mui/material/ListItemIcon";
-import ListItemText from "@mui/material/ListItemText";
-import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
+import ListItemText from "@mui/material/ListItemText";
 import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { CONSOLE_IDS, CONSOLE_LABELS, type ConsoleId, type ConsoleReport } from "@vibread/core";
 import type { ReactElement } from "react";
 import { useState } from "react";
-import { Link as RouterLink, useNavigate } from "react-router";
-import { sendJson } from "../api/client.js";
-import { downloadProject } from "../project/projectFile.js";
-import { queryKeys, useBuildState, useConnections, useRevision, useStopAgent } from "../api/hooks.js";
+import { Link as RouterLink } from "react-router";
+import { useBuildState, useConnections, useRevision, useStopAgent, useTimeline } from "../api/hooks.js";
 import type { MissionHeaderProps, NextStep } from "../contracts.js";
 import { isRecord } from "../lib/guards.js";
-import { GoForBuildButton } from "./GoForBuild.js";
 import { nextStepOf } from "./nextStep.js";
+import { GoForBuildButton } from "./GoForBuild.js";
+import { MissionActions, useMissionActions, validateMissionTitle } from "./MissionActions.js";
 import { PhoneLinkDialog } from "./PhoneLink.js";
 
 /** Short names for the five status dots (the Apollo console name is in the tooltip). */
@@ -161,52 +149,29 @@ function NextStepButton({ step, props, onStop, stopping }: { step: NextStep; pro
 export function MissionHeader(props: MissionHeaderProps) {
   const { missionId, detail, onOpenPanel } = props;
   const m = detail.mission;
-  const qc = useQueryClient();
-  const navigate = useNavigate();
   const stop = useStopAgent(missionId);
+  const actions = useMissionActions({ missionId, title: m.title });
   const connections = useConnections();
+  const timeline = useTimeline(missionId);
+  const releasedWithOverride = m.releasedRevision !== undefined && (timeline.data ?? []).some((event) => event.kind === "release.override" && event.revision === m.releasedRevision);
   const released = m.releasedRevision !== undefined;
   const build = useBuildState(missionId, released);
   const releasedRevision = useRevision(missionId, m.releasedRevision);
   const step = nextStepOf(detail, build.data, releasedRevision.data?.results.bench);
   const claudeMissing = connections.data?.claude?.using === "none";
-  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
   const [phoneOpen, setPhoneOpen] = useState(false);
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(m.title);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [exporting, setExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
-  const rename = useMutation({
-    mutationFn: (next: string) => sendJson("PATCH", `/api/missions/${encodeURIComponent(missionId)}`, { title: next }),
-    onSettled: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.mission(missionId) });
-      void qc.invalidateQueries({ queryKey: queryKeys.missions });
-    },
-  });
-  const remove = useMutation({
-    mutationFn: () => sendJson("DELETE", `/api/missions/${encodeURIComponent(missionId)}`),
-    onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: queryKeys.missions });
-      navigate("/");
-    },
-  });
   const commitTitle = () => {
-    setEditing(false);
-    const next = title.trim().slice(0, 80);
-    if (next && next !== m.title) rename.mutate(next);
-    else setTitle(m.title);
-  };
-  const exportFile = async () => {
-    setExporting(true);
-    try {
-      await downloadProject(missionId, m.title);
-      setMenuAnchor(null);
-    } catch (error) {
-      setExportError(error instanceof Error ? error.message : String(error));
-    } finally {
-      setExporting(false);
+    const next = title.trim();
+    if (validateMissionTitle(next)) {
+      setTitle(m.title);
+      setEditing(false);
+      return;
     }
+    setEditing(false);
+    if (next !== m.title) actions.rename.mutate(next);
+    else setTitle(m.title);
   };
 
   return (
@@ -228,7 +193,7 @@ export function MissionHeader(props: MissionHeaderProps) {
                   setEditing(false);
                 }
               }}
-              inputProps={{ "aria-label": "Mission name", maxLength: 80 }}
+              slotProps={{ input: { "aria-label": "Mission name", maxLength: 80 } }}
               sx={{ typography: "h6", width: "100%" }}
             />
           ) : (
@@ -241,7 +206,7 @@ export function MissionHeader(props: MissionHeaderProps) {
                 sx={{ maxWidth: "100%", justifyContent: "flex-start", borderRadius: 1, px: 0.5, mx: -0.5 }}
               >
                 <Typography variant="h6" component="h1" noWrap>
-                  {rename.isPending ? title : m.title}
+                  {actions.rename.isPending ? title : m.title}
                 </Typography>
               </ButtonBase>
             </Tooltip>
@@ -267,70 +232,38 @@ export function MissionHeader(props: MissionHeaderProps) {
             />
           </Tooltip>
         )}
+        {releasedWithOverride && (
+          <Tooltip title="This build target bypassed one or more safety checks. See the mission timeline for details." describeChild>
+            <Chip color="warning" variant="outlined" size="small" label="Released with override" aria-label="Released with override" sx={{ flexShrink: 0 }} />
+          </Tooltip>
+        )}
         <NextStepButton step={step} props={props} onStop={() => stop.mutate()} stopping={stop.isPending} />
-        <IconButton aria-label="More mission actions" onClick={(e) => setMenuAnchor(e.currentTarget)}>
-          <MoreHorizIcon />
-        </IconButton>
-        <Menu anchorEl={menuAnchor} open={menuAnchor !== null} onClose={() => setMenuAnchor(null)}>
-          <MenuItem disabled={exporting} onClick={() => void exportFile()}>
-            <ListItemIcon>{exporting ? <CircularProgress size={18} /> : <DownloadIcon fontSize="small" />}</ListItemIcon>
-            <ListItemText primary={exporting ? "Preparing project file…" : "Export project (.vibread)"} secondary="Open it in ViBread on any computer" />
-          </MenuItem>
-          <MenuItem
-            onClick={() => {
-              setMenuAnchor(null);
-              onOpenPanel("bench");
-            }}
-          >
-            <ListItemIcon>
-              <UsbIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary="Open the bench" secondary="Flash and self-test on this laptop" />
-          </MenuItem>
-          <MenuItem
-            onClick={() => {
-              setMenuAnchor(null);
-              setPhoneOpen(true);
-            }}
-          >
-            <ListItemIcon>
-              <PhoneIphoneIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary="Phone link" secondary="QR code for Build Mode" />
-          </MenuItem>
-          <MenuItem
-            onClick={() => {
-              setMenuAnchor(null);
-              setTitle(m.title);
-              setEditing(true);
-            }}
-          >
-            <ListItemIcon>
-              <EditOutlinedIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary="Rename" />
-          </MenuItem>
-          <MenuItem
-            onClick={() => {
-              setMenuAnchor(null);
-              setConfirmDelete(true);
-            }}
-          >
-            <ListItemIcon>
-              <DeleteOutlinedIcon fontSize="small" color="error" />
-            </ListItemIcon>
-            <ListItemText primary="Delete mission" slotProps={{ primary: { sx: { color: "error.main" } } }} />
-          </MenuItem>
-        </Menu>
+        <MissionActions
+          missionId={missionId}
+          title={m.title}
+          actions={actions}
+          onRename={() => {
+            setTitle(m.title);
+            setEditing(true);
+          }}
+          buttonLabel="More mission actions"
+          extraItems={(closeMenu) => (
+            <>
+              <MenuItem onClick={() => { closeMenu(); onOpenPanel("bench"); }}>
+                <ListItemIcon><UsbIcon fontSize="small" /></ListItemIcon>
+                <ListItemText primary="Open the bench" secondary="Flash and self-test on this laptop" />
+              </MenuItem>
+              <MenuItem onClick={() => { closeMenu(); setPhoneOpen(true); }}>
+                <ListItemIcon><PhoneIphoneIcon fontSize="small" /></ListItemIcon>
+                <ListItemText primary="Phone link" secondary="QR code for Build Mode" />
+              </MenuItem>
+            </>
+          )}
+        />
       </Stack>
-      {rename.isError && (
-        <Alert severity="error" sx={{ mx: 2, mb: 1 }} onClose={() => rename.reset()}>
-          Couldn't rename the mission: {rename.error.message}
-        </Alert>
-      )}
-      {exportError && (
-        <Alert severity="error" sx={{ mx: 2, mb: 1 }} onClose={() => setExportError(null)}>
-          Couldn't export the project: {exportError}
+      {actions.rename.isError && (
+        <Alert severity="error" sx={{ mx: 2, mb: 1 }} onClose={() => actions.rename.reset()}>
+          Couldn't rename the mission: {actions.rename.error.message}
         </Alert>
       )}
       {detail.recording && (
@@ -346,23 +279,6 @@ export function MissionHeader(props: MissionHeaderProps) {
         </Alert>
       )}
       <PhoneLinkDialog missionId={missionId} open={phoneOpen} onClose={() => setPhoneOpen(false)} />
-      <Dialog open={confirmDelete} onClose={() => setConfirmDelete(false)}>
-        <DialogTitle>Delete “{m.title}”?</DialogTitle>
-        <DialogContent>
-          <Typography>The mission, its chat and its designs are removed. Your inventory stays as it is.</Typography>
-          {remove.isError && (
-            <Alert severity="error" sx={{ mt: 1.5 }}>
-              Couldn't delete: {remove.error.message}
-            </Alert>
-          )}
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setConfirmDelete(false)}>Keep it</Button>
-          <Button color="error" variant="contained" disabled={remove.isPending} onClick={() => remove.mutate()}>
-            {remove.isPending ? "Deleting…" : "Delete"}
-          </Button>
-        </DialogActions>
-      </Dialog>
     </Box>
   );
 }
