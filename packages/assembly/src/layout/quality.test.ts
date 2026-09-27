@@ -189,7 +189,7 @@ describe("repeat ×N build steps (issue #25)", () => {
     expect(repeat.landmarks).toHaveLength(4);
   });
 
-  it("draws the ×5 badge with ghosted copies on the first unit; the repeat step's checklist under the whole board, a one-line banner under the focus crop", () => {
+  it("draws the ×5 badge with ghosted copies on the first unit; the repeat step ends in a one-line banner under the whole board and the focus crop", () => {
     const [template, repeat] = building as [Step, Step];
     for (const focus of [false, true]) {
       const first = renderBreadboardSvg({ circuit: counter, layout, steps, upToStep: template.n, focus });
@@ -199,14 +199,10 @@ describe("repeat ×N build steps (issue #25)", () => {
       expect(rest).toContain(">×5 · 3 columns apart</text>");
       // Each copy keeps its number and Arduino pin on the board in both views.
       expect([...rest.matchAll(/class="ghost-label" data-repeat-copy="(\d)"/g)].map((match) => match[1])).toEqual(["1", "2", "3", "4", "5"]);
-      const checks = [...rest.matchAll(/data-repeat-check="(\d)"/g)].map((match) => match[1]);
-      if (focus) {
-        expect(checks).toEqual([]);
-        expect(rest).toContain('data-repeat-banner="4"');
-        expect(rest).toContain(">Repeat ×4 more · 3 columns right each time</text>");
-      } else {
-        expect(checks).toEqual(["2", "3", "4", "5"]);
-      }
+      // No drawn checklist in either view: the screens beside the picture have the tickable one (issue #25 follow-up).
+      expect([...rest.matchAll(/data-repeat-check="(\d)"/g)]).toEqual([]);
+      expect(rest).toContain('data-repeat-banner="4"');
+      expect(rest).toContain(">Repeat ×4 more · 3 columns right each time</text>");
     }
     // The banner leaves the phone picture mostly board: under a sixth of its height (the drawn checklist took ~40 %).
     const focused = renderBreadboardSvg({ circuit: counter, layout, steps, upToStep: repeat.n, focus: true });
