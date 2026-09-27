@@ -220,6 +220,22 @@ function solveNodes(
 }
 
 /**
+ * avr8js restarts a timer's prescaler on every TCCRnB write; the ATmega328P only changes it when the clock-select bits do.
+ * Arduino's tone() rewrites TCCR2B on every call, so a sketch that calls tone() in loop() while a key is held (a common
+ * button-piano pattern that sounds on the real board) was silent in the simulator.
+ */
+function keepPrescalerPhase(cpu: CPU, timer: AVRTimer, tccrb: number): void {
+  const write = cpu.writeHooks[tccrb];
+  if (!write) throw new Error(`avr8js timer has no TCCRB hook at 0x${tccrb.toString(16)}`);
+  const internals = timer as unknown as { updateDivider: boolean };
+  cpu.writeHooks[tccrb] = (value, oldValue, addr, mask) => {
+    const handled = write(value, oldValue, addr, mask);
+    if ((value & 0x7) === (oldValue & 0x7)) internals.updateDivider = false;
+    return handled;
+  };
+}
+
+/**
  * Instruction-level ATmega328P simulation plus the small, deterministic protocol-level
  * device model used by the scenario runner. The class intentionally keeps all browser-safe
  * code in this module; worker_threads is only imported by pool.ts.
@@ -290,6 +306,7 @@ export class SimMachine {
     const portD = new AVRIOPort(this.cpu, portDConfig);
     this.ports = { B: portB, C: portC, D: portD };
     this.timers = [new AVRTimer(this.cpu, timer0Config), new AVRTimer(this.cpu, timer1Config), new AVRTimer(this.cpu, timer2Config)];
+    this.timers.forEach((timer, i) => keepPrescalerPhase(this.cpu, timer, [timer0Config, timer1Config, timer2Config][i]!.TCCRB));
     this.adc = new AVRADC(this.cpu, adcConfig);
     this.adc.avcc = this.profile.vcc;
     this.adc.aref = this.profile.vcc;
@@ -482,15 +499,21 @@ export class SimMachine {
   }
 
 
-  toneFrequency(part: string, startCycle: number): number {
+  /**
+   * The pitch a tone() output played in [startCycle, now] and the share of that time it sounded: Hz from the typical
+   * (median) spacing of its rising edges, so a note that starts late or beeps on and off keeps its pitch; gaps longer than
+   * three periods are silence. `share` 0 with fewer than two edges.
+   */
+  toneInWindow(part: string, startCycle: number): { hz: number; share: number } {
     const elapsed = this.cpu.cycles - startCycle;
-    if (elapsed <= 0) return 0;
-    const rises = this.toneRises.get(part) ?? [];
-    let count = 0;
-    for (const cycle of rises) if (cycle >= startCycle && cycle <= this.cpu.cycles) count += 1;
-    return Math.max(0, (count * this.profile.clockHz) / elapsed);
+    const rises = (this.toneRises.get(part) ?? []).filter((cycle) => cycle >= startCycle && cycle <= this.cpu.cycles);
+    if (elapsed <= 0 || rises.length < 2) return { hz: 0, share: 0 };
+    const gaps = rises.slice(1).map((cycle, i) => cycle - rises[i]!);
+    const period = [...gaps].sort((a, b) => a - b)[Math.floor(gaps.length / 2)]!;
+    let sounding = 0;
+    for (const gap of gaps) sounding += gap <= 3 * period ? gap : period;
+    return { hz: this.profile.clockHz / period, share: clamp((sounding + period) / elapsed, 0, 1) };
   }
-
   /**
    * Live pitch of a tone() output (passive buzzer / generic): Hz from the spacing of the rising edges in the last
    * `windowMs`, 0 once the edges stop for three periods (noTone(), tone() duration over). Scans from the newest edge.
@@ -1050,11 +1073,15 @@ function executeStep(machine: SimMachine, step: ScenarioStep): { ok: boolean; me
     const { part, minHz, maxHz, windowMs } = step["expect-tone"];
     const start = machine.currentCycle;
     machine.run(windowMs);
-    const hz = machine.toneFrequency(part, start);
+    const { hz, share } = machine.toneInWindow(part, start);
     const low = minHz * TONE_LOW_FACTOR;
     const high = maxHz * TONE_HIGH_FACTOR;
-    if (hz >= low && hz <= high) return { ok: true, message: `${part} tone ${hz.toFixed(1)} Hz` };
-    return { ok: false, message: timelineFailure(machine, start, `${part} tone ${hz.toFixed(1)} Hz outside ${low.toFixed(1)}–${high.toFixed(1)} Hz (${minHz}–${maxHz} Hz ± 15%)`, part) };
+    const range = `${low.toFixed(1)}–${high.toFixed(1)} Hz (${minHz}–${maxHz} Hz ± ${Math.round((1 - TONE_LOW_FACTOR) * 100)}%)`;
+    const sounded = share >= STATE_MIN_SHARE;
+    if (sounded && hz >= low && hz <= high) return { ok: true, message: `${part} tone ${hz.toFixed(1)} Hz for ${(share * 100).toFixed(0)}% of the window` };
+    const seen = share === 0 ? "was silent" : !sounded ? `sounded for ${(share * 100).toFixed(0)}% of the window (at least ${Math.round(STATE_MIN_SHARE * 100)}% needed, anywhere in it) at ${hz.toFixed(1)} Hz` : `tone ${hz.toFixed(1)} Hz is outside the range`;
+    // No "(turned on at …)" note: a tone toggles the pin hundreds of times a second, so its last change says nothing.
+    return { ok: false, message: timelineFailure(machine, start, `${part} ${seen}; expected ${range}`) };
   }
   if ("expect-serial" in step) {
     const { contains, withinMs } = step["expect-serial"];

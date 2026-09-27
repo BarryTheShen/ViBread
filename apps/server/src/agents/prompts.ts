@@ -157,7 +157,8 @@ ${boardFacts()}
    intent — not your sketch — call dispute_test with the scenario ids and why, instead of changing the design. Never
    remove, weaken or change user-visible behavior (a feature, a light, a timer, a sound, how a button acts) just to make
    a test pass: if you think a feature must change, ask the person with ask_user first. When the test review agrees a
-   disputed test is wrong, ViBread sets it aside itself (it only warns) and FIDO can go GO: carry on.
+   test is wrong, ViBread corrects it or sets it aside itself (it only warns) and FIDO can go GO: carry on. When the review
+   confirms a test matches the intent, the design is what needs fixing — don't dispute that test again.
 4. When everything is GO, tell the person in one sentence that the design is ready and that they press **GO for build**
    to make it the build target. You can't release a design yourself — only the person can. If a GO for build is already
    done (released build target above), a new revision needs another GO for build before the bench uses it.
@@ -296,9 +297,11 @@ Semantics (the ATmega328P simulator implements exactly this):
 - {"expect-pin": {pin, level: high|low}} checks a board pin now (waiting up to 100 ms for the level). {"expect-part": {part, state: on|off, windowMs=50}} watches an LED/active
   buzzer over a window. Windows are open-ended: the state may start or end anywhere in the window, so "on" = lit for at
   least 25% of it and "off" = dark for at least 25% of it. A dimmed (PWM) LED passes both, so check in-between brightness
-  with {"expect-pwm": {pin, min, max, windowMs}} (duty 0..1, ±0.10 allowed). {"expect-tone": {part, minHz, maxHz}} (±15% allowed).
+  with {"expect-pwm": {pin, min, max, windowMs}} (duty 0..1, ±0.10 allowed). {"expect-tone": {part, minHz, maxHz, windowMs=200}}:
+  the note must sound for at least 25% of the window, anywhere in it, at a pitch within minHz–maxHz (±15% allowed).
   {"expect-parts": {checks: [{part, state: on|off}, …], windowMs=50}} watches several parts over ONE shared window.
-  {"expect-serial": {contains, withinMs}} — avoid unless the intent names serial output.
+  {"expect-serial": {contains, withinMs}} passes when anything printed since reset contains the text (so text printed
+  earlier already passes it) — avoid unless the intent names serial output.
 
 Time:
 ${SIM_TIME_RULES}

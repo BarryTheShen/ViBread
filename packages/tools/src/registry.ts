@@ -125,7 +125,13 @@ function designResult(revision: Revision, review?: ReviewOutcome) {
   const notes: string[] = [];
   if (review?.corrected.length) notes.push(`The test author corrected ${review.corrected.join(", ")} (they contradicted the intent) and re-ran them as revision ${revision.n}.`);
   if (review?.setAside.length) notes.push(`ViBread set aside ${review.setAside.join(", ")} (the test review didn't confirm ${review.setAside.length === 1 ? "it matches" : "they match"} the intent): ${review.setAside.length === 1 ? "it only warns" : "they only warn"} now, so carry on.`);
-  if (findings.some((f) => f.ruleId === "SIM-FAIL")) {
+  // A test the review just confirmed is the design's to fix: pointing at dispute_test again would send the agent round in a loop.
+  const failing = findings.flatMap((f) => (f.ruleId === "SIM-FAIL" && f.refs?.scenarios?.[0] ? [f.refs.scenarios[0]] : []));
+  const confirmed = failing.filter((id) => review?.reviews.some((r) => r.id === id && r.verdict === "design-wrong"));
+  if (confirmed.length) {
+    notes.push(`The test review confirmed ${confirmed.join(", ")} ${confirmed.length === 1 ? "matches" : "match"} the intent (see testReview): change the sketch or circuit so it does what the clause says — if that means changing a feature the person asked for, ask them with ask_user first.`);
+  }
+  if (failing.some((id) => !confirmed.includes(id))) {
     notes.push("If a failing test looks wrong rather than the design, call dispute_test — never remove or change user-visible behavior just to pass a test.");
   }
   const placement = placementOf(revision);
@@ -301,11 +307,20 @@ export function createToolRegistry(deps: {
       handler: async (ctx, input) => {
         const mission = await requireMission(store, ctx.missionId);
         const revision = await requireRevision(store, ctx.missionId, input.revision);
+        // The review records its result as a new revision built from this one: from an older revision that would bring
+        // back its circuit and tests over the newer design.
+        const latest = await requireRevision(store, ctx.missionId);
+        if (latest.n !== revision.n) throw new ToolInputError(`Revision ${revision.n} isn't the latest design (revision ${latest.n} is): dispute the failing tests of revision ${latest.n}, or leave out "revision".`);
         const failing = (revision.results.reports.find((r) => r.console === "FIDO")?.findings ?? []).flatMap((f) => (f.ruleId === "SIM-FAIL" ? (f.refs?.scenarios ?? []) : []));
         const disputed = input.scenarios.filter((id) => failing.includes(id));
         if (!disputed.length) throw new ToolInputError(`None of ${input.scenarios.join(", ")} is a failing simulation test on revision ${revision.n} (failing: ${failing.join(", ") || "none"}).`);
         const reviewed = await ops.reviewFailedTests(mission, revision, { only: disputed, dispute: input.reason, ...(ctx.signal ? { signal: ctx.signal } : {}) });
-        if (!reviewed.reviews.length) throw new ToolInputError("The test review isn't available right now (no independent test author, or these tests weren't written by it).");
+        if (!reviewed.reviews.length) {
+          throw new ToolInputError(
+            "The test review couldn't judge these tests (no independent test author is connected, they weren't written by it, or its answer couldn't be used), so they still count. " +
+              "Fix the other findings; if you're sure a test contradicts the intent, name it and say why in your reply — never change user-visible behavior just to pass it.",
+          );
+        }
         return designResult(reviewed.revision, reviewed);
       },
     }),

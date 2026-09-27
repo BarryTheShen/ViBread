@@ -113,6 +113,8 @@ describe("independent tests that contradict the intent (issue #16, whack-a-mole)
       expect.stringContaining("The test reviewer couldn't tell whether the test or the design is wrong"),
     ]);
     expect(result.summary).toContain("call dispute_test — never remove or change user-visible behavior just to pass a test");
+    // T1 was just confirmed: the agent is told to fix the design, not to dispute it again.
+    expect(result.summary).toContain("The test review confirmed T1 matches the intent");
   }, 180_000);
 
   it("the design agent can dispute a failing test instead of changing the design; the corrected tests pass", async () => {
@@ -151,6 +153,23 @@ describe("independent tests that contradict the intent (issue #16, whack-a-mole)
     expect(blocking[0]!.detail).toContain("The test reviewer confirmed this test matches the intent");
     expect(revisions.at(-1)!.suite!.scenarios.find((s) => s.id === "T1")!.setAside).toContain("The design agent disputed it");
     expect(revisions.at(-1)!.suite!.scenarios.find((s) => s.id === "T2")!.setAside).toBeUndefined();
+    // Only T2 (confirmed) still blocks: fix the design; no pointer back to dispute_test, which would loop.
+    expect(disputed.summary).toContain("The test review confirmed T2 matches the intent (see testReview): change the sketch or circuit");
+    expect(disputed.summary).not.toContain("dispute_test");
+  }, 180_000);
+
+  it("a dispute of a superseded revision is refused: it would bring back that revision's tests over the reviewed ones", async () => {
+    // r1 naive suite → the review corrects T1 and confirms T2 → r2. Disputing T2 on r1 would rebuild r3 from r1's suite (naive T1).
+    const stale: ScriptStep = { toolCalls: [{ name: "dispute_test", input: { revision: 1, scenarios: ["T2"], reason: "The off-windows moved the clock." } }] };
+    const { reply, revisions, reviewCalls } = await run([propose, stale, { text: "Done." }], () => [
+      { id: "T1", verdict: "test-wrong", reason: STACKED, scenario: corrected("T1") },
+      { id: "T2", verdict: "design-wrong", reason: "C1 says red lights at 1 s." },
+    ]);
+    const refused = reply.parts.find((p) => p.type === "tool-dispute_test") as { state: string; errorText?: string };
+    expect(refused.state).toBe("output-error");
+    expect(refused.errorText).toContain("Revision 1 isn't the latest design (revision 2 is)");
+    expect(reviewCalls()).toBe(1);
+    expect(revisions.map((r) => r.n)).toEqual([1, 2]);
   }, 180_000);
 
   it("a later revision keeps the scenarios of unchanged clauses; the author writes only for the changed clause", async () => {

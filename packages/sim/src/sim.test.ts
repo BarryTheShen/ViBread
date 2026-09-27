@@ -237,6 +237,53 @@ void loop() {
     directSession.run(200);
     expect(directSession.toneFrequency("BZ1", 50)).toBeCloseTo(440, -1);
   }, 120_000);
+  it("expect-tone is open-ended: a note that sounds for part of the window passes at its pitch; one that barely sounds, or at the wrong pitch, fails", async () => {
+    // A beeper plays 440 Hz 100 ms on, 100 ms off; a held piano key calls tone(8, 262) on every loop() pass (from t=130 ms),
+    // which re-writes TCCR2B each time — the real chip keeps its prescaler running, so it must keep sounding here too.
+    const beeper = `void setup() { pinMode(8, OUTPUT); }
+void loop() { tone(8, 440); delay(100); noTone(8); delay(100); }
+`;
+    const late = `void setup() { pinMode(8, OUTPUT); }
+void loop() { if (millis() >= 130) tone(8, 262); }
+`;
+    const circuit = {
+      ...moon.circuit,
+      title: "Tone window check",
+      parts: [{ id: "BZ1", module: "buzzer-passive" as const, params: {} }],
+      nets: [
+        { id: "D8", kind: "signal" as const, pins: [{ part: "board", pin: "D8" }, { part: "BZ1", pin: "P" }] },
+        { id: "GND", kind: "ground" as const, pins: [{ part: "board", pin: "GND" }, { part: "BZ1", pin: "N" }] },
+      ],
+      roles: [{ pin: "D8", mode: "OUTPUT" as const, part: "BZ1", purpose: "tone" }],
+    };
+    const hexOf = async (source: string) => {
+      const compiled = await compileSketch({ source, board: circuit.board.profile });
+      if (!compiled.ok || !compiled.hex) throw new Error(`tone sketch compile failed: ${compiled.log}`);
+      return compiled.hex;
+    };
+    const tone = (minHz: number, maxHz: number, windowMs = 200): Scenario => ({
+      id: "T1",
+      title: "tone",
+      clauses: ["C1"],
+      categories: ["normal"],
+      setup: {},
+      steps: [{ "expect-tone": { part: "BZ1", minHz, maxHz, windowMs } }],
+    });
+    const run = async (source: string, scenario: Scenario) => (await runScenario({ circuit: { ...circuit, sketch: { source } }, hex: await hexOf(source), scenario })).result;
+
+    // Beeping at 440 Hz half the time: the pitch is 440 Hz, not the 220 Hz a whole-window average gives.
+    expect((await run(beeper, tone(430, 450))).ok).toBe(true);
+    // The note starts 130 ms into a 200 ms window (35 % of it): still 262 Hz.
+    expect((await run(late, tone(255, 270))).ok).toBe(true);
+    // Wrong pitch still fails, with the pitch it really played.
+    const wrong = await run(late, tone(400, 420));
+    expect(wrong.ok).toBe(false);
+    expect(wrong.steps[0]!.message).toMatch(/BZ1 tone 26\d\.\d Hz is outside the range; expected 340\.0–483\.0 Hz/);
+    // A note that sounds for under 25 % of the window (the last 20 ms of 150) isn't "playing" in it.
+    const tail = await run(late, tone(255, 270, 150));
+    expect(tail.ok).toBe(false);
+    expect(tail.steps[0]!.message).toMatch(/^t=0–150 ms BZ1 sounded for 1\d% of the window \(at least 25% needed, anywhere in it\) at 262\.\d Hz; expected/);
+  }, 120_000);
   it("lights an LED whose cathode is on an INPUT_PULLUP key pin when pressed", async () => {
     const circuit = structuredClone(moon.circuit);
     circuit.title = "Key LED";
