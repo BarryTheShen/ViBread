@@ -242,7 +242,8 @@ export const MODULES: Record<ModuleKey, ModuleDef> = {
       { id: "N", name: "−", etype: "passive", polarity: "-" },
     ],
     params: emptyParams,
-    electrical: { coilOhms: 16, minSeriesOhms: 100 },
+    // 16 Ω coil + 100 Ω pulls 5.25 V / (16 + 95) Ω ≈ 47 mA, past the 40 mA pin maximum; 150 Ω (≈ 33 mA) is the smallest kit value that stays under it.
+    electrical: { coilOhms: 16, minSeriesOhms: 150 },
     sim: "buzzer-passive",
     footprint: { kind: "two-lead", pins: ["P", "N"], minSpan: 3, maxSpan: 3, preferredSpan: 3, polarized: true },
     selftest: "buzzer",

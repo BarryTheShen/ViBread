@@ -6,6 +6,7 @@ import { Engine, type RuleProperties } from "json-rules-engine";
 import {
   BOARD_PROFILES,
   boardPin,
+  formatOhms,
   ledVf,
   ledVfAssumed,
   modulePins,
@@ -136,21 +137,21 @@ export const ELECTRICAL_RULES: readonly RuleSpec[] = [
     fact: "curPinDesign",
     severity: "warning",
     title: "This Arduino pin is carrying more than its recommended current.",
-    fix: "Add a suitable series resistor, use a transistor/driver, or move the load to a separately powered rail.",
+    fix: "Raise the series resistor on this pin (the finding names the value), or drive the load through a transistor.",
   },
   {
     ruleId: "CUR-PIN-ABS",
     fact: "curPinAbs",
     severity: "error",
     title: "This Arduino pin would exceed its absolute current limit.",
-    fix: "Do not drive this load directly from the pin; add a driver stage and current limiting.",
+    fix: "Raise the series resistor on this pin to the value the finding names, or drive the load through a transistor.",
   },
   {
     ruleId: "CUR-VCC-GND",
     fact: "curVccGnd",
     severity: "error",
     title: "The Arduino power pins would carry too much total current.",
-    fix: "Reduce the loads or power the external loads from a properly rated supply with a common ground.",
+    fix: "Raise the LED resistors (for example 220 Ω → 470 Ω) so fewer milliamps flow, or light fewer loads from Arduino pins at once.",
   },
   {
     ruleId: "PWR-USB-FUSE",
@@ -174,6 +175,13 @@ export const ELECTRICAL_RULES: readonly RuleSpec[] = [
     fix: "Connect the LED anode (+, long leg) toward the driving pin and its cathode (−, short leg) toward GND.",
   },
   {
+    ruleId: "LED-CURRENT",
+    fact: "ledCurrent",
+    severity: "error",
+    title: "This LED's resistor is too small: the LED would carry more than its 30 mA maximum.",
+    fix: "Use a larger series resistor; 220 Ω is a safe value for a 5 V Arduino pin.",
+  },
+  {
     ruleId: "LED-DIM",
     fact: "ledDim",
     severity: "warning",
@@ -186,6 +194,13 @@ export const ELECTRICAL_RULES: readonly RuleSpec[] = [
     severity: "info",
     title: "This LED colour has no forward-voltage data, so a conservative assumption is being used.",
     fix: "Add Vf min, typical, and max values for this colour to make the current and brightness checks more precise.",
+  },
+  {
+    ruleId: "POT-ANALOG-PIN",
+    fact: "potAnalogPin",
+    severity: "error",
+    title: "This knob's middle leg goes to a pin that cannot read in-between values.",
+    fix: "Move the knob's middle leg (wiper) to an analog pin (A0–A5) and read it with analogRead().",
   },
   {
     ruleId: "BTN-PULLUP",
@@ -248,7 +263,7 @@ export const ELECTRICAL_RULES: readonly RuleSpec[] = [
     fact: "buzzerSeries",
     severity: "error",
     title: "This passive buzzer needs a series resistor.",
-    fix: "Add at least the module's minimum series resistor before the passive buzzer.",
+    fix: "Put a resistor of at least 150 Ω (270 Ω keeps the pin under 20 mA) between the Arduino pin and the passive buzzer's + leg.",
   },
   {
     ruleId: "BUZZER-ACTIVE-V",
@@ -364,6 +379,44 @@ function maxResistance(path: readonly ResistorInfo[]): number {
 function currentMa(volts: number, vf: number, resistance: number): number {
   return Math.max(0, ((volts - vf) / Math.max(resistance, 0.001)) * 1_000);
 }
+
+/** E12 multipliers: the resistor values sold in beginner kits (100, 120, 150, 180, 220, 270, 330, 390, 470, 560, 680, 820). */
+const E12 = [1.0, 1.2, 1.5, 1.8, 2.2, 2.7, 3.3, 3.9, 4.7, 5.6, 6.8, 8.2] as const;
+
+function e12Values(fromOhms: number): number[] {
+  const decade = 10 ** Math.floor(Math.log10(Math.max(fromOhms, 1)));
+  return [decade / 10, decade, decade * 10].flatMap((scale) => E12.map((m) => Math.round(m * scale * 100) / 100));
+}
+
+/** Smallest kit value that is at least `ohms`. */
+function kitOhmsAtLeast(ohms: number): number {
+  return e12Values(ohms).find((value) => value >= ohms - 1e-9) ?? Math.ceil(ohms);
+}
+
+/** Largest kit value that is at most `ohms`, or undefined below 1 Ω. */
+function kitOhmsAtMost(ohms: number): number | undefined {
+  if (!(ohms >= 1)) return undefined;
+  return e12Values(ohms).findLast((value) => value <= ohms + 1e-9);
+}
+
+/**
+ * Smallest kit resistor that keeps a series LED/coil branch at or under `limitMa` at the conservative corner (5.25 V,
+ * minimum Vf, resistor at the low end of its tolerance). `otherOhms` is fixed resistance already in the loop (a coil).
+ */
+function minSeriesOhmsFor(limitMa: number, vfMin: number, tolerancePct: number, otherOhms = 0): number {
+  const needed = ((VCC_MAX - vfMin) / (limitMa / 1_000) - otherOhms) / (1 - tolerancePct / 100);
+  return kitOhmsAtLeast(Math.max(1, needed));
+}
+
+/** The first board pin from `candidates` that no net uses yet (for "move it to …" fixes). */
+function freeBoardPin(circuit: Circuit, candidates: readonly string[]): string | undefined {
+  const used = new Set(circuit.nets.flatMap((net) => net.pins.filter((ref) => ref.part === "board").map((ref) => ref.pin)));
+  const board = BOARD_PROFILES[circuit.board.profile];
+  return candidates.find((pin) => !used.has(pin) && boardPin(board, pin) !== undefined);
+}
+
+const FREE_DIGITAL_PINS = ["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "A1", "A2", "A3"] as const;
+const FREE_ANALOG_PINS = ["A0", "A1", "A2", "A3", "A6", "A7", "A4", "A5"] as const;
 
 function modulePin(part: Part, id: string): ModulePin | undefined {
   return modulePins(part).find((pin) => pin.id === id);
@@ -570,10 +623,12 @@ function buttonFacts(
       return netHasRail(nets, other, "5V") || netHasRail(nets, other, "GND");
     }));
     const mode = role?.mode;
+    // A6/A7 on the Nano are ADC-only: INPUT_PULLUP there enables nothing, so the input still floats.
+    const internalPullup = mode === "INPUT_PULLUP" && boardPin(BOARD_PROFILES[circuit.board.profile], inputPin)?.digital !== false;
     const needsExternalPulldown = switchedRail === "5V" && !hasExternalPull;
     const floating = switchedRail !== "5V" && switchedRail !== "GND"
-      ? !hasExternalPull && mode !== "INPUT_PULLUP"
-      : switchedRail === "GND" && !hasExternalPull && mode !== "INPUT_PULLUP";
+      ? !hasExternalPull && !internalPullup
+      : switchedRail === "GND" && !hasExternalPull && !internalPullup;
     const groupRails = groupNets.map((group) => ({
       fiveV: group.some((net) => netHasRail(nets, net, "5V")),
       gnd: group.some((net) => netHasRail(nets, net, "GND")),
@@ -678,7 +733,8 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
       nets: dedupe([...(previous.refs?.nets ?? []), ...(data.refs?.nets ?? [])]),
       pins: dedupe([...(previous.refs?.pins ?? []), ...(data.refs?.pins ?? [])]),
     };
-    findings.set(ruleId, { ...previous, detail: detail.join("; "), refs });
+    const fix = previous.fix && data.fix && previous.fix !== data.fix ? `${previous.fix} ${data.fix}` : previous.fix ?? data.fix;
+    findings.set(ruleId, { ...previous, detail: detail.join("; "), refs, ...(fix ? { fix } : {}) });
   };
   for (const led of circuit.parts.filter((part) => part.module === "led")) {
     if (ledVfAssumed(led.params)) {
@@ -689,19 +745,21 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
       });
     }
   }
-  const addPinCurrent = (pin: string | undefined, current: number, refs: FindingRefs): void => {
+  const board = BOARD_PROFILES[circuit.board.profile];
+  const addPinCurrent = (pin: string | undefined, current: number, refs: FindingRefs, fix?: string): void => {
     if (!pin) return;
     currentByPin.set(pin, (currentByPin.get(pin) ?? 0) + current);
-    const boardSourcePin = boardPin(BOARD_PROFILES[circuit.board.profile], pin);
+    const boardSourcePin = boardPin(board, pin);
     if (!boardSourcePin || (boardSourcePin.kind !== "digital" && boardSourcePin.kind !== "analog")) return;
     const detail = `${pin} is planned at ${current.toFixed(2)} mA at the conservative maximum-current corner (5.25 V, minimum Vf, minimum resistor).`;
-    if (current > BOARD_PROFILES[circuit.board.profile].limits.pinDesignMa) {
-      addFinding("CUR-PIN-DESIGN", { severity: "warning", detail, refs });
+    if (current > board.limits.pinDesignMa) {
+      addFinding("CUR-PIN-DESIGN", { severity: "warning", detail, refs, ...(fix ? { fix } : {}) });
     }
-    if (current > BOARD_PROFILES[circuit.board.profile].limits.pinAbsMa) {
-      addFinding("CUR-PIN-ABS", { severity: "error", detail, refs });
+    if (current > board.limits.pinAbsMa) {
+      addFinding("CUR-PIN-ABS", { severity: "error", detail, refs, ...(fix ? { fix } : {}) });
     }
   };
+  const ledIfAbsMa = MODULES.led.electrical.ifAbsMa ?? 30;
 
   for (const branch of leds) {
     const refs: FindingRefs = {
@@ -709,10 +767,14 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
       nets: [branch.anodeNet, branch.cathodeNet, branch.source?.net].filter((net): net is string => Boolean(net)),
       pins: [branch.source?.pin ? `board.${branch.source.pin}` : "", `${branch.led.id}.A`, `${branch.led.id}.K`].filter(Boolean),
     };
+    const from = branch.source?.pin ?? "the 5 V pin";
+    const vf = ledVf(branch.led.params);
     if (!branch.resistorPath.length) {
+      const suggested = minSeriesOhmsFor(board.limits.pinDesignMa, vf.min, 5);
       addFinding("LED-RESISTOR", {
         severity: "error",
         detail: `${branch.led.id} has no series resistor on its LED branch.`,
+        fix: `Put a ${formatOhms(Math.max(220, suggested))} resistor between ${from} and ${branch.led.id}'s long leg (anode).`,
         refs,
       });
     }
@@ -725,11 +787,30 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
       continue;
     }
     if (branch.resistorPath.length) {
-      addPinCurrent(branch.source?.pin, branch.maxMa, refs);
+      const tolerancePct = branch.resistorPath[0]?.tolerancePct ?? 5;
+      const suggested = minSeriesOhmsFor(board.limits.pinDesignMa, vf.min, tolerancePct);
+      const present = branch.resistorPath.map((resistor) => `${resistor.part.id} (${formatOhms(resistor.ohms)})`).join(" + ");
+      const raiseFix = branch.resistorPath.length === 1
+        ? `Change ${present} to ${formatOhms(suggested)} or more for ${branch.led.id}.`
+        : `Raise ${present} to ${formatOhms(suggested)} or more in total for ${branch.led.id}.`;
+      addPinCurrent(branch.source?.pin, branch.maxMa, refs, raiseFix);
+      if (branch.maxMa > ledIfAbsMa) {
+        addFinding("LED-CURRENT", {
+          severity: "error",
+          detail: `${branch.led.id} (${String(branch.led.params.color ?? "red")}) would carry ${branch.maxMa.toFixed(2)} mA through ${present} at the conservative corner; LEDs are rated ${ledIfAbsMa} mA maximum.`,
+          fix: raiseFix,
+          refs,
+        });
+      }
       if (branch.brightMa < MAX_BRIGHTNESS_CURRENT_MA) {
+        const brightest = kitOhmsAtMost(((VCC_MIN - vf.max) / (MAX_BRIGHTNESS_CURRENT_MA / 1_000) - board.driverOhms.effective) / (1 + tolerancePct / 100));
+        const safe = brightest !== undefined && brightest >= suggested;
         addFinding("LED-DIM", {
           severity: "warning",
           detail: `${branch.led.id} is only ${branch.brightMa.toFixed(2)} mA at 4.75 V with a 45 Ω driver and maximum Vf.`,
+          fix: safe
+            ? `Change ${present} to about ${formatOhms(brightest)} (brighter, still under ${board.limits.pinDesignMa} mA).`
+            : `No single resistor makes ${branch.led.id} both bright and pin-safe; drive it through a transistor from ${from}.`,
           refs,
         });
       }
@@ -754,29 +835,52 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
         });
       }
     }
-    if (branch.part.module === "buzzer-passive" && branch.resistorPath.length && sumResistance(branch.resistorPath) < (electrical.minSeriesOhms ?? 0)) {
+    const minSeries = electrical.minSeriesOhms ?? 0;
+    const cleanSeries = minSeriesOhmsFor(board.limits.pinDesignMa, 0, 5, electrical.coilOhms ?? 0);
+    const buzzerFix = `Put a ${formatOhms(cleanSeries)} resistor between ${branch.source?.pin ?? "the pin"} and ${branch.part.id}'s + leg (at least ${formatOhms(minSeries)}).`;
+    if (branch.part.module === "buzzer-passive" && branch.resistorPath.length && sumResistance(branch.resistorPath) < minSeries) {
       addFinding("BUZZER-SERIES-R", {
         severity: "error",
-        detail: `${branch.part.id} has ${sumResistance(branch.resistorPath).toFixed(1)} Ω in series; it needs at least ${electrical.minSeriesOhms ?? 0} Ω.`,
+        detail: `${branch.part.id} has ${sumResistance(branch.resistorPath).toFixed(1)} Ω in series; it needs at least ${minSeries} Ω.`,
+        fix: buzzerFix,
         refs,
       });
     } else if (branch.part.module === "buzzer-passive" && !branch.resistorPath.length) {
       addFinding("BUZZER-SERIES-R", {
         severity: "error",
         detail: `${branch.part.id} has no series resistor; its ${electrical.coilOhms ?? 0} Ω coil would overload the pin.`,
+        fix: buzzerFix,
         refs,
       });
     }
-    addPinCurrent(branch.source?.pin, branch.maxMa, refs);
+    addPinCurrent(
+      branch.source?.pin,
+      branch.maxMa,
+      refs,
+      branch.part.module === "buzzer-passive"
+        ? buzzerFix
+        : `${branch.part.id} draws about ${electrical.currentMa ?? 30} mA: switch it through an NPN transistor (e.g. 2N2222 with a 1 kΩ base resistor) from ${branch.source?.pin ?? "the pin"}.`,
+    );
   }
 
   for (const button of buttons) {
     if (button.floating || button.needsExternalPulldown) {
+      const pin = button.inputPin || "the input pin";
+      // pinMode() takes 2 for D2 but A0 for A0.
+      const pinArg = /^D\d+$/.test(pin) ? pin.slice(1) : pin;
+      const noInternal = button.roleMode === "INPUT_PULLUP" && boardPin(board, button.inputPin)?.digital === false;
       addFinding("BTN-PULLUP", {
         severity: "error",
         detail: button.needsExternalPulldown
           ? `${button.button.id} switches ${button.inputPin} to 5 V but has no external pull-down resistor.`
-          : `${button.button.id} on ${button.inputPin || "an input"} has neither INPUT_PULLUP nor an external pull resistor.`,
+          : noInternal
+            ? `${button.button.id} is on ${button.inputPin}, which is analog-input only and has no internal pull-up, so INPUT_PULLUP does nothing.`
+            : `${button.button.id} on ${button.inputPin || "an input"} has neither INPUT_PULLUP nor an external pull resistor.`,
+        fix: button.needsExternalPulldown
+          ? `Add a 10 kΩ resistor from ${pin} to GND, or move ${button.button.id}'s other leg from 5 V to GND and use pinMode(${pinArg}, INPUT_PULLUP).`
+          : noInternal
+            ? `Move ${button.button.id} from ${pin} to ${freeBoardPin(circuit, FREE_DIGITAL_PINS) ?? "a D pin"} and use INPUT_PULLUP, or add a 10 kΩ resistor from ${pin} to 5 V.`
+            : `Set ${pin} to INPUT_PULLUP (pinMode(${pinArg}, INPUT_PULLUP)) with ${button.button.id}'s other leg on GND, or add a 10 kΩ pull-down resistor from ${pin} to GND.`,
         refs: {
           parts: [button.button.id],
           nets: [button.inputNet, button.switchedNet].filter((net): net is string => Boolean(net)),
@@ -835,7 +939,6 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
   const spiBad: string[] = [];
   const serialPins: string[] = [];
   const adcBad: string[] = [];
-  const board = BOARD_PROFILES[circuit.board.profile];
   for (const role of circuit.roles) {
     const pin = boardPin(board, role.pin);
     const purpose = role.purpose.toLowerCase();
@@ -852,10 +955,47 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
       if (!pin || pin.adc === undefined || info?.boardPins.includes("VIN")) adcBad.push(role.pin);
     }
   }
-  if (pwmBad.length) addFinding("PWM-PINS", { severity: "error", detail: `PWM roles use non-PWM pins: ${pwmBad.join(", ")}.`, refs: { pins: pwmBad.map((pin) => `board.${pin}`) } });
+  const potsOnDigital: { pot: string; pins: string[] }[] = [];
+  for (const pot of circuit.parts.filter((part) => part.module === "potentiometer")) {
+    const wiperNet = partPinNet(pinNets, pot.id, "W");
+    const pins = (wiperNet ? nets.get(wiperNet)?.boardPins ?? [] : []).filter((name) => {
+      const pin = boardPin(board, name);
+      if (!pin || (pin.kind !== "digital" && pin.kind !== "analog")) return false;
+      return pin.adc === undefined || roleByPin.get(name)?.mode !== "ANALOG_IN";
+    });
+    if (pins.length) potsOnDigital.push({ pot: pot.id, pins });
+  }
+  const freeAnalog = freeBoardPin(circuit, FREE_ANALOG_PINS);
+  for (const { pot, pins } of potsOnDigital) {
+    const target = pins.find((name) => boardPin(board, name)?.adc !== undefined) ?? freeAnalog ?? "A0";
+    addFinding("POT-ANALOG-PIN", {
+      severity: "error",
+      detail: `${pot}'s middle leg (wiper) is on ${pins.join(", ")}, read as a plain on/off input, so turning the knob gives only HIGH or LOW.`,
+      fix: `Move ${pot}'s middle leg to ${target}, give ${target} an ANALOG_IN role, and read it with analogRead(${target}).`,
+      refs: { parts: [pot], pins: pins.map((pin) => `board.${pin}`) },
+    });
+  }
+  if (pwmBad.length) {
+    const freePwm = freeBoardPin(circuit, ["D3", "D5", "D6", "D9", "D10", "D11"]);
+    addFinding("PWM-PINS", {
+      severity: "error",
+      detail: `PWM roles use non-PWM pins: ${pwmBad.join(", ")}.`,
+      fix: `Move ${pwmBad.join(", ")} to a PWM pin${freePwm ? ` such as ${freePwm}` : ""} (D3, D5, D6, D9, D10, or D11).`,
+      refs: { pins: pwmBad.map((pin) => `board.${pin}`) },
+    });
+  }
   if (i2cBad.length) addFinding("I2C-PINS", { severity: "error", detail: `I²C roles are on ${i2cBad.join(", ")} instead of A4/A5.`, refs: { pins: i2cBad.map((pin) => `board.${pin}`) } });
   if (spiBad.length) addFinding("SPI-PINS", { severity: "error", detail: `SPI roles are on ${spiBad.join(", ")} instead of D10–D13.`, refs: { pins: spiBad.map((pin) => `board.${pin}`) } });
-  if (serialPins.length) addFinding("SERIAL-USB", { severity: "warning", detail: `The sketch assigns ${serialPins.join(" and ")} to circuit roles while USB serial uses D0/D1.`, refs: { pins: serialPins.map((pin) => `board.${pin}`) } });
+  if (serialPins.length) {
+    const movable = circuit.roles.filter((role) => serialPins.includes(role.pin));
+    const target = freeBoardPin(circuit, FREE_DIGITAL_PINS) ?? "a free pin from D2 to D13";
+    addFinding("SERIAL-USB", {
+      severity: "warning",
+      detail: `The sketch assigns ${serialPins.join(" and ")} to circuit roles while USB serial uses D0/D1.`,
+      fix: `Move ${movable.map((role) => `${role.part} from ${role.pin}`).join(" and ")} to ${target}; D0/D1 carry uploads and USB serial.`,
+      refs: { pins: serialPins.map((pin) => `board.${pin}`) },
+    });
+  }
   if (adcBad.length) addFinding("ADC-RANGE", { severity: "error", detail: `Analog role ${adcBad.join(", ")} is not guaranteed to stay between 0 V and the ADC reference.`, refs: { pins: adcBad.map((pin) => `board.${pin}`) } });
 
   const shortNets = [...nets.values()].filter((net) => net.has5V && net.hasGnd).map((net) => net.id);
@@ -883,9 +1023,23 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
     if (branch.source && !currentByPin.has(branch.source.pin)) totalCurrentMa += branch.maxMa;
   }
   const plannedLoadMa = totalCurrentMa;
+  // The ATmega328P's 200 mA VCC/GND limit covers current its I/O pins source; loads fed straight from the board's
+  // 5 V header (rail LEDs, dividers, pots) bypass the chip and only count toward the USB fuse below.
+  const mcuPins = [...currentByPin.entries()].filter(([pin]) => {
+    const kind = boardPin(board, pin)?.kind;
+    return kind === "digital" || kind === "analog";
+  });
+  const mcuCurrentMa = mcuPins.reduce((sum, [, current]) => sum + current, 0);
   const limits = board.limits;
-  if (totalCurrentMa > limits.vccGndTotalMa) {
-    addFinding("CUR-VCC-GND", { severity: "error", detail: `The planned total is ${totalCurrentMa.toFixed(2)} mA; the MCU VCC/GND limit is ${limits.vccGndTotalMa} mA.`, refs: { pins: ["board.5V", "board.GND"] } });
+  if (mcuCurrentMa > limits.vccGndTotalMa) {
+    const perPin = mcuPins.length ? mcuCurrentMa / mcuPins.length : 0;
+    const perPinBudget = Math.min(limits.pinDesignMa, limits.vccGndTotalMa / Math.max(1, mcuPins.length));
+    addFinding("CUR-VCC-GND", {
+      severity: "error",
+      detail: `The Arduino pins together would source ${mcuCurrentMa.toFixed(2)} mA (${mcuPins.length} pins, about ${perPin.toFixed(1)} mA each at the conservative corner); the ATmega328P's VCC/GND limit is ${limits.vccGndTotalMa} mA.`,
+      fix: `Keep each of the ${mcuPins.length} loads under about ${Math.floor(perPinBudget)} mA: for red/yellow LEDs use ${formatOhms(minSeriesOhmsFor(perPinBudget, 1.8, 5))} or more (blue/white: ${formatOhms(minSeriesOhmsFor(perPinBudget, 2.8, 5))}), or power the extra loads through transistors from the 5 V pin.`,
+      refs: { pins: ["board.5V", "board.GND", ...mcuPins.map(([pin]) => `board.${pin}`)] },
+    });
   }
   if (plannedLoadMa > limits.usbFuseMa * 0.8) {
     addFinding("PWR-USB-FUSE", {
@@ -909,6 +1063,7 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
     findingData: findings,
     evidence: {
       totalCurrentMa: Number(totalCurrentMa.toFixed(3)),
+      mcuCurrentMa: Number(mcuCurrentMa.toFixed(3)),
       plannedLoadMa: Number(plannedLoadMa.toFixed(3)),
       railLoadsMa: Number(railLoadMa.toFixed(3)),
       pinCurrentsMa: Object.fromEntries([...currentByPin.entries()].map(([pin, value]) => [pin, Number(value.toFixed(3))])),
@@ -1046,9 +1201,16 @@ export function runFirmwareChecks(input: {
     }
     const expected = role.mode;
     const actual = observation.mode;
-    const compatible = expected === actual;
+    // A PWM_OUT role driven as a plain OUTPUT is still the same push-pull driver on the same load: the Servo library
+    // bit-bangs its pulse from a timer interrupt, and analogWrite(pin, 0 or 255) falls back to digitalWrite.
+    const bothDriven = (expected === "OUTPUT" || expected === "PWM_OUT") && (actual === "OUTPUT" || actual === "PWM_OUT");
+    const compatible = expected === actual || bothDriven;
     if (!compatible) {
-      findings.push({ console: "GUIDO", ruleId: "PIN-MODE-MISMATCH", severity: "error", title: "The sketch's pin mode does not match the circuit role.", detail: `${role.pin} is declared ${expected} in the circuit but simulation observed ${actual}.`, fix: `Configure ${role.pin} as ${expected} or update the circuit role to match the intended sketch.`, refs: { parts: [role.part], pins: [`board.${role.pin}`] } });
+      const pinArg = /^D\d+$/.test(role.pin) ? role.pin.slice(1) : role.pin;
+      const fix = expected === "ANALOG_IN"
+        ? `Read ${role.pin} with analogRead(${role.pin}) and remove any pinMode(${pinArg}, ${actual}) for it, or change the circuit role to ${actual}.`
+        : `Call pinMode(${pinArg}, ${expected === "PWM_OUT" ? "OUTPUT" : expected}) in setup() instead of ${actual}, or change the circuit role to ${actual}.`;
+      findings.push({ console: "GUIDO", ruleId: "PIN-MODE-MISMATCH", severity: "error", title: "The sketch's pin mode does not match the circuit role.", detail: `${role.pin} is declared ${expected} in the circuit but simulation observed ${actual}.`, fix, refs: { parts: [role.part], pins: [`board.${role.pin}`] } });
     }
   }
   for (const observation of input.pinModes) {
