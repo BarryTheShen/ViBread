@@ -2,7 +2,7 @@ import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter, once } from "node:events";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { WriteStream } from "node:fs";
-import { childEnv, killTree, openLog, spawnRuntime, type DesktopPaths } from "./runtime.js";
+import { childEnv, killTree, openLog, spawnRuntime, windowsDescendants, type DesktopPaths } from "./runtime.js";
 import { lanIPv4, pickPort } from "./network.js";
 
 export interface ServerInfo {
@@ -21,8 +21,9 @@ const MAX_RESTARTS = 5;
 const RESTART_WINDOW_MS = 120_000;
 
 /**
- * Supervises the server child (bundled Node + tsx + server-entry.ts): picks the port, waits for GET /api/me, logs to
- * logs/server.log, restarts it after a crash and kills the whole process tree on stop.
+ * Supervises the server child (bundled Node + tsx + server-entry.ts): picks the port, waits for the child's own
+ * VIBREAD_SERVER_READY line and then GET /api/me, logs to logs/server.log, restarts it after a crash and kills the whole
+ * process tree on stop. Start failures carry the end of the server's output, so the error box says what went wrong.
  * Events: "ready" (ServerInfo), "crashed" (message), "failed" (message: gave up restarting).
  */
 export class ServerProcess extends EventEmitter {
@@ -67,16 +68,42 @@ export class ServerProcess extends EventEmitter {
     this.write(`\n=== ${new Date().toISOString()} starting server on ${info.localUrl} (public ${info.publicUrl})\n`);
     const child = spawnRuntime(this.paths, "server-entry.ts", [], env);
     this.child = child;
-    child.stdout.on("data", (chunk: Buffer) => this.write(chunk));
-    child.stderr.on("data", (chunk: Buffer) => this.write(chunk));
+    // Only this child's ready line proves the port is ours: another program that grabbed it in the meantime could
+    // answer /api/me too, and the window would silently talk to it.
+    const { promise: announced, resolve: announce } = Promise.withResolvers<void>();
+    let output = "";
+    const take = (chunk: Buffer) => {
+      this.write(chunk);
+      output = (output + chunk.toString("utf8")).slice(-4_000);
+      if (new RegExp(`^VIBREAD_SERVER_READY port=${port}\\r?$`, "m").test(output)) announce();
+    };
+    child.stdout.on("data", take);
+    child.stderr.on("data", take);
     const { promise: exited, resolve: resolveExit } = Promise.withResolvers<string>();
     child.once("error", (error) => resolveExit(`could not start: ${error.message}`));
     child.once("exit", (code, signal) => resolveExit(`exited with ${signal ?? `code ${code}`}`));
     void exited.then((reason) => this.onExit(child, reason));
-    await Promise.race([
-      this.waitReady(info.localUrl),
-      exited.then((reason) => Promise.reject(new Error(`server ${reason} before it was ready (see logs/server.log)`))),
-    ]);
+    // The thrown error's own line ("Error: EEXIST: …") says what went wrong; a stack's last lines rarely do.
+    const failure = (reason: string) => {
+      const lines = output.trim().split(/\r?\n/);
+      const thrown = lines.findLast((line) => /^\s*(\w+Error|Error)\b.*:/.test(line) && !/^\s*at /.test(line));
+      const detail = thrown?.trim() ?? lines.slice(-8).join("\n");
+      return new Error(`The ViBread server ${reason}.${detail ? `\n\n${detail}` : ""}`);
+    };
+    const settled = new AbortController();
+    try {
+      await Promise.race([
+        announced.then(() => this.waitReady(info.localUrl, settled.signal)),
+        sleep(READY_TIMEOUT_MS, undefined, { signal: settled.signal }).then(() => Promise.reject(failure(`did not become ready within ${READY_TIMEOUT_MS / 1000} s`))),
+        exited.then((reason) => Promise.reject(failure(`${reason} before it was ready`))),
+      ]);
+    } catch (error) {
+      // A server that never became ready must not linger (it may still be migrating or hold the port).
+      if (child.exitCode === null && child.signalCode === null && child.pid !== undefined) killTree(child.pid);
+      throw error;
+    } finally {
+      settled.abort();
+    }
     this.info = info;
     this.emit("ready", info);
     return info;
@@ -88,6 +115,8 @@ export class ServerProcess extends EventEmitter {
     const child = this.child;
     if (!child || child.exitCode !== null || child.signalCode !== null) return;
     const exited = once(child, "exit");
+    // POSIX kills the server's process group; Windows has none, so list its children while the server still runs.
+    const orphans = process.platform === "win32" && child.pid !== undefined ? await windowsDescendants(child.pid) : [];
     try {
       child.stdin.write("shutdown\n");
       child.stdin.end();
@@ -95,8 +124,8 @@ export class ServerProcess extends EventEmitter {
       // stdin already closed
     }
     const timedOut = await Promise.race([exited.then(() => false), sleep(6_000, true)]);
-    // Grandchildren (schematic/PNG workers) exit with the server; the tree kill covers anything that did not.
-    if (child.pid !== undefined) killTree(child.pid);
+    // Grandchildren (schematic/PNG workers, a running arduino-cli/avrdude) may outlive the server; the tree kill ends them.
+    if (child.pid !== undefined) killTree(child.pid, orphans);
     if (timedOut) await Promise.race([exited, sleep(2_000)]);
   }
 
@@ -120,14 +149,13 @@ export class ServerProcess extends EventEmitter {
     }, 1_000 * this.crashes.length);
   }
 
-  private async waitReady(url: string): Promise<void> {
-    const deadline = Date.now() + READY_TIMEOUT_MS;
-    while (Date.now() < deadline) {
-      const ok = await fetch(`${url}/api/me`, { signal: AbortSignal.timeout(2_000) }).then((r) => r.ok, () => false);
+  /** Polls GET /api/me until it answers or `signal` (start()'s timeout or failure) ends the wait. */
+  private async waitReady(url: string, signal: AbortSignal): Promise<void> {
+    while (!signal.aborted) {
+      const ok = await fetch(`${url}/api/me`, { signal: AbortSignal.any([signal, AbortSignal.timeout(2_000)]) }).then((r) => r.ok, () => false);
       if (ok) return;
-      await sleep(250);
+      await sleep(250, undefined, { signal }).catch(() => undefined);
     }
-    throw new Error(`server did not answer ${url}/api/me within ${READY_TIMEOUT_MS / 1000} s`);
   }
 
   private write(chunk: string | Buffer): void {

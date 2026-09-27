@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, renameSync, statSync, type WriteStream } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -63,10 +63,57 @@ export function spawnRuntime(paths: DesktopPaths, script: string, args: string[]
   });
 }
 
-/** Kills a child and all of its descendants. */
-export function killTree(pid: number): void {
+/** One row of a process table; `started` is the creation time in ms (0 when the OS doesn't say). */
+export interface ProcessRow {
+  pid: number;
+  parent: number;
+  started: number;
+}
+
+/**
+ * Every pid below `root` in a process table, nearest first. Windows keeps a dead parent's pid in its children's rows
+ * and reuses pids, so a row only counts as a child when it started after its parent did.
+ */
+export function descendantsOf(root: number, table: readonly ProcessRow[]): number[] {
+  const started = new Map(table.map((row) => [row.pid, row.started]));
+  const found = new Set<number>();
+  const queue = [root];
+  for (let parent = queue.shift(); parent !== undefined; parent = queue.shift()) {
+    const parentStarted = started.get(parent) ?? 0;
+    for (const row of table) {
+      if (row.parent !== parent || row.pid === root || found.has(row.pid) || row.started < parentStarted) continue;
+      found.add(row.pid);
+      queue.push(row.pid);
+    }
+  }
+  return [...found];
+}
+
+/**
+ * Windows only: the processes currently descended from `pid` (arduino-cli, avrdude, schematic/PNG workers). Windows
+ * has no process groups and `taskkill /T` walks the tree from a live root, so once the server has exited its
+ * children can't be found any more: collect them while it still runs. Resolves [] when PowerShell is unavailable.
+ */
+export function windowsDescendants(pid: number): Promise<number[]> {
+  const powershell = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const script =
+    'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId) $($_.ParentProcessId) $(if ($_.CreationDate) { ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() } else { 0 })" }';
+  const { promise, resolve } = Promise.withResolvers<number[]>();
+  execFile(powershell, ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, timeout: 5_000, encoding: "utf8" }, (_error, stdout) => {
+    const table = (stdout ?? "").split(/\r?\n/).flatMap((line): ProcessRow[] => {
+      const [child, parent, started] = line.trim().split(/\s+/).map(Number);
+      return Number.isInteger(child) && Number.isInteger(parent) ? [{ pid: child, parent, started: started || 0 }] : [];
+    });
+    resolve(descendantsOf(pid, table));
+  });
+  return promise;
+}
+
+/** Kills a child and all of its descendants; on Windows also `orphans` collected earlier with windowsDescendants. */
+export function killTree(pid: number, orphans: readonly number[] = []): void {
   if (process.platform === "win32") {
-    spawn("taskkill", ["/pid", String(pid), "/T", "/F"], { windowsHide: true, stdio: "ignore" }).on("error", () => {});
+    const pids = [pid, ...orphans].flatMap((each) => ["/pid", String(each)]);
+    spawn("taskkill", [...pids, "/T", "/F"], { windowsHide: true, stdio: "ignore" }).on("error", () => {});
     return;
   }
   try {
