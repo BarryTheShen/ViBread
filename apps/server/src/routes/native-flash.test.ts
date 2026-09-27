@@ -45,7 +45,11 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-describe("native flash routes", () => {
+// The fake CLI is a shebang script spawned without a shell, exactly as the real arduino-cli is. Windows can't execute a
+// shebang file (the spawn fails with ENOENT, which reads as toolchain_missing), so these process-boundary tests run on
+// Linux and macOS; the classification and argument building they rely on are covered on every OS by
+// services/native-flash.test.ts.
+describe.skipIf(process.platform === "win32")("native flash routes", () => {
   let running: RunningServer;
   let base: string;
   let missionId: string;
