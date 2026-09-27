@@ -223,6 +223,83 @@ export const BOARD_PROFILES: Record<BoardProfileId, BoardProfile> = {
   "nano-atmega328p-old-5v": NANO_OLD,
 };
 
+/**
+ * Physical board variants you can own (issue #23). Each maps to the board profile that designs, compiles and flashes
+ * for it; a variant only adds what the person sees (USB chip, markings) and how to tell it apart in a photo.
+ */
+export const BOARD_VARIANT_IDS = ["uno-r3-genuine", "uno-r3-ch340", "nano-new", "nano-old"] as const;
+export type BoardVariantId = (typeof BOARD_VARIANT_IDS)[number];
+
+export interface BoardVariant {
+  id: BoardVariantId;
+  /** The profile missions and circuits use for this board. */
+  profile: BoardProfileId;
+  name: string;
+  /** Step wording: "your Uno R3 (CH340)". */
+  shortName: string;
+  /** USB-to-serial chip next to the USB socket. */
+  usbChip: string;
+  /** USB IDs this variant usually shows in the port chooser (display only; flashing uses the profile). */
+  usb: UsbId[];
+  /** One sentence telling the vision model how this board looks in a photo. */
+  photoHint: string;
+  /** How a person tells it apart from the other variants. */
+  identify: string[];
+  /** False when a photo alone can't separate it from a sibling variant (old vs new Nano bootloader). */
+  photoDistinct: boolean;
+}
+
+export const BOARD_VARIANTS: Record<BoardVariantId, BoardVariant> = {
+  "uno-r3-genuine": {
+    id: "uno-r3-genuine",
+    profile: "uno-r3-atmega328p-5v",
+    name: "Arduino Uno R3 (genuine, ATmega16U2 USB chip)",
+    shortName: "Uno R3",
+    usbChip: "ATmega16U2",
+    usb: UNO_R3.usb.filter((id) => id.vid === 0x2341 || id.vid === 0x2a03),
+    photoHint: "A teal Arduino Uno with the Arduino logo and 'UNO' printed, a small square ATmega16U2 chip beside the square USB-B socket, and a long socketed ATmega328P.",
+    identify: ["Arduino logo and 'UNO' printed on the board", "small square chip (ATmega16U2) next to the USB socket", "shows as 'Arduino Uno' when plugged in"],
+    photoDistinct: true,
+  },
+  "uno-r3-ch340": {
+    id: "uno-r3-ch340",
+    profile: "uno-r3-atmega328p-5v",
+    name: "Uno R3 compatible (CH340 USB chip)",
+    shortName: "Uno R3 (CH340)",
+    usbChip: "CH340G",
+    usb: CLONE_USB.filter((id) => id.vid === 0x1a86),
+    photoHint: "An Uno-shaped board (often blue or black, no Arduino logo) with a rectangular chip marked CH340G beside the USB socket, sometimes a tiny square ATmega328P instead of the long one.",
+    identify: ["rectangular chip marked 'CH340' or 'CH340G' near the USB socket", "usually no Arduino logo", "shows as 'USB-SERIAL CH340' when plugged in"],
+    photoDistinct: true,
+  },
+  "nano-new": {
+    id: "nano-new",
+    profile: "nano-atmega328p-5v",
+    name: "Arduino Nano (new bootloader)",
+    shortName: "Nano",
+    usbChip: "CH340G or FT232RL",
+    usb: NANO.usb,
+    photoHint: "A small narrow board about 4.5 cm long with a mini- or micro-USB socket at one end and two rows of 15 pins, marked 'Nano' or with pin labels D2…D13.",
+    identify: ["small board with two rows of 15 pins", "mini-USB or micro-USB socket at one end", "boards bought after 2018 almost always have the new bootloader"],
+    photoDistinct: false,
+  },
+  "nano-old": {
+    id: "nano-old",
+    profile: "nano-atmega328p-old-5v",
+    name: "Arduino Nano (old bootloader)",
+    shortName: "Nano (old bootloader)",
+    usbChip: "CH340G or FT232RL",
+    usb: NANO_OLD.usb,
+    photoHint: "Looks exactly like a new-bootloader Nano: a small narrow board with two rows of 15 pins and a mini-USB socket.",
+    identify: ["looks the same as the new-bootloader Nano; a photo can't tell them apart", "if uploading to 'Nano' fails and 'Nano (old bootloader)' works, it's this one"],
+    photoDistinct: false,
+  },
+};
+
+export function isBoardVariantId(value: unknown): value is BoardVariantId {
+  return typeof value === "string" && (BOARD_VARIANT_IDS as readonly string[]).includes(value);
+}
+
 export function boardPin(profile: BoardProfile, name: BoardPinName): BoardPin | undefined {
   return profile.pins.find((p) => p.name === name);
 }

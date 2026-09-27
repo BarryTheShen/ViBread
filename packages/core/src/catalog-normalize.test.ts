@@ -140,7 +140,7 @@ describe("mission inventory conversion", () => {
       {
         module: "potentiometer",
         count: 1,
-        params: { ohms: 10_000 },
+        params: { variant: "trimmer", ohms: 10_000 },
         label: "Trimmer potentiometer (modelled as Knob (potentiometer))",
       },
       expect.objectContaining({ module: "generic", count: 1, label: "Tilt switch", params: { role: "digital-sensor", description: type("tilt-switch").description }, pinout: expect.any(Array) }),

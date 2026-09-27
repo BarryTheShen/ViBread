@@ -16,6 +16,7 @@ import Typography from "@mui/material/Typography";
 import { QRCodeSVG } from "qrcode.react";
 import type { CatalogView, ScanItem } from "@vibread/core";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isCameraContextAvailable, isCameraSecure, useCamera } from "./useCamera.js";
 import { useConnections } from "../api/hooks.js";
 import { useAcceptScan, useAnalyzeScan, useCreateScan, useScan, useUploadScanPhoto } from "../api/inventory.js";
 import { cameraErrorMessage, scanErrorMessage, scanViewErrorMessage } from "./scanErrors.js";
@@ -29,13 +30,8 @@ export interface ScanDialogProps {
   onCreateType(item: ScanItem): void;
 }
 
-function isCameraContextAvailable(): boolean {
-  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return false;
-  if (window.isSecureContext) return true;
-  return window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
-}
-
-function phoneLink(phoneUrl: string | undefined, scanId: string, pairing: string | undefined): string {
+/** The phone page for a scan (`/scan/:id`) on the address the phone can reach, with the pairing query; `extra` adds query params. */
+export function phoneLink(phoneUrl: string | undefined, scanId: string, pairing: string | undefined, extra?: Record<string, string>): string {
   let origin = window.location.origin;
   if (phoneUrl) {
     try {
@@ -44,12 +40,14 @@ function phoneLink(phoneUrl: string | undefined, scanId: string, pairing: string
       // Keep the current origin when an older server sends an invalid phone URL.
     }
   }
-  const query = pairing?.replace(/^\?/, "");
+  const query = [pairing?.replace(/^\?/, ""), extra ? new URLSearchParams(extra).toString() : ""].filter(Boolean).join("&");
   return `${origin}/scan/${encodeURIComponent(scanId)}${query ? `?${query}` : ""}`;
 }
 
-function blobFromCanvas(canvas: HTMLCanvasElement): Promise<Blob | null> {
-  return new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.9));
+/** The pairing query the server hands out for phone links (older servers send none). */
+export function phonePairQuery(data: unknown): string | undefined {
+  if (typeof data !== "object" || data === null || !("phonePairQuery" in data)) return undefined;
+  return typeof data.phonePairQuery === "string" ? data.phonePairQuery : undefined;
 }
 
 export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }: ScanDialogProps) {
@@ -61,15 +59,12 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
   const analyze = useAnalyzeScan(scanId);
   const accept = useAcceptScan(scanId);
   const inputRef = useRef<HTMLInputElement>(null);
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const streamRef = useRef<MediaStream | null>(null);
+  const camera = useCamera();
+  const { videoRef, streamRef, open: cameraOpen, setOpen: setCameraOpen, ready: cameraReady, error: cameraError } = camera;
   const [uploading, setUploading] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   const [analysisFailure, setAnalysisFailure] = useState(false);
-  const [cameraOpen, setCameraOpen] = useState(false);
-  const [cameraReady, setCameraReady] = useState(false);
-  const [cameraError, setCameraError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) {
@@ -80,46 +75,14 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
       setUploadedFiles([]);
       setAnalysisFailure(false);
       setCameraOpen(false);
-      setCameraError(null);
     }
   }, [open]);
 
-  useEffect(() => {
-    if (!cameraOpen) {
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      setCameraReady(false);
-      return;
-    }
-    let disposed = false;
-    setCameraError(null);
-    setCameraReady(false);
-    void navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false }).then((stream) => {
-      if (disposed) {
-        stream.getTracks().forEach((track) => track.stop());
-        return;
-      }
-      streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
-      setCameraReady(true);
-    }).catch((error: unknown) => setCameraError(cameraErrorMessage(error, window.isSecureContext || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1")));
-    return () => {
-      disposed = true;
-      streamRef.current?.getTracks().forEach((track) => track.stop());
-      streamRef.current = null;
-      setCameraReady(false);
-    };
-  }, [cameraOpen]);
-
-  const pairing = useMemo(() => {
-    const data: unknown = connections.data;
-    if (typeof data !== "object" || data === null || !("phonePairQuery" in data)) return undefined;
-    return typeof data.phonePairQuery === "string" ? data.phonePairQuery : undefined;
-  }, [connections.data]);
+  const pairing = useMemo(() => phonePairQuery(connections.data), [connections.data]);
   const scanLink = scanId ? phoneLink(connections.data?.phoneUrl, scanId, pairing) : "";
   const cameraAvailable = isCameraContextAvailable();
   const claudeUnavailable = Boolean(connections.data?.claude && connections.data.claude.using === "none" && !connections.data.claude.connected);
-  const cameraSecure = window.isSecureContext || window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+  const cameraSecure = isCameraSecure();
 
   const ensureScan = () => {
     if (scanId) return;
@@ -153,15 +116,9 @@ export function ScanDialog({ open, catalog, onClose, onTypeParts, onCreateType }
   };
 
   const capturePhoto = async () => {
-    const video = videoRef.current;
-    if (!video || video.videoWidth === 0 || !scanId) return;
-    const canvas = document.createElement("canvas");
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    canvas.getContext("2d")?.drawImage(video, 0, 0, canvas.width, canvas.height);
-    const blob = await blobFromCanvas(canvas);
-    if (!blob) return;
-    await uploadFiles([new File([blob], `camera-${Date.now()}.jpg`, { type: "image/jpeg" })]);
+    if (!scanId) return;
+    const file = await camera.capture();
+    if (file) await uploadFiles([file]);
   };
 
   const reset = () => {

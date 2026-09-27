@@ -8,7 +8,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import type { ScanItem } from "@vibread/core";
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router";
+import { useNavigate, useParams, useSearchParams } from "react-router";
 import { useAcceptScan, useAnalyzeScan, useCatalog, useScan, useUploadScanPhoto } from "../api/inventory.js";
 import { scanErrorMessage, scanViewErrorMessage } from "./scanErrors.js";
 import { ScanReview } from "./ScanReview.js";
@@ -21,6 +21,8 @@ interface PhonePhoto {
 
 export function PhoneScanPage() {
   const { scanId = "" } = useParams<{ scanId: string }>();
+  // "Identify from a photo" on the laptop links here with ?hardware=<kind>: the photo is for that, not a parts list.
+  const hardware = useSearchParams()[0].get("hardware");
   const navigate = useNavigate();
   const catalog = useCatalog();
   const scan = useScan(scanId);
@@ -66,6 +68,31 @@ export function PhoneScanPage() {
   }
 
   const current = scan.data;
+  if (hardware) {
+    const sent = photos.some((photo) => photo.status === "uploaded");
+    return (
+      <PhoneFrame>
+        <Stack spacing={2.5}>
+          <Stack spacing={0.5}>
+            <Typography variant="h1" sx={{ fontSize: "1.8rem" }}>Photo of your {hardware === "board" ? "Arduino board" : hardware}</Typography>
+            <Typography color="text.secondary">{hardware === "breadboard" ? "Take it from above so the row numbers and the red and blue rail lines show." : hardware === "board" ? "Take it from above with the chip next to the USB socket in view." : "One part on plain paper, close up, legs visible."}</Typography>
+          </Stack>
+          <Button component="label" variant="contained" size="large" startIcon={<CameraAltOutlinedIcon />} sx={{ minHeight: 58, fontSize: "1.05rem" }}>
+            {sent ? "Take another photo" : "Take photo"}
+            <input hidden type="file" accept="image/*" capture="environment" onChange={(event) => void addPhotos(Array.from(event.target.files ?? []))} />
+          </Button>
+          {photos.map((photo) => (
+            <Box key={photo.id} sx={{ position: "relative" }}>
+              <Box component="img" src={photo.url} alt="Your photo" sx={{ width: "100%", maxHeight: 280, objectFit: "contain", borderRadius: 1, display: "block", opacity: photo.status === "uploading" ? 0.55 : 1 }} />
+              {photo.status === "uploading" ? <LinearProgress sx={{ position: "absolute", bottom: 0, left: 0, right: 0 }} /> : null}
+            </Box>
+          ))}
+          {uploadError ? <Alert severity="error">{uploadError}</Alert> : null}
+          {sent ? <Alert severity="success">Sent. Your laptop shows what ViBread thinks it is — confirm it there.</Alert> : null}
+        </Stack>
+      </PhoneFrame>
+    );
+  }
   return (
     <PhoneFrame>
       <Stack spacing={2.5}>

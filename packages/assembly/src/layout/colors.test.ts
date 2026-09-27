@@ -83,8 +83,8 @@ describe("builder wire-colour overrides (issue #15)", () => {
 
   it("writes 'an' before colour names that start with a vowel", () => {
     const steps = buildSteps(moon, layout, { wireColors: jumperColors(moon, layout, { [`wire:${d4.id}`]: "orange" }) });
-    expect(steps.steps.find((step) => step.adds.jumpers.includes(d4.id))!.text).toContain("Connect an orange wire from");
-    expect(steps.steps.find((step) => step.kind === "rails")!.text).toContain("connect a red wire from");
+    expect(steps.steps.find((step) => step.adds.jumpers.includes(d4.id))!.text).toMatch(/^An orange wire\b/);
+    expect(steps.steps.find((step) => step.kind === "rails")!.text).toContain("A red wire: Arduino pin 5V");
     expect(steps.steps.map((step) => step.text).join(" ")).not.toMatch(/\ba (orange|a|e|i|o|u)\w* wire/);
   });
 
@@ -93,8 +93,8 @@ describe("builder wire-colour overrides (issue #15)", () => {
     const wireColors = jumperColors(moon, layout, overrides);
     const steps = buildSteps(moon, layout, { wireColors });
     const step = steps.steps.find((candidate) => candidate.adds.jumpers.includes(d4.id))!;
-    expect(step.text).toContain("Connect a custom-colour (#ff66aa) wire");
-    expect(steps.steps.find((candidate) => candidate.kind === "rails")!.text).toContain("connect a blue wire from Arduino GND header pin");
+    expect(step.text).toMatch(/^A custom-colour \(#ff66aa\) wire\b/);
+    expect(steps.steps.find((candidate) => candidate.kind === "rails")!.text).toContain("A blue wire: Arduino pin GND");
     const svg = renderBreadboardSvg({ circuit: moon, layout, steps, upToStep: step.n, wireColors });
     const wire = svg.match(new RegExp(`<g id="wire-${d4.id}"[\\s\\S]*?</g>`))?.[0] ?? "";
     expect(wire).toContain('stroke="#ff66aa"');

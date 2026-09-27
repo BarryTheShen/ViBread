@@ -17,3 +17,5 @@ export * from "./selftest.js";
 export * from "./services.js";
 export * from "./steps.js";
 export * from "./telemetry.js";
+export * from "./variants.js";
+export * from "./visuals.js";

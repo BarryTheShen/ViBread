@@ -11,13 +11,14 @@ import type {
   Revision,
   RevisionResults,
 } from "@vibread/core";
-import { MODULES, normalizeObservation, parsePartsText } from "@vibread/core";
+import { HARDWARE_KINDS, MODULES, normalizeObservation, parsePartsText, type HardwareKind, type HardwareView } from "@vibread/core";
 import type { CatalogView, InventoryEntry, InventoryUpsertRequest, PartType, ScanAcceptRequest, ScanItem } from "@vibread/core";
 import { applyCalibration, compileBenchFirmware, compileSketch, uploadCommand } from "@vibread/firmware";
 import { calibrationMacros, evaluateRun, planSelfTest } from "@vibread/bench";
 import { loadFaultDictionary } from "@vibread/tools";
 import { z } from "zod";
 import { runs } from "./db/schema.js";
+import { parseMyHardware } from "./services/hardware.js";
 import { SqlApprovalBroker } from "./services/approvals.js";
 import { SqlMissionStore } from "./store/missions.js";
 import { WIRE_COLOR_EVENT, wireColorChange, wireOverrides } from "./services/wire-colors.js";
@@ -147,14 +148,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
   router.post("/inventory/scans/:id/photos", upload.single("photo"), async (req, res) => {
     const user = actorUser(res, ctx);
     if (!req.file) throw httpError(400, "PHOTO_REQUIRED", "multipart photo is required");
-    let jpeg: Buffer;
-    try {
-      let input = new Uint8Array(req.file.buffer);
-      if (req.file.mimetype === "image/heic" || req.file.mimetype === "image/heif" || /\.hei[cf]$/i.test(req.file.originalname)) input = new Uint8Array(await heifToJpeg(input));
-      jpeg = await sharp(input).rotate().resize({ width: 2576, height: 2576, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
-    } catch {
-      throw httpError(400, "bad_image", "photo is not a valid image");
-    }
+    const jpeg = await uploadedJpeg(req.file);
     const hash = await ctx.store.putArtifact(jpeg, "image/jpeg");
     const saved = await ctx.scans.addPhoto(user.id, String(req.params.id), hash);
     ctx.debug.event(String(req.params.id), "scan", "scan photo uploaded", { bytes: jpeg.byteLength });
@@ -226,6 +220,45 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const entries = await ctx.scans.accept(user.id, String(req.params.id), body.items, ctx.inventory);
     ctx.debug.event(String(req.params.id), "scan", "scan accepted", { items: body.items.length });
     res.json(entries);
+  });
+  // "Your hardware" (issue #23): the breadboard, board and part variants new missions default to.
+  const hardwareView = async (ownerId: string): Promise<HardwareView> => {
+    const { hardware, source } = await ctx.hardware.get(ownerId);
+    return { hardware, source, claude: (await ctx.claudeAccounts.view(ownerId)).using === "none" ? "missing" : "connected" };
+  };
+  router.get("/inventory/hardware", async (_req, res) => {
+    res.json(await hardwareView(actorUser(res, ctx).id));
+  });
+  router.put("/inventory/hardware", async (req, res) => {
+    const user = actorUser(res, ctx);
+    await ctx.hardware.save(user.id, parseMyHardware(req.body));
+    res.json(await hardwareView(user.id));
+  });
+  /**
+   * Identify from a photo → HardwareIdentification to confirm. The photo is a multipart "photo" (JPEG/PNG/HEIC, from
+   * an upload or this computer's camera) or the latest photo of a scan (`scanId`: the phone took it through the scan
+   * page's QR link). Optional `kind` says what the photo shows.
+   */
+  router.post("/inventory/hardware/identify", upload.single("photo"), async (req, res) => {
+    const user = actorUser(res, ctx);
+    const body = (req.body ?? {}) as { kind?: unknown; scanId?: unknown };
+    if (body.kind !== undefined && body.kind !== "" && !(HARDWARE_KINDS as readonly string[]).includes(String(body.kind))) throw httpError(400, "INVALID_KIND", `kind must be one of ${HARDWARE_KINDS.join(", ")}`);
+    const kind = body.kind ? (String(body.kind) as HardwareKind) : undefined;
+    let photo: Buffer;
+    if (req.file) photo = await uploadedJpeg(req.file);
+    else if (typeof body.scanId === "string" && body.scanId) {
+      const latest = (await ctx.scans.photoHashes(user.id, body.scanId)).at(-1);
+      const artifact = latest ? await ctx.store.getArtifact(latest) : null;
+      if (!artifact) throw httpError(404, "PHOTO_NOT_FOUND", "This scan has no photo yet.");
+      photo = Buffer.from(artifact.data);
+    } else throw httpError(400, "PHOTO_REQUIRED", "a multipart photo or a scanId is required");
+    try {
+      res.json(await ctx.runtime.scan.identifyHardware({ ownerId: user.id, photo, ...(kind ? { kind } : {}) }));
+    } catch (error) {
+      if (typeof error === "object" && error !== null && typeof (error as { status?: unknown }).status === "number" && (error as { status: number }).status < 500 && (error as { status: number }).status !== 429) throw error;
+      const failure = scanFailure(error);
+      throw Object.assign(new Error(failure.code === "claude_error" ? "Claude couldn't identify this photo. Pick yours from the list or try another photo." : failure.message), { status: failure.status, code: failure.code, ...(failure.retryAfter ? { retryAt: failure.retryAfter } : {}) });
+    }
   });
   router.get("/missions", async (_req, res) => {
     const user = actorUser(res, ctx);
@@ -809,6 +842,17 @@ interface ScanFailure {
   code: string;
   message: string;
   retryAfter?: string;
+}
+
+/** An uploaded photo (JPEG, PNG, HEIC from an iPhone) as an upright JPEG within the vision tier's long edge. */
+async function uploadedJpeg(file: Express.Multer.File): Promise<Buffer> {
+  try {
+    let input = new Uint8Array(file.buffer);
+    if (file.mimetype === "image/heic" || file.mimetype === "image/heif" || /\.hei[cf]$/i.test(file.originalname)) input = new Uint8Array(await heifToJpeg(input));
+    return await sharp(input).rotate().resize({ width: 2576, height: 2576, fit: "inside", withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer();
+  } catch {
+    throw httpError(400, "bad_image", "photo is not a valid image");
+  }
 }
 
 function scanFailure(error: unknown): ScanFailure {

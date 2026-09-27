@@ -1,12 +1,16 @@
 import {
   BOARD_PROFILES,
+  BOARD_VARIANTS,
+  BREADBOARD_PROFILES,
   CONSOLE_LABELS,
   MODULE_KEYS,
   MODULES,
+  PART_VARIANTS,
   photoresistorOhms,
   SCENARIO_CATEGORIES,
   type InventoryItem,
   type Mission,
+  type MyHardware,
   type Revision,
   type Scenario,
 } from "@vibread/core";
@@ -83,8 +87,33 @@ function revisionLines(revision: Revision | null): string {
   return `Latest: revision ${revision.n} "${revision.circuit.title}" (hash ${revision.hash.slice(0, 8)}): ${verdicts}.${errors ? `\n  Blocking findings:\n${errors}` : ""}`;
 }
 
-/** Design agent system prompt: library, inventory, IR rules, safety, sketch rules, iteration and ask-back policy. */
-export function designSystemPrompt(input: { mission: Mission; revision: Revision | null }): string {
+/**
+ * The hardware the person builds with (issue #23, snapshotted when the mission was created): the breadboard and board
+ * profiles the circuit must use and the part variants they own. Empty for missions from before it existed.
+ */
+export function hardwareLines(hardware: MyHardware | undefined): string {
+  if (!hardware) return "";
+  const breadboard = BREADBOARD_PROFILES[hardware.breadboard];
+  const board = BOARD_VARIANTS[hardware.board];
+  const rails = breadboard.railSides.length === 0
+    ? "no power rails: 5 V and GND reach the parts through the terminal strips (the layout tool does this)"
+    : breadboard.railsSplit
+      ? "power rails split in the middle (the layout tool adds the bridge wire)"
+      : "power rails along both long edges";
+  const parts = Object.entries(hardware.parts).flatMap(([module, key]) =>
+    PART_VARIANTS.filter((variant) => variant.module === module && variant.variant === key).map((variant) => `- ${MODULES[variant.module].name}: ${variant.name} — set params.variant "${variant.variant}" on every ${module} part (${variant.orientation})`),
+  );
+  return `
+# Your hardware (the person picked these on their inventory page — build for them)
+- Breadboard: their ${breadboard.shortName} (${breadboard.rows} rows, ${rails}). Set "breadboard": {"profile": "${breadboard.id}"}.
+- Board: their ${board.name}. Set "board": {"profile": "${board.profile}"}.
+${parts.join("\n")}${parts.length ? "\n" : ""}Use exactly this breadboard and board. If FAO says the circuit doesn't fit (LAYOUT-NO-FIT), say plainly that it doesn't fit
+their ${breadboard.shortName} and what would (fewer parts, or a bigger board) — never switch breadboard or board yourself.
+`;
+}
+
+/** Design agent system prompt: library, inventory, hardware, IR rules, safety, sketch rules, iteration and ask-back policy. */
+export function designSystemPrompt(input: { mission: Mission; revision: Revision | null; hardware?: MyHardware }): string {
   const { mission, revision } = input;
   return `You are ViBread's design agent — "Flight" in a Mission Control for breadboards. You help people with no electronics
 background build a working Arduino prototype. Speak plainly and briefly; explain any term you must use.
@@ -107,6 +136,7 @@ simulator don't cover them, so never add_part or design them (not as "generic" e
 plainly, offer the closest version with the parts they have (e.g. a light pattern instead of a moving flag), and ask
 which they want.
 
+${hardwareLines(input.hardware)}
 # Module library (the only part kinds that exist)
 ${moduleLibrary()}
 

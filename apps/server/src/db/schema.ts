@@ -180,6 +180,13 @@ export const inventoryItems = sqliteTable("inventory_items", {
   ownerIdentity: uniqueIndex("inventory_items_owner_identity_uidx").on(table.ownerId, table.identity),
 }));
 
+/** Issue #23: the breadboard, board and part variants a user builds with (MyHardware JSON); new missions default to it. */
+export const hardwareChoices = sqliteTable("hardware_choices", {
+  ownerId: text("ownerId").primaryKey(),
+  json: text("json").notNull(),
+  updatedAt: timestamp("updatedAt").notNull(),
+});
+
 export const inventoryScans = sqliteTable("inventory_scans", {
   id: text("id").primaryKey(),
   ownerId: text("ownerId").notNull(),

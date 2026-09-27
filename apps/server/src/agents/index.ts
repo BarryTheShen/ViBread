@@ -1,4 +1,4 @@
-import type { ConsoleReport, MissionDetail, MissionService, PartType, PhotoCheckResult, ScanObservation, ToolRegistry } from "@vibread/core";
+import type { ConsoleReport, HardwareIdentification, HardwareKind, MissionDetail, MissionService, PartType, PhotoCheckResult, ScanObservation, ToolRegistry } from "@vibread/core";
 import {
   ToolInputError,
   allGo,
@@ -23,6 +23,7 @@ import { createPhotoChecker } from "./vision.js";
 import { createEventBus } from "./events.js";
 import { createHumanRelease, type ReleaseInput } from "./release.js";
 import { cutCrop, identifyParts, type AnalyzedPhoto } from "./scan.js";
+import { identifyHardware } from "./hardware.js";
 import { toolTracer, tracedModels } from "./trace.js";
 import { createMissionService } from "../services/missions.js";
 
@@ -46,6 +47,8 @@ export interface AgentRuntime {
   scan: {
     identifyParts(input: { ownerId: string; photos: Buffer[]; types: PartType[]; signal?: AbortSignal }): Promise<{ observations: ScanObservation[]; analyzed: AnalyzedPhoto[] }>;
     cutCrop(analyzedJpeg: Buffer, box: [number, number, number, number], marginPct?: number): Promise<Buffer>;
+    /** Identify from a photo (issue #23): the catalogue breadboard, board or part variant, checked, for the person to confirm. */
+    identifyHardware(input: { ownerId: string; photo: Buffer; kind?: HardwareKind; signal?: AbortSignal }): Promise<HardwareIdentification>;
   };
 }
 
@@ -171,6 +174,17 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
         }
       },
       cutCrop,
+      async identifyHardware(input) {
+        const started = Date.now();
+        try {
+          const result = await identifyHardware({ models }, input);
+          debug.event(null, "scan", `hardware photo for ${input.ownerId}: ${result.kind} ${result.profileOrVariantId ?? "no match"} (${result.confidence})`, { ownerId: input.ownerId, asked: input.kind, ms: Date.now() - started, ...result });
+          return result;
+        } catch (error) {
+          debug.event(null, "scan", `hardware photo for ${input.ownerId} failed`, { ownerId: input.ownerId, asked: input.kind, ms: Date.now() - started, error: errorMessage(error), ...(error instanceof StructuredAnswerError ? { rawAnswer: error.raw } : {}) }, "warn");
+          throw error;
+        }
+      },
     },
     async review(missionId, n) {
       const mission = await deps.store.getMission(missionId);

@@ -9,6 +9,7 @@ import type { AgentModels } from "./models.js";
 import { ASK_USER, askUserTool, registryTools, type AskUserOutput } from "./pi-tools.js";
 import { FINISH_REASONS, PiChunkTranslator, historyToPi, userContent } from "./pi-ui.js";
 import { designSystemPrompt } from "./prompts.js";
+import { missionHardware } from "../services/hardware.js";
 import { actorForLog } from "./trace.js";
 
 /** Upper bound on model turns per run (PLAN §5.2). */
@@ -152,7 +153,7 @@ export function createRunManager(
     // The pi transcript is rebuilt from the server-held UI history every run: that history is the only record.
     const agent = new Agent({
       initialState: {
-        systemPrompt: designSystemPrompt({ mission, revision: await store.getRevision(missionId) }),
+        systemPrompt: designSystemPrompt({ mission, revision: await store.getRevision(missionId), hardware: await missionHardware(store, missionId) }),
         model: design.model,
         thinkingLevel: "off",
         tools: [...registryTools({ registry: deps.tools, broker, store, ctx: { missionId, actor: agentActor } }), askUserTool],

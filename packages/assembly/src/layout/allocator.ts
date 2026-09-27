@@ -1,5 +1,5 @@
 /**
- * Breadboard allocator: places every part and realizes every IR net with the breadboard's five-hole strips, the top
+ * Breadboard allocator: places every part and realizes every IR net with the breadboard's five-hole strips, the power
  * rails, and jumpers, then proves the result with LVS before returning it.
  *
  * Model: a strip (row r, a–e or f–j) belongs to at most one net. Parts are placed one at a time (connected parts
@@ -8,6 +8,11 @@
  * Arduino header pins, joined by the parts' internal connections); a capacity-aware spanning tree over the islands
  * adds the jumpers, with a spare strip as a hub when the islands run out of free holes. Each strip keeps at least one
  * free hole for exactly that purpose.
+ *
+ * Every breadboard profile works: a board without rails (mini) carries 5 V and GND in strips like any other net; a
+ * board with split rails gets a bridge wire across the gap of every rail the build uses (with the rails, before any
+ * part). Part variants (`params.variant`) pick their own footprint: a 12 mm button's legs in columns d/g, a panel
+ * pot's legs two holes apart, a 2-leg button's legs "1" and "3" only.
  *
  * Several placement strategies are tried in order; the first whose layout is LVS-clean wins. When none fits, the
  * allocator throws `LayoutFitError` (tool-side: the circuit is fine, the breadboard or ViBread's placer is not).
@@ -19,10 +24,14 @@ import {
   MODULES,
   contactGroup,
   hashJson,
+  isRailBridge,
   isValidHole,
   modulePins,
   parseHole,
+  partVariant,
   pinKey,
+  powerRails,
+  railBridge,
   type BreadboardProfile,
   type Circuit,
   type Column,
@@ -32,6 +41,7 @@ import {
   type Layout,
   type Part,
   type Placement,
+  type RailId,
   type WireColor,
 } from "@vibread/core";
 import { defaultNetColors } from "./colors.js";
@@ -100,8 +110,8 @@ interface Ctx {
   groupAnchor: ([number, number] | undefined)[];
   groupHalf: ("a-e" | "f-j" | undefined)[];
   jumpers: { jumper: Jumper; phase: number }[];
-  /** Net → rail it uses (the Arduino 5 V net → T+, the Arduino GND net → T−). */
-  railOf: Map<string, "T+" | "T-">;
+  /** Net → rail it uses (the Arduino 5 V net → the + rail, the Arduino GND net → the − rail); empty without rails. */
+  railOf: Map<string, RailId>;
   /** Nano only: header hole per used board pin. */
   headerHoles: Map<string, HoleId[]>;
   /** Net → breadboard row above its Uno header pin (short, straight board wires). */
@@ -201,21 +211,30 @@ interface Candidate {
   cost: number;
 }
 
-/** Pin row offsets for each orientation of a part's footprint. */
+/** Pin row offsets for each orientation of a part's footprint (its variant's legs when it has one). */
 function footprintShapes(part: Part): { pins: string[]; offsets: number[]; spanPenalty: number }[] {
   const footprint = MODULES[part.module].footprint;
+  const variant = partVariant(part)?.footprint;
   const shapes: { pins: string[]; offsets: number[]; spanPenalty: number }[] = [];
+  if (variant?.kind === "button2") {
+    shapes.push({ pins: ["1", "3"], offsets: [0, variant.span], spanPenalty: 0 });
+    shapes.push({ pins: ["3", "1"], offsets: [0, variant.span], spanPenalty: 0.01 });
+    return shapes;
+  }
   if (footprint.kind === "two-lead") {
-    for (let span = footprint.minSpan; span <= footprint.maxSpan; span += 1) {
-      const spanPenalty = Math.abs(span - footprint.preferredSpan) * 0.3;
+    // A variant fixes the span (its legs); otherwise the module's range, preferring its usual span.
+    const [minSpan, maxSpan] = variant?.kind === "two-lead" ? [variant.span, variant.span] : [footprint.minSpan, footprint.maxSpan];
+    for (let span = minSpan; span <= maxSpan; span += 1) {
+      const spanPenalty = variant?.kind === "two-lead" ? 0 : Math.abs(span - footprint.preferredSpan) * 0.3;
       shapes.push({ pins: [footprint.pins[0], footprint.pins[1]], offsets: [0, span], spanPenalty });
       shapes.push({ pins: [footprint.pins[1], footprint.pins[0]], offsets: [0, span], spanPenalty: spanPenalty + 0.01 });
     }
     return shapes;
   }
   const pins = footprint.kind === "inline3" ? [...footprint.pins] : modulePins(part).map((pin) => pin.id);
-  shapes.push({ pins, offsets: pins.map((_, index) => index), spanPenalty: 0 });
-  if (pins.length > 1) shapes.push({ pins: [...pins].reverse(), offsets: pins.map((_, index) => index), spanPenalty: 0.01 });
+  const pitch = variant?.kind === "inline3" ? variant.pitch : 1;
+  shapes.push({ pins, offsets: pins.map((_, index) => index * pitch), spanPenalty: 0 });
+  if (pins.length > 1) shapes.push({ pins: [...pins].reverse(), offsets: pins.map((_, index) => index * pitch), spanPenalty: 0.01 });
   return shapes;
 }
 
@@ -345,14 +364,22 @@ function search(ctx: Ctx, part: Part, accept?: (pins: Record<string, HoleId>) =>
     best = { pins, covered: slots.filter((entry) => entry.net === undefined).map((entry) => entry.hole), body, cost };
   };
   const rows = ctx.profile.rows;
-  if (MODULES[part.module].footprint.kind === "button4") {
-    // Legs 1–2 straddle the channel on one row, legs 3–4 two rows further; the body covers the row between.
-    for (let base = 1; base + 2 <= rows; base += 1) {
+  const variant = partVariant(part)?.footprint;
+  if (MODULES[part.module].footprint.kind === "button4" && variant?.kind !== "button2") {
+    // Legs 1–2 straddle the channel on one row, legs 3–4 `span` rows further; the body covers the rows between (and,
+    // for a wide button whose legs sit in d/g, the channel-side e/f holes of its rows).
+    const [left, right] = variant?.kind === "button4" ? variant.columns : (["e", "f"] as const);
+    const span = variant?.kind === "button4" ? variant.rowSpan : 2;
+    for (let base = 1; base + span <= rows; base += 1) {
       for (const flip of [false, true]) {
-        const first = flip ? base + 2 : base;
-        const second = flip ? base : base + 2;
-        const pins = { "1": `e${first}`, "2": `f${first}`, "3": `e${second}`, "4": `f${second}` };
-        const slots = [slot(ctx, part, "e", first, "1"), slot(ctx, part, "f", first, "2"), slot(ctx, part, "e", second, "3"), slot(ctx, part, "f", second, "4"), slot(ctx, part, "e", base + 1), slot(ctx, part, "f", base + 1)];
+        const first = flip ? base + span : base;
+        const second = flip ? base : base + span;
+        const pins = { "1": `${left}${first}`, "2": `${right}${first}`, "3": `${left}${second}`, "4": `${right}${second}` };
+        const slots = [slot(ctx, part, left, first, "1"), slot(ctx, part, right, first, "2"), slot(ctx, part, left, second, "3"), slot(ctx, part, right, second, "4")];
+        for (let row = base; row <= base + span; row += 1) {
+          if (row !== first && row !== second) slots.push(slot(ctx, part, left, row), slot(ctx, part, right, row));
+          if (left !== "e") slots.push(slot(ctx, part, "e", row), slot(ctx, part, "f", row));
+        }
         consider(pins, slots, (flip ? 0.01 : 0) + base * 0.02);
       }
     }
@@ -454,12 +481,14 @@ function reserveNano(ctx: Ctx): void {
 }
 
 function assignRails(ctx: Ctx): void {
+  const rails = powerRails(ctx.profile);
   for (const net of ctx.circuit.nets) {
     const boardPins = net.pins.filter((ref) => ref.part === BOARD_PART).map((ref) => ref.pin).sort((a, b) => boardPinRank(a) - boardPinRank(b));
     const home = boardPins.map((pin) => headerRow(ctx.profile.id, ctx.circuit.board.profile, pin)).find((row) => row !== undefined);
     if (home !== undefined && net.kind === "signal") ctx.homeRow.set(net.id, home);
-    if (net.kind === "power" && boardPins.includes("5V") && !ctx.railOf.has(net.id)) ctx.railOf.set(net.id, "T+");
-    if (net.kind === "ground" && boardPins.includes("GND") && !ctx.railOf.has(net.id)) ctx.railOf.set(net.id, "T-");
+    if (!rails) continue;
+    if (net.kind === "power" && boardPins.includes("5V") && !ctx.railOf.has(net.id)) ctx.railOf.set(net.id, rails.plus);
+    if (net.kind === "ground" && boardPins.includes("GND") && !ctx.railOf.has(net.id)) ctx.railOf.set(net.id, rails.minus);
   }
 }
 
@@ -468,7 +497,7 @@ function assignRails(ctx: Ctx): void {
 
 type Island =
   | { kind: "strip"; side: Side; row: number }
-  | { kind: "rail"; rail: "T+" | "T-" }
+  | { kind: "rail"; rail: RailId }
   | { kind: "board"; pin: string };
 
 interface Node {
@@ -487,7 +516,7 @@ function islandPoint(ctx: Ctx, island: Island, near?: number): { x: number; y: n
   return { x: headerRow(ctx.profile.id, ctx.circuit.board.profile, island.pin) ?? 1, y: 13 };
 }
 
-function railHoles(ctx: Ctx, rail: "T+" | "T-"): HoleId[] {
+function railHoles(ctx: Ctx, rail: RailId): HoleId[] {
   return ctx.profile.railPositions.map((position) => `${rail}${position}`).filter((hole) => !ctx.occupied.has(hole));
 }
 
@@ -587,9 +616,17 @@ function connectNet(ctx: Ctx, netId: string): void {
     union(islandKey(from), islandKey(to));
   };
 
+  if (rail && islands.has(rail)) {
+    // Split rails: one bridge wire across the gap makes both halves one rail (built with the rails, before any part).
+    const bridge = railBridge(ctx.profile, rail);
+    if (bridge) {
+      if (bridge.some((hole) => ctx.occupied.has(hole))) throw new LayoutFitError(`The ${rail} rail's bridge holes ${bridge.join(" and ")} are taken.`, true);
+      addJumper(ctx, { hole: bridge[0] }, { hole: bridge[1] }, netId, 0);
+    }
+  }
   // The Arduino's 5 V / GND header always feeds its rail first (the "rails" build step).
   if (rail && islands.has(rail)) {
-    const pin = rail === "T+" ? "5V" : "GND";
+    const pin = rail.endsWith("+") ? "5V" : "GND";
     if (islands.has(`board:${pin}`)) {
       const home = headerRow(ctx.profile.id, ctx.circuit.board.profile, pin) ?? 1;
       const hole = railHoles(ctx, rail).sort((a, b) => Math.abs(holeRow(a) - home) - Math.abs(holeRow(b) - home) || holeRow(a) - holeRow(b))[0];
@@ -681,6 +718,10 @@ function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strateg
     for (const hole of holes) ctx.jumpers.push({ phase: 1, jumper: { id: "", from: { board: pin }, to: { hole }, color: wireColor(ctx, net.id), net: net.id } });
   }
   for (const net of [...circuit.nets].sort((a, b) => a.id.localeCompare(b.id))) connectNet(ctx, net.id);
+  // A split rail's bridge stays only when the rail's other wires really use both halves.
+  const railHalves = (rail: string, except: Jumper) =>
+    new Set(ctx.jumpers.filter((entry) => entry.jumper !== except).flatMap(({ jumper }) => [jumper.from, jumper.to]).flatMap((end) => ("hole" in end && end.hole.startsWith(rail) ? [groupOf(ctx, end.hole)] : [])));
+  ctx.jumpers = ctx.jumpers.filter(({ jumper }) => !isRailBridge(profile, jumper) || railHalves("hole" in jumper.from ? jumper.from.hole.slice(0, 2) : "", jumper).size > 1);
   ctx.jumpers.sort((a, b) => a.phase - b.phase || a.jumper.net.localeCompare(b.jumper.net) || endpointKey(a.jumper.from).localeCompare(endpointKey(b.jumper.from)) || endpointKey(a.jumper.to).localeCompare(endpointKey(b.jumper.to)));
   return {
     schema: "vibread.layout/1",

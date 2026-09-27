@@ -1,5 +1,28 @@
-import type { PartField, PartType } from "./catalog.js";
+import type { BoardVariantId } from "./boards.js";
+import type { BreadboardProfileId } from "./breadboards.js";
+import type { InventoryEntry, MyHardware, PartField, PartType } from "./catalog.js";
 import { LED_COLORS, type ModulePin } from "./modules.js";
+
+/** The breadboard type's "size" options → the profile a mission uses. */
+export const BREADBOARD_OPTION_PROFILES: Record<string, BreadboardProfileId> = { "170": "bb-170", "400": "bb-400", "830": "bb-830", "830-split": "bb-830-split" };
+/** The Arduino type's "board" options → the board variant. */
+export const ARDUINO_OPTION_VARIANTS: Record<string, BoardVariantId> = { "uno-r3": "uno-r3-genuine", nano: "nano-new" };
+
+/** Used when the person has picked nothing and owns no breadboard/Arduino entry (the kit ViBread was built around). */
+export const DEFAULT_HARDWARE: MyHardware = { breadboard: "bb-830", board: "uno-r3-genuine", parts: {} };
+
+/**
+ * Hardware implied by the inventory when nothing was picked on the "Your hardware" card: the first ready breadboard
+ * and Arduino entries (their "setting" mapping). A missing field means the inventory says nothing about it.
+ */
+export function hardwareFromInventory(entries: InventoryEntry[]): { breadboard?: BreadboardProfileId; board?: BoardVariantId } {
+  const ready = entries.filter((entry) => entry.status === "ready" && entry.quantity > 0);
+  const size = ready.find((entry) => entry.typeId === "breadboard")?.values.size;
+  const board = ready.find((entry) => entry.typeId === "arduino")?.values.board;
+  const breadboard = typeof size === "string" ? BREADBOARD_OPTION_PROFILES[size] : undefined;
+  const variant = typeof board === "string" ? ARDUINO_OPTION_VARIANTS[board] : undefined;
+  return { ...(breadboard ? { breadboard } : {}), ...(variant ? { board: variant } : {}) };
+}
 
 const ledColors = [...LED_COLORS];
 
@@ -160,7 +183,7 @@ export const BUILT_IN_PART_TYPES: PartType[] = [
     "A preset variable resistor that ViBread models as a rotary knob.",
     "modelled",
     [numberField("ohms", "Resistance", "Ω")],
-    { kind: "modelled", module: "potentiometer", params: { ohms: "ohms" } },
+    { kind: "modelled", module: "potentiometer", params: { ohms: "ohms" }, fixed: { variant: "trimmer" } },
   ),
   builtIn(
     "ntc-thermistor",
@@ -491,18 +514,18 @@ export const BUILT_IN_PART_TYPES: PartType[] = [
     "A blue Arduino board with a USB connector, black microcontroller, and rows of pin headers.",
     "The Arduino Uno R3 or Nano board used as the mission controller.",
     "supply",
-    [choiceField("board", "Board", ["uno-r3", "nano"], { identity: true, electrical: true, required: true })],
+    [choiceField("board", "Board", Object.keys(ARDUINO_OPTION_VARIANTS), { identity: true, electrical: true, required: true })],
     { kind: "setting", setting: "board" },
   ),
   builtIn(
     "breadboard",
-    "Breadboard 400 / 830",
+    "Breadboard",
     "board",
-    ["breadboard", "breadboards", "400 point breadboard", "830 point breadboard", "mini breadboard"],
+    ["breadboard", "breadboards", "170 point breadboard", "400 point breadboard", "830 point breadboard", "mini breadboard", "half size breadboard", "full size breadboard"],
     "A white solderless board with a center channel and rows of numbered tie points.",
-    "A 400-point or 830-point solderless breadboard for assembly.",
+    "A 170-, 400- or 830-point solderless breadboard for assembly.",
     "supply",
-    [choiceField("size", "Size", ["400", "830"], { identity: true, electrical: false, required: true })],
+    [choiceField("size", "Size", Object.keys(BREADBOARD_OPTION_PROFILES), { identity: true, electrical: false, required: true })],
     { kind: "setting", setting: "breadboard" },
   ),
   builtIn(

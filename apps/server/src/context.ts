@@ -17,6 +17,7 @@ import { createLanGuard, type LanGuard } from "./services/lan-guard.js";
 import { createDebugLog, type DebugLog } from "./services/debug-log.js";
 import { createCatalogService, type CatalogService } from "./services/catalog.js";
 import { createInventoryService, type InventoryService } from "./services/inventory.js";
+import { createHardwareService, type HardwareService } from "./services/hardware.js";
 import { createScanService, type ScanService } from "./services/scans.js";
 import { createMessageStore, type MessageStore } from "./store/messages.js";
 import { createMissionStore } from "./store/missions.js";
@@ -37,6 +38,7 @@ export interface AppContext {
   debug: DebugLog;
   catalog: CatalogService;
   inventory: InventoryService;
+  hardware: HardwareService;
   scans: ScanService;
   missions: MissionService;
   tools: ToolRegistry;
@@ -64,13 +66,14 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
   const capcomSpaces = createCapcomSpaceStore({ db: opened.db, sqlite: opened.sqlite });
   const catalog = createCatalogService({ db: opened.db, sqlite: opened.sqlite });
   const inventory = createInventoryService({ db: opened.db, sqlite: opened.sqlite, catalog, store });
+  const hardware = createHardwareService({ sqlite: opened.sqlite, inventory });
   const scans = createScanService({ db: opened.db, sqlite: opened.sqlite, store });
   const benchAsks = createBenchAskStore({ store });
   const lanGuard = createLanGuard({ dataDir: config.dataDir, singleOperator: config.singleOperator, pairing: process.env.VIBREAD_LAN_PAIRING, sqlite: opened.sqlite });
   const debug = createDebugLog(config.dataDir);
   const messages = createMessageStore({ db: opened.db, sqlite: opened.sqlite });
   const claudeAccounts = createClaudeAccountService({ config, db: opened.db, log });
-  const runtime = createAgentRuntime({ config, log, store, broker, machine, messages, claudeAccounts, inventory, debug });
+  const runtime = createAgentRuntime({ config, log, store, broker, machine, messages, claudeAccounts, inventory, hardware, debug });
   const ctx: AppContext = {
     config,
     log,
@@ -86,6 +89,7 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
     debug,
     catalog,
     inventory,
+    hardware,
     scans,
     missions: runtime.missions,
     tools: runtime.tools,

@@ -79,6 +79,16 @@ parentheses, “N each”, “A & B”, and units. A scan shows what was uploade
 reason is shown and **Retry** runs the analysis again without asking you to upload the photos again. You can edit the catalog
 with the part-types editor.
 
+**Your hardware** (top of the Inventory page) is the breadboard, board and part variants you build with:
+- **Breadboard:** 170-point mini (17 rows, no rails), 400-point, 830-point, or 830-point with split rails.
+- **Board:** genuine Uno R3 (ATmega16U2), CH340 Uno clone, or Nano with the new or old bootloader.
+- **Parts:** 5 mm or 3 mm LEDs; 6 mm, 12 mm or 2-leg push buttons; trimmer or panel pots.
+
+New missions use these choices. The design agent is told which board and breadboard to build for, and the layout puts power
+through the strips on a mini board and adds a bridge wire across split rails. The steps and pictures name your parts ("your
+400-point board", "3 mm red LED"). **Identify from a photo** (laptop camera, phone QR, or upload) asks Claude which one you
+have and shows the reasons, then you confirm it or pick another. Without Claude, you pick from the lists.
+
 ## Yes, the simulator is built in
 
 ViBread emulates the Arduino's chip (ATmega328P, via the avr8js library) and runs **the exact program file that will

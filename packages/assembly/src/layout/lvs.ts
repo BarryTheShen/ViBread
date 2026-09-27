@@ -7,6 +7,7 @@ import {
   contactGroup,
   isValidHole,
   modulePins,
+  partVariant,
   pinKey,
   type Circuit,
   type DerivedNet,
@@ -184,10 +185,14 @@ function validatePlacements(
       issues.push(asIssue("unplaced-part", `Part ${part.id} has no placement in the layout.`, { pins: modulePins(part).map((pin) => `${part.id}.${pin.id}`) }));
       continue;
     }
+    // A variant's legs are the pins that go in holes (a 2-leg button has legs 1 and 3; pins 2 and 4 are only the
+    // part's internal connections, joined by addInternalConnections).
+    const legs = partVariant(part)?.legs.map((leg) => leg.pin);
     for (const pin of modulePins(part)) {
       const ref = { part: part.id, pin: pin.id } satisfies PinRef;
       refs.set(pinKey(ref), ref);
       const hole = placement.pins[pin.id];
+      if (!hole && legs && !legs.includes(pin.id)) continue;
       if (!hole) {
         issues.push(asIssue("unplaced-part", `Part ${part.id} is missing a hole for pin ${pin.id}.`, { pins: [pinKey(ref)] }));
         continue;
