@@ -1,19 +1,46 @@
 import FlightTakeoffIcon from "@mui/icons-material/FlightTakeoff";
 import Alert from "@mui/material/Alert";
 import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import List from "@mui/material/List";
+import ListItem from "@mui/material/ListItem";
 import Snackbar from "@mui/material/Snackbar";
 import Stack from "@mui/material/Stack";
+import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { MissionDetail } from "@vibread/core";
+import { CONSOLE_LABELS } from "@vibread/core";
 import { useState } from "react";
 import { HttpError } from "../api/client.js";
 import { useConnections, useRelease } from "../api/hooks.js";
 import { releaseReadiness } from "./nextStep.js";
+const OVERRIDE_CODES: Record<string, true> = { not_all_go: true, tests_missing: true, retro_no_go: true, retro_missing: true };
+
+function overrideReasons(detail: MissionDetail, error: HttpError | undefined): string[] {
+  const reasons: string[] = [];
+  if (error?.code === "tests_missing") reasons.push("Simulation tests (FIDO) not written");
+  const serverFidoDetails = (error?.message.match(/(?:failed scenarios|TESTS-SUSPECT scenarios):[^.]+/g) ?? []).join("; ");
+  for (const report of detail.consoles) {
+    if (report.verdict === "GO") continue;
+    const scenarios = report.findings.flatMap((finding) => finding.refs?.scenarios ?? []);
+    const details = scenarios.length > 0 ? `failing scenarios: ${[...new Set(scenarios)].join(", ")}` : report.console === "FIDO" ? serverFidoDetails : "";
+    const suffix = report.console === "FIDO" && details ? ` — ${details}` : "";
+    if (report.console === "FIDO" && error?.code === "tests_missing") continue;
+    reasons.push(`${CONSOLE_LABELS[report.console]} (${report.console}) ${report.verdict}${suffix}`);
+  }
+  const retro = detail.consoles.find((report) => report.console === "RETRO");
+  if (error?.code === "retro_missing" && retro?.verdict !== "GO") reasons.push("independent review not run");
+  if (error?.code === "retro_no_go" && retro?.verdict === "NO-GO" && !reasons.some((reason) => reason.startsWith("Independent review"))) {
+    reasons.push(`Independent review (RETRO) NO-GO${retro.summary ? ` — ${retro.summary}` : ""}`);
+  }
+  return reasons.length > 0 ? reasons : [error?.message ?? "The release safety gate refused this revision."];
+}
 
 /**
  * The header's "GO for build" (the Flight Director's release of a revision as the build target). Same rules as before:
@@ -25,26 +52,45 @@ export function GoForBuildButton({ missionId, detail, onReleased }: { missionId:
   const release = useRelease(missionId);
   const connections = useConnections();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [overrideOpen, setOverrideOpen] = useState(false);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [understood, setUnderstood] = useState(false);
   const state = releaseReadiness(detail);
+  const releaseError = release.error instanceof HttpError ? release.error : undefined;
+  const overrideError = releaseError ?? (confirmOpen && state.retroMissing ? new HttpError(409, "retro_missing", "The independent review hasn't voted GO yet.") : undefined);
+  const bypassed = overrideReasons(detail, overrideError);
 
-  const go = (acknowledgeMissingReview: boolean) =>
-    state.revision !== undefined &&
+  const openOverride = () => {
+    setConfirmOpen(false);
+    setOverrideReason("");
+    setUnderstood(false);
+    setOverrideOpen(true);
+  };
+  const go = (acknowledgeMissingReview: boolean, reason?: string) => {
+    if (state.revision === undefined) return;
+    const trimmedReason = reason?.trim();
     release.mutate(
-      { revision: state.revision, acknowledgeMissingReview },
+      { revision: state.revision, acknowledgeMissingReview, ...(reason !== undefined ? { override: trimmedReason ? { reason: trimmedReason } : {} } : {}) },
       {
         onSuccess: (released) => {
           setConfirmOpen(false);
+          setOverrideOpen(false);
+          release.reset();
           onReleased(released.mission.releasedRevision ?? state.revision ?? 1);
         },
-        // The server is the authority on whether the review voted; if it says it's missing, ask the person.
         onError: (error) => {
+          // retro_missing first: the review-waiver confirm (it offers the override too) must not become a full bypass.
           if (error instanceof HttpError && error.code === "retro_missing") {
             release.reset();
             setConfirmOpen(true);
+          } else if (error instanceof HttpError && OVERRIDE_CODES[error.code] === true) {
+            setConfirmOpen(false);
+            setOverrideOpen(true);
           }
         },
       },
     );
+  };
 
   // FIDO waits for tests the (AI) test author writes; without any Claude credential that never happens by itself.
   const fidoPending = detail.consoles.find((c) => c.console === "FIDO")?.verdict === "PENDING";
@@ -72,9 +118,8 @@ export function GoForBuildButton({ missionId, detail, onReleased }: { missionId:
             <Button
               variant="contained"
               startIcon={<FlightTakeoffIcon />}
-              disabled={!(state.allRequiredGo || (onlyTestsMissing && !noAgent)) || release.isPending}
-              // With only the tests missing and a credential, the review can only run after the server writes them:
-              // send GO directly; a later retro_missing answer still opens the dialog.
+              disabled={state.revision === undefined || state.released || release.isPending}
+              // A blocked click lets the server explain the exact gate; the override action then remains explicit.
               onClick={() => (state.retroMissing && !onlyTestsMissing ? setConfirmOpen(true) : go(false))}
               sx={{ whiteSpace: "nowrap", fontWeight: 700 }}
             >
@@ -83,12 +128,13 @@ export function GoForBuildButton({ missionId, detail, onReleased }: { missionId:
           </span>
         </Tooltip>
       </Stack>
-      {release.isError && !confirmOpen && (
+      {release.isError && !confirmOpen && !overrideOpen && (
         <Snackbar
           open
           autoHideDuration={6000}
           onClose={() => release.reset()}
-          message={release.error instanceof HttpError && release.error.code === "tests_missing" ? release.error.message : `Couldn't release: ${release.error.message}`}
+          message={releaseError?.code === "tests_missing" ? releaseError.message : `Couldn't release: ${release.error.message}`}
+          action={releaseError && OVERRIDE_CODES[releaseError.code] === true ? <Button color="error" variant="outlined" size="small" onClick={openOverride}>Override — I know what I'm doing</Button> : undefined}
         />
       )}
       <Dialog open={confirmOpen} onClose={() => setConfirmOpen(false)} maxWidth="sm" fullWidth>
@@ -104,16 +150,43 @@ export function GoForBuildButton({ missionId, detail, onReleased }: { missionId:
           <Typography sx={{ color: "text.secondary" }}>
             Nothing touches your board yet: you'll build it step by step, and the bench self-test checks the real wiring.
           </Typography>
-          {release.isError && (
-            <Alert severity="error" sx={{ mt: 1.5 }}>
-              Couldn't release: {release.error.message}
-            </Alert>
-          )}
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setConfirmOpen(false)}>Not yet</Button>
+          <Button color="error" variant="outlined" onClick={openOverride}>Override — I know what I'm doing</Button>
           <Button variant="contained" disabled={release.isPending} onClick={() => go(true)}>
             {release.isPending ? "Releasing…" : "GO for build without review"}
+          </Button>
+        </DialogActions>
+      </Dialog>
+      <Dialog open={overrideOpen} onClose={() => setOverrideOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Override GO for build?</DialogTitle>
+        <DialogContent dividers>
+          <Typography sx={{ mb: 1 }}>You are choosing to bypass exactly these checks:</Typography>
+          <List dense disablePadding sx={{ mb: 1 }}>
+            {bypassed.map((item) => <ListItem key={item} disableGutters sx={{ display: "list-item", ml: 2 }}>{item}</ListItem>)}
+          </List>
+          {releaseError && <Alert severity="warning" sx={{ mb: 1.5 }}>Server gate: {releaseError.message}</Alert>}
+          <TextField
+            label="Reason (optional)"
+            value={overrideReason}
+            onChange={(event) => setOverrideReason(event.target.value)}
+            slotProps={{ htmlInput: { maxLength: 200 } }}
+            helperText={`${overrideReason.length}/200`}
+            fullWidth
+            size="small"
+          />
+          <FormControlLabel
+            control={<Checkbox checked={understood} onChange={(event) => setUnderstood(event.target.checked)} />}
+            label="I understand ViBread won't check this for me"
+            sx={{ mt: 1 }}
+          />
+          <Typography variant="body2" color="text.secondary">The revision's real verdicts stay unchanged. The override is recorded in the mission timeline.</Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setOverrideOpen(false)}>Cancel</Button>
+          <Button color="error" variant="outlined" disabled={!understood || release.isPending} onClick={() => go(false, overrideReason)}>
+            {release.isPending ? "Releasing…" : "Override and GO for build"}
           </Button>
         </DialogActions>
       </Dialog>

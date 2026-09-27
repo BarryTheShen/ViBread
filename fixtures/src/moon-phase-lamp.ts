@@ -126,6 +126,8 @@ export const moonPhaseLamp: Circuit = {
     { pin: "A0", mode: "ANALOG_IN", part: "LDR1", purpose: "Measure how dark the room is" },
   ],
   sketch: { source: sketch },
+  // "Four lights in a row", moon light 1 on the left (issue #26: an order the idea implies is stated explicitly).
+  placement: { groups: [["LED1", "LED2", "LED3", "LED4"]] },
   intent: [
     { id: "C1", text: "The lamp lights up only when the room is dark." },
     { id: "C2", text: "Each press of the button moves the moon to its next phase, cycling through 8 phases from new moon back to new moon." },

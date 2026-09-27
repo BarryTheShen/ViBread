@@ -37,7 +37,8 @@ import type { DeviceLine } from "./telemetry.js";
  *   GET    /api/missions/:id/chat/stream                        → resume the active stream (204 if none)
  *   POST   /api/missions/:id/chat/stop                          → { ok: true }
  *   POST   /api/approvals/:approvalId     { decision }          → ApprovalView (bench requests only)
- *   POST   /api/missions/:id/release      ReleaseRequest        → MissionDetail (the person's "GO for build"; 409 not_all_go | tests_missing | retro_missing | retro_no_go)
+ *   POST   /api/missions/:id/release      ReleaseRequest        → MissionDetail (the person's "GO for build"; 409 not_all_go | tests_missing | retro_missing | retro_no_go; optional web-human override)
+ *   POST   /api/missions/:id/confirm     { override? }          → MissionDetail (mission complete; optional web-human bench override)
  *   GET    /api/missions/:id/build                              → BuildState   (phone Build Mode polls every 1–2 s)
  *   POST   /api/missions/:id/build/step   { n }                 → BuildState   ("I did this")
  *   POST   /api/missions/:id/build/wire-color WireColorRequest → BuildState   (the builder recolours a wire or net)
@@ -46,6 +47,8 @@ import type { DeviceLine } from "./telemetry.js";
  *   GET    /api/missions/:id/build/breadboard.svg               → finished breadboard with the builder's wire colours
  *   POST   /api/missions/:id/bench/firmware { kind }            → BenchFirmwareResponse  kind: "bench" | "app"
  *   POST   /api/missions/:id/bench/runs   BenchRunRequest       → BenchRunResult
+ *   POST   /api/missions/:id/bench/override { bypass, runId? }  → accepted run or { ok: true } (web-human only)
+ *   POST   /api/missions/:id/bench/requests/:approvalId/start { override? } → started bench action (app flash override)
  *   POST   /api/missions/:id/photo        multipart photo + step → PhotoCheckResult
  *   GET    /api/connections                                     → ConnectionsView
  *   POST   /api/connections/tokens        { scopes, ttlMinutes } → TokenMintResponse
@@ -164,13 +167,22 @@ export interface RevisionDetail {
 }
 
 /**
+ * Human override for a safety gate. The server accepts this only when the actor is a person using the web UI.
+ */
+export interface SafetyOverride {
+  reason?: string;
+}
+
+/**
  * Human release of a revision as the build target (the Flight Director's GO). Every deterministic console must be GO;
  * RETRO must be GO unless it could not run (Claude not connected), in which case `acknowledgeMissingReview` must be true.
  */
 export interface ReleaseRequest {
   revision: number;
   acknowledgeMissingReview?: boolean;
+  override?: SafetyOverride;
 }
+
 
 export interface BuildState {
   missionId: string;

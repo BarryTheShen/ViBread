@@ -1,0 +1,360 @@
+{
+  "schema": "vibread.circuit/0.1",
+  "title": "5-Light Binary Counter",
+  "summary": "Each button press adds one, shown in binary on five lights in a row: 16s on the left, 1s on the right.",
+  "board": {
+    "profile": "uno-r3-atmega328p-5v"
+  },
+  "breadboard": {
+    "profile": "bb-830"
+  },
+  "parts": [
+    {
+      "id": "BTN1",
+      "module": "button",
+      "label": "Count button",
+      "params": {}
+    },
+    {
+      "id": "LED5",
+      "module": "led",
+      "label": "Leftmost light (16s, green)",
+      "params": {
+        "color": "green"
+      }
+    },
+    {
+      "id": "LED4",
+      "module": "led",
+      "label": "Light 2 from left (8s, green)",
+      "params": {
+        "color": "green"
+      }
+    },
+    {
+      "id": "LED3",
+      "module": "led",
+      "label": "Middle light (4s, yellow)",
+      "params": {
+        "color": "yellow"
+      }
+    },
+    {
+      "id": "LED2",
+      "module": "led",
+      "label": "Light 2 from right (2s, yellow)",
+      "params": {
+        "color": "yellow"
+      }
+    },
+    {
+      "id": "LED1",
+      "module": "led",
+      "label": "Rightmost light (1s, red)",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "R1",
+      "module": "resistor",
+      "label": "Resistor for the 1s light",
+      "params": {
+        "ohms": 1000,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R2",
+      "module": "resistor",
+      "label": "Resistor for the 2s light",
+      "params": {
+        "ohms": 1000,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R3",
+      "module": "resistor",
+      "label": "Resistor for the 4s light",
+      "params": {
+        "ohms": 1000,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R4",
+      "module": "resistor",
+      "label": "Resistor for the 8s light",
+      "params": {
+        "ohms": 1000,
+        "tolerancePct": 5
+      }
+    },
+    {
+      "id": "R5",
+      "module": "resistor",
+      "label": "Resistor for the 16s light",
+      "params": {
+        "ohms": 1000,
+        "tolerancePct": 5
+      }
+    }
+  ],
+  "nets": [
+    {
+      "id": "GND",
+      "kind": "ground",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "GND"
+        },
+        {
+          "part": "BTN1",
+          "pin": "3"
+        },
+        {
+          "part": "LED1",
+          "pin": "K"
+        },
+        {
+          "part": "LED2",
+          "pin": "K"
+        },
+        {
+          "part": "LED3",
+          "pin": "K"
+        },
+        {
+          "part": "LED4",
+          "pin": "K"
+        },
+        {
+          "part": "LED5",
+          "pin": "K"
+        }
+      ]
+    },
+    {
+      "id": "D2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D2"
+        },
+        {
+          "part": "BTN1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D3",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D3"
+        },
+        {
+          "part": "R1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D4",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D4"
+        },
+        {
+          "part": "R2",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D5",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D5"
+        },
+        {
+          "part": "R3",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D6",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D6"
+        },
+        {
+          "part": "R4",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D7",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D7"
+        },
+        {
+          "part": "R5",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L1",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R1",
+          "pin": "2"
+        },
+        {
+          "part": "LED1",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "L2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R2",
+          "pin": "2"
+        },
+        {
+          "part": "LED2",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "L3",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R3",
+          "pin": "2"
+        },
+        {
+          "part": "LED3",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "L4",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R4",
+          "pin": "2"
+        },
+        {
+          "part": "LED4",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "L5",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R5",
+          "pin": "2"
+        },
+        {
+          "part": "LED5",
+          "pin": "A"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "pin": "D2",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN1",
+      "purpose": "Count button (to GND)"
+    },
+    {
+      "pin": "D3",
+      "mode": "OUTPUT",
+      "part": "LED1",
+      "purpose": "Bit 0 (1s)"
+    },
+    {
+      "pin": "D4",
+      "mode": "OUTPUT",
+      "part": "LED2",
+      "purpose": "Bit 1 (2s)"
+    },
+    {
+      "pin": "D5",
+      "mode": "OUTPUT",
+      "part": "LED3",
+      "purpose": "Bit 2 (4s)"
+    },
+    {
+      "pin": "D6",
+      "mode": "OUTPUT",
+      "part": "LED4",
+      "purpose": "Bit 3 (8s)"
+    },
+    {
+      "pin": "D7",
+      "mode": "OUTPUT",
+      "part": "LED5",
+      "purpose": "Bit 4 (16s)"
+    }
+  ],
+  "sketch": {
+    "source": "// 5-Light Binary Counter \u2014 each button press adds one, shown in binary on five lights.\n\nconst uint8_t BUTTON_PIN = 2;                 // button to GND, INPUT_PULLUP\nconst uint8_t LED_PINS[5] = {3, 4, 5, 6, 7};  // bit 0 (1s, rightmost) .. bit 4 (16s, leftmost)\nconst unsigned long DEBOUNCE_MS = 30;\n\nuint8_t count = 0;\nbool stableState = HIGH;\nbool lastReading = HIGH;\nunsigned long lastChange = 0;\n\nvoid showCount() {\n  for (uint8_t i = 0; i < 5; i++) {\n    digitalWrite(LED_PINS[i], ((count >> i) & 1) ? HIGH : LOW);\n  }\n}\n\nvoid setup() {\n  pinMode(BUTTON_PIN, INPUT_PULLUP);\n  for (uint8_t i = 0; i < 5; i++) {\n    pinMode(LED_PINS[i], OUTPUT);\n    digitalWrite(LED_PINS[i], LOW);\n  }\n  Serial.begin(115200);\n  Serial.println(F(\"binary-counter ready, count 0\"));\n  showCount();\n}\n\nvoid loop() {\n  bool reading = digitalRead(BUTTON_PIN);\n  unsigned long now = millis();\n  if (reading != lastReading) {\n    lastReading = reading;\n    lastChange = now;\n  }\n  if (reading != stableState && (now - lastChange) >= DEBOUNCE_MS) {\n    stableState = reading;\n    if (stableState == LOW) {          // press edge\n      count = (count + 1) & 0x1F;      // 0..31, then back to 0\n      showCount();\n      Serial.print(F(\"count \"));\n      Serial.println(count);\n    }\n  }\n}\n"
+  },
+  "placement": {
+    "groups": [
+      [
+        "LED5",
+        "LED4",
+        "LED3",
+        "LED2",
+        "LED1"
+      ]
+    ]
+  },
+  "intent": [
+    {
+      "id": "C1",
+      "text": "Each press of the button adds one to the count, shown in binary on the five lights (1s light = bit 0 \u2026 16s light = bit 4)."
+    },
+    {
+      "id": "C2",
+      "text": "After 31 the next press goes back to 0 (all lights off)."
+    }
+  ],
+  "assumptions": [
+    "The five lights sit horizontally next to each other in one row: the 16s light (LED5, D7) on the left through the 1s light (LED1, D3) on the right (placement group LED5 \u2026 LED1).",
+    "Issue #26 regression: the tester's design r1 for 'Make a binary counter on 5 LEDs horizontally next to each other incremented with a button', reconstructed from its project files (sketch, parts list, breadboard.svg: D3\u2013D7 \u2192 1 k\u03a9 \u2192 LED anode, cathodes and the button to GND, INPUT_PULLUP), plus the placement request the design prompt now asks for."
+  ]
+}

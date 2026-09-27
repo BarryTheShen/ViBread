@@ -61,18 +61,18 @@ export type PinRole = z.infer<typeof PinRoleSchema>;
 export const IntentClauseSchema = z.object({ id: z.string().regex(/^C\d+$/), text: z.string().min(1) });
 export type IntentClause = z.infer<typeof IntentClauseSchema>;
 
-/** Physical arrangement the person asked for (issue #16). The allocator honours it or reports PLACEMENT-UNMET. */
+/** Physical arrangement the brief asks for (issues #16, #26). The allocator honours it or FAO fails on PLACEMENT-UNMET. */
 export const PlacementRequestSchema = z
   .object({
     groups: z
       .array(z.array(z.string().min(1)).min(2))
       .min(1)
       .describe(
-        "Each group lists part ids that must sit side by side on the breadboard, anchor first: the other parts go within a few rows of the first one, e.g. [[\"BTN1\",\"LED1\",\"R1\"],[\"BTN2\",\"LED2\",\"R2\"]] for 'each light next to its button'. A part may be in one group only.",
+        "Each group lists part ids that must sit together on the breadboard. Different parts, anchor first: the others go within a few rows of the first one, e.g. [[\"BTN1\",\"LED1\",\"R1\"],[\"BTN2\",\"LED2\",\"R2\"]] for 'each light next to its button'. Like parts form one row, left to right in the listed order, e.g. [[\"LED5\",\"LED4\",\"LED3\",\"LED2\",\"LED1\"]] for 'five lights in a row, 16s on the left'. A part may be in one group only.",
       ),
   })
   .describe(
-    "Optional placement request. Use it whenever the person asks for parts next to each other. The breadboard layout puts each group's parts in neighbouring rows on the same half of the board, groups left to right in the order listed. The assembly check's placement summary says what was actually built: describe only that, never an arrangement it does not show.",
+    "Placement request: state it whenever the brief implies an arrangement ('next to each other', 'in a row', 'left to right'). A row of like parts keeps its listed order; groups of different parts line up in the order of their Arduino pins. It is a hard requirement: if the layout can't meet it, the assembly check (FAO) is NO-GO with PLACEMENT-UNMET. Give the Arduino pins in the same physical order, consecutive along the row; the layout turns the Uno so the wires run parallel. The placement summary says what was actually built: describe only that.",
   );
 export type PlacementRequest = z.infer<typeof PlacementRequestSchema>;
 

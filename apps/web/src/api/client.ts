@@ -14,6 +14,7 @@ import type {
   ModuleSummary,
   RevisionDetail,
   RevisionSummary,
+  SafetyOverride,
   TimelineEvent,
   TokenMintResponse,
 } from "@vibread/core";
@@ -113,9 +114,9 @@ export const api = {
   build: (id: string, signal?: AbortSignal) => getJson<BuildState>(`${m(id)}/build`, signal),
   decideApproval: (approvalId: string, decision: ApprovalDecision) =>
     sendJson<ApprovalView>("POST", `/api/approvals/${encodeURIComponent(approvalId)}`, { decision }),
-  release: (id: string, revision: number, acknowledgeMissingReview: boolean) =>
-    sendJson<MissionDetail>("POST", `${m(id)}/release`, { revision, ...(acknowledgeMissingReview ? { acknowledgeMissingReview: true } : {}) }),
-  confirm: (id: string) => sendJson<MissionDetail>("POST", `${m(id)}/confirm`, {}),
+  release: (id: string, revision: number, acknowledgeMissingReview: boolean, override?: SafetyOverride) =>
+    sendJson<MissionDetail>("POST", `${m(id)}/release`, { revision, ...(acknowledgeMissingReview ? { acknowledgeMissingReview: true } : {}), ...(override ? { override } : {}) }),
+  confirm: (id: string, override?: SafetyOverride) => sendJson<MissionDetail>("POST", `${m(id)}/confirm`, { ...(override ? { override } : {}) }),
   claudeStart: () => sendJson<ClaudeLoginStart>("POST", "/api/connections/claude/start", {}),
   claudeComplete: (loginId: string, code: string) => sendJson<ClaudeAccountView>("POST", "/api/connections/claude/complete", { loginId, code }),
   claudeCancel: (loginId: string) => sendJson<ClaudeAccountView>("POST", "/api/connections/claude/cancel", { loginId }),

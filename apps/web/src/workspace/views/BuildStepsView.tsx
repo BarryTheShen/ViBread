@@ -155,6 +155,7 @@ export function BuildStepsView({
           runs: revision.results.bench,
           fullSelfTest: isFullSelfTestStep(step),
           step: step.n,
+          layout: revision.results.layout,
         })
     : [];
   const checksPassed = !step?.checkpoint || checkpointChecksPass(checkpointChecks);
@@ -269,8 +270,8 @@ export function BuildStepsView({
         ) : (
           step.callouts.length > 0 && (
             <List dense disablePadding sx={{ mt: 1 }}>
-              {step.callouts.map((c) => (
-                <ListItem key={c} disableGutters>
+              {step.callouts.map((c, i) => (
+                <ListItem key={`${c}-${i}`} disableGutters>
                   <ListItemText primary={c} />
                 </ListItem>
               ))}

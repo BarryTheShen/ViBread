@@ -53,13 +53,22 @@ function whackAMole(): Circuit {
 
 const DESIGNS: [string, Circuit][] = [...GOLDEN.map((design) => [design.key, design.circuit] as [string, Circuit]), ["whack-a-mole", whackAMole()]];
 
-/** Lays out and proves the result: LVS-clean and FAO GO, or a tool-side LAYOUT-NO-FIT. */
-function outcome(circuit: Circuit): { layout: Layout } | { noFit: string } {
+/**
+ * Lays out and proves the result: LVS-clean and FAO GO; or, when a placement group can't be built on this board, FAO
+ * NO-GO on PLACEMENT-UNMET alone (tool-side); or a tool-side LAYOUT-NO-FIT.
+ */
+function outcome(circuit: Circuit): { layout: Layout } | { unmet: string[] } | { noFit: string } {
   try {
     const layout = layoutBoard(circuit);
     const result = lvs(circuit, layout);
     expect(result.issues.filter((issue) => issue.severity === "error")).toEqual([]);
-    expect(assemblyReport({ circuit, layout, lvs: result, revisionHash: "test" }).verdict).toBe("GO");
+    const report = assemblyReport({ circuit, layout, lvs: result, revisionHash: "test" });
+    const blocking = report.findings.filter((finding) => finding.severity === "error");
+    if (report.verdict !== "GO") {
+      expect(blocking.map((finding) => [finding.ruleId, finding.toolSide])).toEqual(blocking.map(() => ["PLACEMENT-UNMET", true]));
+      expect(circuit.placement?.groups.length ?? 0).toBeGreaterThan(0);
+      return { unmet: blocking.map((finding) => finding.detail ?? "") };
+    }
     for (const hole of holesOf(layout)) expect(contactGroup(BREADBOARD_PROFILES[circuit.breadboard.profile], hole), hole).not.toBeNull();
     return { layout };
   } catch (error) {
@@ -72,15 +81,21 @@ function outcome(circuit: Circuit): { layout: Layout } | { noFit: string } {
 }
 
 describe("allocator and LVS on every breadboard profile", () => {
-  it.each(BREADBOARD_PROFILE_IDS)("fits every golden design and the whack-a-mole with an Uno on %s", (profile) => {
-    for (const [key, circuit] of DESIGNS) expect(outcome(on(circuit, profile, "uno-r3-atmega328p-5v")), key).toHaveProperty("layout");
+  it.each(BREADBOARD_PROFILE_IDS)("fits every golden design and the whack-a-mole with an Uno on %s (groups met on the bigger boards)", (profile) => {
+    for (const [key, circuit] of DESIGNS) {
+      const result = outcome(on(circuit, profile, "uno-r3-atmega328p-5v"));
+      // Placement groups (the whack-a-mole's three button+light groups, the moon lamp's row of four lights) may not
+      // fit 17 rows without rails: honestly unmet there (FAO NO-GO on PLACEMENT-UNMET alone), never silently shipped.
+      if (profile === "bb-170" && circuit.placement) expect(result, key).not.toHaveProperty("noFit");
+      else expect(result, key).toHaveProperty("layout");
+    }
   });
 
   it.each(BREADBOARD_PROFILE_IDS)("with a Nano on %s: fits, or says LAYOUT-NO-FIT only on the mini board", (profile) => {
     for (const [key, circuit] of DESIGNS) {
       const result = outcome(on(circuit, profile, "nano-atmega328p-5v"));
       if (profile === "bb-170") expect(result, key).toHaveProperty("noFit");
-      else expect(result, key).toHaveProperty("layout");
+      else expect(result, key).not.toHaveProperty("noFit");
     }
   });
 
@@ -98,7 +113,7 @@ describe("allocator and LVS on every breadboard profile", () => {
     const moon = on(GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit, "bb-830-split");
     const layout = layoutBoard(moon);
     const bridges = layout.jumpers.filter((jumper) => isRailBridge(split, jumper));
-    expect(bridges.map((jumper) => ["hole" in jumper.from ? jumper.from.hole : "", "hole" in jumper.to ? jumper.to.hole : ""]).sort()).toEqual([["T+30", "T+32"], ["T-30", "T-32"]]);
+    expect(bridges.map((jumper) => ["hole" in jumper.from ? jumper.from.hole : "", "hole" in jumper.to ? jumper.to.hole : ""]).sort()).toContainEqual(["T-30", "T-32"]);
     // Bridges are built with the rails, before any wire that feeds a part.
     const firstPartWire = layout.jumpers.findIndex((jumper) => !isRailBridge(split, jumper) && !("board" in jumper.from && "hole" in jumper.to && parseHole(jumper.to.hole)?.kind === "rail"));
     for (const bridge of bridges) expect(layout.jumpers.indexOf(bridge)).toBeLessThan(firstPartWire);
@@ -107,9 +122,19 @@ describe("allocator and LVS on every breadboard profile", () => {
     expect(lvs(moon, withoutBridges).issues.map((issue) => issue.kind)).toContain("split-net");
     // The same wires on an unsplit 830 need no bridge.
     expect(layoutBoard(on(moon, "bb-830")).jumpers.some((jumper) => isRailBridge(BREADBOARD_PROFILES["bb-830"], jumper))).toBe(false);
-    // Launch control only uses one half of its ground rail: no bridge.
-    const launch = layoutBoard(on(GOLDEN.find((design) => design.key === "launch-control")!.circuit, "bb-830-split"));
-    expect(launch.jumpers.filter((jumper) => isRailBridge(split, jumper))).toEqual([]);
+    // Every golden: a rail gets its bridge exactly when its wires and legs use both halves.
+    for (const design of GOLDEN) {
+      const layout = layoutBoard(on(design.circuit, "bb-830-split"));
+      for (const rail of ["T+", "T-"] as const) {
+        const holes = [
+          ...layout.jumpers.filter((jumper) => !isRailBridge(split, jumper)).flatMap((jumper) => [jumper.from, jumper.to]).flatMap((end) => ("hole" in end ? [end.hole] : [])),
+          ...layout.placements.flatMap((placement) => Object.values(placement.pins)),
+        ].filter((hole) => hole.startsWith(rail));
+        const halves = new Set(holes.map((hole) => Number(hole.slice(2)) <= split.railSplitAfter! ? 1 : 2));
+        const bridged = layout.jumpers.some((jumper) => isRailBridge(split, jumper) && "hole" in jumper.from && jumper.from.hole.startsWith(rail));
+        expect(bridged, `${design.key} ${rail}`).toBe(halves.size > 1);
+      }
+    }
   });
 });
 

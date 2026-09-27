@@ -149,4 +149,47 @@ describe("human release (GO for build)", () => {
       "The simulation tests haven't been written yet because Claude isn't connected",
     );
   });
+  it("web override releases a missing-test revision as-is and records every bypassed gate without changing verdicts", async () => {
+    const { deps, runtime, mission } = await setup({ withSuite: false, models: anthropicModels({ config: { model: "m", fastModel: "f" } }) });
+    const before = await deps.store.getRevision(mission.id, 1);
+    const detail = await runtime.release({ missionId: mission.id, revision: 1, actor: FLIGHT, override: { reason: "tested by hand" } });
+    expect(detail.mission.releasedRevision).toBe(1);
+    const released = await deps.store.getRevision(mission.id, 1);
+    expect(released?.suite).toBeUndefined();
+    expect(released?.results.reports.map((report) => [report.console, report.verdict])).toEqual(before?.results.reports.map((report) => [report.console, report.verdict]));
+    const event = (await runtime.missions.events(mission.id)).find((candidate) => candidate.kind === "release.override");
+    expect(event?.text).toContain("Simulation tests (FIDO) not written");
+    expect(event?.text).toContain("independent review not run");
+    expect(event?.text).toContain("Reason: tested by hand");
+    expect(event?.data).toMatchObject({ bypassed: expect.arrayContaining(["Simulation tests (FIDO) not written", "independent review not run"]), reason: "tested by hand" });
+  });
+
+  it("override includes failing simulation scenarios and permits a NO-GO review, but agents and iMessage cannot use it", async () => {
+    const { deps, runtime, mission } = await setup({});
+    const revision = (await deps.store.getRevision(mission.id, 1))!;
+    const reports = revision.results.reports.map((report) => report.console === "FIDO" ? {
+      ...report,
+      verdict: "NO-GO" as const,
+      findings: [{ console: "FIDO" as const, ruleId: "TESTS-SUSPECT", severity: "error" as const, title: "T1 looks wrong", refs: { scenarios: ["T1"] } }],
+    } : report.console === "RETRO" ? report : report);
+    await deps.store.saveResults(mission.id, 1, {
+      reports: [
+        ...reports,
+        { console: "RETRO", verdict: "NO-GO", summary: "Review found a concern", findings: [], revisionHash: revision.hash, at: new Date().toISOString() },
+      ],
+    });
+    await expect(runtime.release({ missionId: mission.id, revision: 1, actor: { kind: "agent", id: "a", channel: "mcp" }, override: {} })).rejects.toMatchObject({ status: 403, code: "override_not_allowed" });
+    await expect(runtime.release({ missionId: mission.id, revision: 1, actor: { kind: "human", id: "operator", channel: "imessage" }, override: {} })).rejects.toMatchObject({ status: 403, code: "override_not_allowed" });
+    const detail = await runtime.release({ missionId: mission.id, revision: 1, actor: FLIGHT, override: {} });
+    expect(detail.mission.releasedRevision).toBe(1);
+    const event = (await runtime.missions.events(mission.id)).find((candidate) => candidate.kind === "release.override");
+    expect(event?.text).toContain("Simulation tests (FIDO) NO-GO");
+    expect(event?.text).toContain("TESTS-SUSPECT scenarios: T1");
+    expect(event?.text).toContain("Independent review (RETRO) NO-GO");
+    expect((await deps.store.getRevision(mission.id, 1))?.results.reports.find((report) => report.console === "FIDO")?.verdict).toBe("NO-GO");
+  });
+  it("rejects an override reason longer than 200 characters", async () => {
+    const { runtime, mission } = await setup({});
+    await expect(runtime.release({ missionId: mission.id, revision: 1, actor: FLIGHT, override: { reason: "x".repeat(201) } })).rejects.toMatchObject({ status: 400, code: "invalid_override" });
+  });
 });

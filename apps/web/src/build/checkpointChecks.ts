@@ -1,13 +1,12 @@
-import type { BenchRunResult, Circuit, SelfTestPlan, SelfTestSubject, TestId } from "@vibread/core";
+import type { BenchRunResult, Circuit, Layout, SelfTestPlan, SelfTestSubject, TestId } from "@vibread/core";
 import { planSelfTest } from "@vibread/bench";
-
 /** The Final power-up step runs the whole self-test plan, not just the step's own tests. */
 export function isFullSelfTestStep(step: { title: string; checkpoint?: { text: string } }): boolean {
   return /full(?:\s+staged)?\s+self-test/i.test(`${step.title} ${step.checkpoint?.text ?? ""}`);
 }
 
-/** `manual`: the board can't measure it (skipped), so it's checked by eye. `incomplete`: the test ran but didn't finish. */
-export type CheckpointCheckStatus = "pass" | "fail" | "manual" | "incomplete" | "not-run";
+/** `manual`: the board can't measure it (skipped), so it's checked by eye; `override`: a person accepted a failed run. */
+export type CheckpointCheckStatus = "pass" | "fail" | "manual" | "incomplete" | "override" | "not-run";
 
 export interface CheckpointCheck {
   id: string;
@@ -112,8 +111,9 @@ function statusFor(test: TestId, subject: string | undefined, runs: BenchRunResu
     if (!result) continue;
     const subjectResult = subject === undefined ? undefined : result.subjects.find((candidate) => candidate.part === subject);
     const status = subjectResult?.status ?? result.status;
+    const acceptedByOverride = run.overriddenBy !== undefined && status !== "pass" && status !== "skipped";
     return {
-      status: status === "pass" ? "pass" : status === "fail" ? "fail" : status === "skipped" ? "manual" : "incomplete",
+      status: acceptedByOverride ? "override" : status === "pass" ? "pass" : status === "fail" ? "fail" : status === "skipped" ? "manual" : "incomplete",
       diagnosis: status === "fail" ? run.diagnosis.summary : undefined,
     };
   }
@@ -150,6 +150,8 @@ export function describeCheckpointChecks(input: {
   const tests = input.fullSelfTest && input.plan ? input.plan.tests : input.tests;
   // Two steps can ask for the same tests (the bare-board check and the power checkpoint both run rails.vcc): a run from
   // one must not tick the other. Runs not started from a step (a full self-test, older runs) count everywhere.
+  // Practice runs on the virtual board count here too, so "Try without a board" can walk the build; the gates that prove
+  // the physical board (mission complete, app flash, calibration) use only real runs (latestFullBenchRun on the server).
   const ownRuns = (input.runs ?? []).filter((run) => run.step === undefined || run.step === input.step);
   // The Final power-up proves the finished board in one go: only a run that covered every listed test counts, so passes
   // collected piecemeal from earlier checkpoints (or from before the board was built) can't stand in for it.
@@ -193,10 +195,11 @@ export function checkpointChecksForRevision(input: {
   runs?: BenchRunResult[];
   fullSelfTest?: boolean;
   step?: number;
+  layout?: Pick<Layout, "placements">;
 }): CheckpointCheck[] {
   return describeCheckpointChecks({
     ...input,
-    plan: input.plan ?? planSelfTest(input.circuit, input.revisionHash),
+    plan: input.plan ?? planSelfTest(input.circuit, input.revisionHash, input.layout),
   });
 }
 
@@ -212,7 +215,7 @@ export function checkpointTests(checks: CheckpointCheck[]): TestId[] {
 export function checkpointChecksPass(checks: CheckpointCheck[]): boolean {
   const measurable = checks.filter((check) => check.status !== "manual");
   if (measurable.length === 0) return checks.length > 0;
-  return measurable.every((check) => check.status === "pass");
+  return measurable.every((check) => check.status === "pass" || check.status === "override");
 }
 
 /** What a checkpoint row says about its status (web build steps and phone Build Mode). */
@@ -222,6 +225,8 @@ export function checkpointStatusText(status: CheckpointCheckStatus): string {
       return "Pass";
     case "fail":
       return "Failed";
+    case "override":
+      return "Accepted by override";
     case "manual":
       return "Check by eye — the board can't measure this connection; compare it with the picture";
     case "incomplete":

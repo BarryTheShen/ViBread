@@ -4,7 +4,7 @@
  * and catalogue variant), never from per-step strings. Legs are laid out in the same left-to-right order as their holes
  * on the board, so the panel and the board read the same way round.
  */
-import { parseHole, partVisual, resistorBands, formatOhms, type Circuit, type HoleId, type Jumper, type Layout, type Part, type PartVisual } from "@vibread/core";
+import { parseHole, partVisual, resistorBands, formatOhms, type Circuit, type HoleId, type Jumper, type Layout, type Part, type PartVisual, type StepRepeat } from "@vibread/core";
 
 /** Height of one drawn item (and of the whole panel at zoom 1), in 1200-wide picture units. */
 export const PANEL_HEIGHT = 380;
@@ -270,6 +270,33 @@ export function renderPartsPanel(input: PanelInput, zoom = 1): { svg: string; an
   return { svg: out.join(""), anchors, width, height };
 }
 
+/**
+ * The repeat step's panel (issue #25): one tick box per copy with its parts, its column and the Arduino pin it goes
+ * to. The checklist stays in one column so every row has the full panel width.
+ */
+export function renderRepeatPanel(repeat: StepRepeat, zoom = 1): { svg: string; anchors: PanelAnchor[]; width: number; height: number } {
+  const width = PANEL_WIDTH;
+  const height = Math.round(PANEL_HEIGHT * zoom);
+  const rest = repeat.copies.slice(1);
+  const labels = rest.map((copy) => {
+    const pins = copy.boardPins.length > 0 ? ` → ${copy.boardPins.join(", ")}` : "";
+    return `Copy ${copy.index}${pins}: ${copy.parts.join(" + ")}, column ${copy.column}`;
+  });
+  const line = Math.min(64, (height - 110) / rest.length);
+  const longestLabel = Math.max(1, ...labels.map((label) => label.length));
+  // Leave room for the check box, its gap, and a little breathing room at the card's right edge. SVG text is
+  // proportional, but 0.55 × font size per character is a conservative fit for these monospace-ish labels.
+  const maxTextWidth = width - 60 - 16 - 36;
+  const size = Math.min(30, line * 0.55, maxTextWidth / (1 + longestLabel * 0.55));
+  const out: string[] = [`<rect x="12" y="10" width="${width - 24}" height="${height - 20}" rx="18" class="panel-card"/>`, text(width / 2, 52, `Repeat ×${rest.length} more · ${repeat.columns} columns right each time`, "panel-title")];
+  rest.forEach((copy, index) => {
+    const x = 60;
+    const y = 100 + index * line;
+    out.push(`<g data-repeat-check="${copy.index}"><rect x="${x}" y="${y}" width="${size}" height="${size}" rx="5" class="panel-check"/><text x="${x + size + 16}" y="${y + size * 0.8}" class="panel-label" style="font-size:${Math.round(size)}px">${esc(labels[index]!)}</text></g>`);
+  });
+  return { svg: out.join(""), anchors: [], width, height };
+}
+
 /** Panel styles (scoped by the caller like the rest of the drawing). */
 export const PANEL_CSS = [
   ".panel-card{fill:#F6F8FA;stroke:#AEB6BF;stroke-width:2}",
@@ -301,6 +328,7 @@ export const PANEL_CSS = [
   ".panel-wire-casing{fill:none;stroke:#1B1D2B;stroke-width:17;stroke-linecap:round;opacity:.55}",
   ".panel-badge{fill:#fff;stroke-width:5}",
   ".panel-badge-text{fill:#1B1D2B;font-size:28px;font-weight:800}",
+  ".panel-check{fill:#fff;stroke:#1B1D2B;stroke-width:3}",
   ".panel-arrow{fill:none;stroke:#E8590C;stroke-width:3;stroke-dasharray:10 7}",
   ".panel-arrow-head{fill:#E8590C}",
 ].join("");

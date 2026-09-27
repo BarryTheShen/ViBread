@@ -1,4 +1,4 @@
-import type { BenchRunResult, BuildState, ConsoleId, MissionDetail } from "@vibread/core";
+import { isPracticeRun, type BenchRunResult, type BuildState, type ConsoleId, type MissionDetail } from "@vibread/core";
 import type { NextStep } from "../contracts.js";
 
 const REQUIRED: ConsoleId[] = ["EECOM", "GUIDO", "FIDO", "FAO"];
@@ -28,10 +28,11 @@ export function releaseReadiness(detail: MissionDetail): ReleaseReadiness {
   };
 }
 
-/** The latest bench run was a virtual-board pass: practice done, the real Arduino test is next. */
+/** A virtual pass means the real Arduino test is next, unless a real pass already exists. */
 export function practicePassedLast(runs: readonly BenchRunResult[] | undefined): boolean {
   const last = runs?.at(-1);
-  return last !== undefined && last.verdict === "pass" && last.runId.startsWith("virtual-");
+  const latestPhysical = runs?.findLast((candidate) => !isPracticeRun(candidate));
+  return last !== undefined && isPracticeRun(last) && last.verdict === "pass" && latestPhysical?.verdict !== "pass";
 }
 
 /** Steps finished: every step once the build is over, else the ones before the builder's current step. */

@@ -125,6 +125,18 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
         await sendMachine(deps, missionId, fix ? { type: "FIX_PROPOSED", revision: revision.n } : { type: "DESIGN_READY", revision: revision.n });
         const verdicts = Object.fromEntries(revision.results.reports.map((r) => [r.console, r.verdict]));
         debug.event(missionId, "pipeline", `revision ${revision.n} checked: ${allGo(revision.results.reports) ? "all GO" : "not all GO"}`, { revision: revision.n, verdicts });
+        // Which breadboard layout the allocator chose and why (issue #26), and what the design asked for.
+        const fao = revision.results.reports.find((r) => r.console === "FAO");
+        const decision = fao?.evidence?.layoutDecision as { chosen?: string; reason?: string } | undefined;
+        if (decision) {
+          const placement = revision.results.placement;
+          debug.event(missionId, "pipeline", `revision ${revision.n} layout: ${decision.chosen} — ${decision.reason}`.slice(0, 300), {
+            revision: revision.n,
+            requested: revision.circuit.placement ?? null,
+            unmet: placement?.groups.filter((group) => !group.met).map((group) => group.detail) ?? [],
+            ...decision,
+          });
+        }
       },
   };
   // One DesignOps for the tools and the human release: they share the test-author suite cache.

@@ -119,6 +119,71 @@ describe("bench requests from agents reach the bench", () => {
     expect(await listed(missionId)).toEqual([]);
     expect((await ctx.broker.get(id))?.status).toBe("consumed");
   });
+  it("web self-test and app-flash overrides are recorded without changing a failed verdict", async () => {
+    const { ctx } = running.context;
+    const missionId = await missionWithRevision();
+    const failed: BenchRunResult = {
+      runId: "real-failed",
+      revision: 1,
+      kind: "selftest",
+      results: [],
+      diagnosis: { attribution: "wiring", candidates: [], summary: "A real board check failed." },
+      calibration: [],
+      verdict: "fail",
+    };
+    await ctx.store.saveResults(missionId, 1, { bench: [failed] });
+    const accepted = await fetch(`${base}/api/missions/${missionId}/bench/override`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ bypass: "self-test", runId: failed.runId, reason: "checked the wiring" }),
+    });
+    expect(accepted.status).toBe(200);
+    expect((await ctx.store.getRevision(missionId, 1))?.results.bench?.[0]).toMatchObject({ verdict: "fail", overriddenBy: { actor: OPERATOR, reason: "checked the wiring" } });
+
+    const flashMission = await missionWithRevision();
+    const request = await invokeTool({ registry: ctx.tools, broker: ctx.broker, store: ctx.store, ctx: { missionId: flashMission, actor: CLAUDE_CODE }, name: "request_bench_action", args: { action: "flash-app" } });
+    expect(request.status).toBe("bench-click");
+    const approvalId = request.status === "bench-click" ? request.approval.id : "";
+    const started = await fetch(`${base}/api/missions/${flashMission}/bench/requests/${approvalId}/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ override: { reason: "tested by hand" } }),
+    });
+    expect(started.status).toBe(200);
+    const event = (await ctx.store.listEvents(flashMission)).find((candidate) => candidate.kind === "bench.override");
+    expect(event?.text).toContain("passing bench self-test not run");
+    expect(event?.text).toContain("Reason: tested by hand");
+  });
+
+  it("power-check override is a web-human timeline event only", async () => {
+    const { ctx } = running.context;
+    const missionId = await missionWithRevision();
+    const response = await fetch(`${base}/api/missions/${missionId}/bench/override`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ bypass: "power-check" }),
+    });
+    expect(response.status).toBe(200);
+    expect((await ctx.store.listEvents(missionId)).find((event) => event.kind === "bench.override")?.data).toMatchObject({ bypass: "power-check" });
+  });
+  it("mission completion override bypasses the full bench requirement and records the reason", async () => {
+    const { ctx } = running.context;
+    const missionId = await missionWithRevision();
+    await ctx.machine.send(missionId, { type: "DESIGN_READY", revision: 1 });
+    await ctx.machine.send(missionId, { type: "RELEASED", revision: 1 });
+    await ctx.machine.send(missionId, { type: "BUILD_DONE" });
+    await ctx.machine.send(missionId, { type: "VERIFY_PASSED" });
+    const refused = await fetch(`${base}/api/missions/${missionId}/confirm`, { method: "POST" });
+    expect(refused.status).toBe(409);
+    expect((await refused.json()) as { error: { code: string } }).toMatchObject({ error: { code: "bench_run_required" } });
+    const confirmed = await fetch(`${base}/api/missions/${missionId}/confirm`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ override: { reason: "verified the circuit manually" } }),
+    });
+    expect(confirmed.status).toBe(200);
+    expect((await ctx.store.listEvents(missionId)).find((event) => event.kind === "mission.override")?.text).toContain("bench self-test not run");
+  });
 
   it("the design agent's request_bench_action (pi agent) is listed for the bench and never executed", async () => {
     const { ctx } = running.context;

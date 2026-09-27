@@ -95,11 +95,12 @@ export function useCreateMission() {
 export function useRelease(id: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({ revision, acknowledgeMissingReview }: { revision: number; acknowledgeMissingReview: boolean }) =>
-      api.release(id, revision, acknowledgeMissingReview),
+    mutationFn: ({ revision, acknowledgeMissingReview, override }: { revision: number; acknowledgeMissingReview: boolean; override?: { reason?: string } }) =>
+      api.release(id, revision, acknowledgeMissingReview, override),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: queryKeys.mission(id) });
       void qc.invalidateQueries({ queryKey: queryKeys.missions });
+      void qc.invalidateQueries({ queryKey: queryKeys.timeline(id) });
     },
   });
 }
@@ -108,8 +109,11 @@ export function useRelease(id: string) {
 export function useConfirmMission(id: string) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => api.confirm(id),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.mission(id) }),
+    mutationFn: (body?: { override?: { reason?: string } }) => api.confirm(id, body?.override),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.mission(id) });
+      void qc.invalidateQueries({ queryKey: queryKeys.timeline(id) });
+    },
   });
 }
 

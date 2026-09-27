@@ -2,21 +2,68 @@ import { verdictOf, type Circuit, type ConsoleReport, type Finding, type Layout,
 
 import { LayoutFitError, layoutHash } from "./allocator.js";
 import { placementSummary } from "./placement.js";
+import { labelOrderProblems, layoutQuality } from "./quality.js";
 
 export function assemblyReport(input: { circuit: Circuit; layout: Layout; lvs: LvsResult; revisionHash: string }): ConsoleReport {
   const findings: Finding[] = [];
-  const placement = placementSummary(input.circuit, input.layout);
-  // A requested arrangement that could not be built is reported, never silently dropped. The circuit itself is fine,
-  // so FAO stays GO; toolSide tells the design agent to tell the person instead of redesigning or claiming otherwise.
+  const quality = layoutQuality(input.circuit, input.layout);
+  const placement = placementSummary(input.circuit, input.layout, quality);
+  // Design philosophy rule 9: a spatial request the layout does not honour is a broken promise, so the design is not
+  // GO. The circuit itself is fine: toolSide tells the design agent to stop and tell the person which request could
+  // not be met and why, instead of redesigning or describing the parts as if it were.
   for (const group of placement.groups.filter((entry) => !entry.met)) {
+    // An order the layout couldn't follow is the design's to fix (it can retry); lack of room is a ViBread limit.
+    findings.push(group.orderOnly
+      ? {
+          console: "FAO",
+          ruleId: "PLACEMENT-UNMET",
+          severity: "error",
+          title: `${group.parts.join(", ")} are side by side but not in the order the placement group lists.`,
+          detail: group.detail,
+          fix: "List the group's parts left to right in exactly the order you want, give their Arduino pins one consistent direction along the row (consecutive pins), and keep labels like \"leftmost\" true; then call propose_design again.",
+          refs: { parts: group.parts },
+        }
+      : {
+          console: "FAO",
+          ruleId: "PLACEMENT-UNMET",
+          severity: "error",
+          title: `ViBread could not place ${group.parts.join(", ")} as requested on the breadboard.`,
+          detail: group.detail,
+          fix: "Not a design mistake: there is no room for this arrangement. Tell the person which arrangement could not be built and why (the detail says), and describe the layout only from the placement summary. A bigger breadboard or fewer parts may make room; don't ship it as if the request were met.",
+          refs: { parts: group.parts },
+          toolSide: true,
+        });
+  }
+  // Layout quality (rules 2 and 4): the agent sees what makes this board hard to build and can fix the cause.
+  if (quality.crossings > 0) {
     findings.push({
       console: "FAO",
-      ruleId: "PLACEMENT-UNMET",
+      ruleId: "LAYOUT-CROSSINGS",
       severity: "warning",
-      title: `ViBread could not place ${group.parts.join(", ")} side by side on the breadboard.`,
-      detail: group.detail,
-      fix: "Tell the person these parts are not next to each other, and describe the layout from the placement summary. A bigger breadboard or fewer parts may make room.",
-      refs: { parts: group.parts },
+      title: `${quality.crossings} pair${quality.crossings === 1 ? "" : "s"} of wires cross on the breadboard.`,
+      detail: quality.crossingPairs.map(([a, b]) => `${a}×${b}`).join(", "),
+      fix: "Usually the Arduino pins are not in the parts' order: give repeated units consecutive pins along the row, each pin family in the same direction (the layout turns the Uno to make one direction parallel). Keep the parts' left-to-right order the idea asks for.",
+    });
+  }
+  const labelOrder = labelOrderProblems(input.circuit, input.layout);
+  if (labelOrder.length > 0) {
+    findings.push({
+      console: "FAO",
+      ruleId: "LAYOUT-LABEL-ORDER",
+      severity: "warning",
+      title: "Some parts don't sit where their labels say.",
+      detail: labelOrder.join("; "),
+      fix: "Make the order explicit with a row placement group (like parts listed left to right), or correct the labels so the build steps match the board.",
+    });
+  }
+  for (const repeat of quality.repeats.filter((entry) => !entry.regular)) {
+    findings.push({
+      console: "FAO",
+      ruleId: "LAYOUT-IRREGULAR",
+      severity: "warning",
+      title: `${repeat.copies.map((copy) => copy.join("+")).join(", ")} are the same circuit but are not built as identical copies.`,
+      detail: `Leftmost columns ${repeat.columns.join(", ")}; the copies differ in shape or spacing (usually because a placement request or the board size left no room for a regular row).`,
+      fix: "Not a design mistake. Mention it to the person; a bigger breadboard or dropping a conflicting placement request lets ViBread build them in one regular row.",
       toolSide: true,
     });
   }
@@ -54,6 +101,7 @@ export function assemblyReport(input: { circuit: Circuit; layout: Layout; lvs: L
       placements: input.layout.placements.length,
       jumpers: input.layout.jumpers.length,
       placement,
+      quality: { wires: quality.wires, crossings: quality.crossings, wireLength: quality.wireLength, repeats: quality.repeats, score: quality.score },
     },
     revisionHash: input.revisionHash,
     at: new Date().toISOString(),

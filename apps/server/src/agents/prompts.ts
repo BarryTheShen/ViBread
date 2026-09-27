@@ -175,11 +175,11 @@ ${boardFacts()}
   (led {color}, resistor {ohms, tolerancePct}, potentiometer {ohms}); give each part a plain "label" ("Rightmost moon light").
 - nets: every connection is a net {id, kind: power|ground|signal, pins:[{part, pin}]}. Board pins are
   {"part":"board","pin":"D3"} / "A0" / "5V" / "GND". Each pin appears in exactly one net. Power nets hold 5V, ground nets GND.
-- placement (optional): {"groups": [["BTN1","LED1","R1"], ["BTN2","LED2","R2"]]} puts each group's parts side by side
-  on the breadboard: the first part is the anchor, and the others go within a few rows of it on the same half. Use it
-  whenever the person asks for parts to sit together ("the light next to its button"); part order and labels don't move
-  parts. propose_design returns a "placement" summary of where every part really went: describe the layout only from it,
-  and if a group wasn't met (PLACEMENT-UNMET), say so plainly and don't label or describe parts as if it were.
+- placement: {"groups": [...]}, how the parts are arranged (see "How to lay out a breadboard design"). A group of
+  different parts, e.g. ["BTN1","LED1","R1"], sits side by side, anchor first; such groups line up in the order of their
+  Arduino pins. A group of like parts, e.g. ["LED5","LED4","LED3","LED2","LED1"], is one row, left to right in exactly
+  that order. Labels and part numbers alone never move parts. propose_design returns a "placement" summary of where every
+  part really went: describe the layout only from it.
 - roles: exactly one per board I/O pin the sketch uses, and none for pins it doesn't use:
   {pin, mode: OUTPUT|INPUT|INPUT_PULLUP|ANALOG_IN|PWM_OUT, part, purpose}. Roles MUST match the sketch: pinMode(pin, OUTPUT)
   → OUTPUT, INPUT_PULLUP → INPUT_PULLUP, analogWrite → PWM_OUT, analogRead → ANALOG_IN. The simulator decodes what the
@@ -194,6 +194,36 @@ ${boardFacts()}
   (and VB_CAL_<PART>_HYST for hysteresis). The bench measures the real room and replaces them before the final flash.
   State the defaults in "assumptions" as A0 readings, e.g. "Dark below a reading of 300, bright again above 340 (the bench
   calibrates both)" — the test author can't see the sketch and needs them to test hysteresis.
+
+# How to lay out a breadboard design (mirrors HOW-IT-WORKS.md "Design philosophy"; the layout tool scores by it)
+1. The layout looks like the idea. Spatial words in the brief ("next to each other", "in a row", "left to right") are
+   requirements. Parts that belong together sit together, in the order the idea implies (a counter's bits, a bar graph's
+   levels, a chaser's direction), matching the sketch's pin order.
+2. Repeat, don't improvise. Identical units (pin → resistor → LED → GND, or a button from pin to GND) are built
+   identically: same parts, same values, same pins-to-rail shape, one per Arduino pin. N copies look like N copies.
+3. Signal flows one way through each unit: Arduino pin → short wire → part → resistor/part → rail. No doubling back.
+4. Locality and short wires. Each part sits by what it connects to (the resistor at its LED). Power and ground go through
+   the rails. Wires run short and parallel and never cross.
+5. Separate functions: outputs (lights, buzzer) together, inputs (buttons, sensors) apart, each near its own pins.
+6. Readable beats compact. Never save rows by stacking parts or sharing strips; space costs nothing.
+7. Colours by role: GND black, 5V red, one signal family in unit order (the layout tool assigns them).
+8. Easy to check: a beginner compares the board to the picture at a glance, counts the units, follows each wire.
+9. Don't ship a broken promise. A spatial request the layout didn't meet is FAO NO-GO (PLACEMENT-UNMET). Parts in the
+   wrong order: fix the group's order and pins as its fix says and propose again. No room (toolSide): tell the person
+   which request and why; never describe the parts as if it were met.
+How to say it in the IR:
+- Whenever the brief implies an arrangement, state it in "placement", and say it in "assumptions" and the part labels
+  ("Five lights in one row: 16s on the left, 1s on the right"); not as an intent clause (the simulator can't test it).
+  A row of like parts: one group listing them left to right. Each unit next to something (a light by its button): one
+  group per unit, anchor first.
+- Give the pins in physical order: consecutive pins along the row, one direction (lights left to right on D3, D4, D5,
+  D6 or on D7 … D3). The layout turns the Uno (USB end left or right) so every wire runs straight down, parallel. Give
+  each pin family consecutive pins in the same direction (unit k's button and light both one pin after unit k−1's). Put
+  the sketch's pin arrays and the part labels in that order and say which end is which ("LED_PINS {3,4,5,6,7}: bit 0 =
+  rightmost"); labels like "leftmost" / "2 from right" are read as positions, so keep them true.
+- Build every unit alike (same modules, same resistor value, same pin roles) and number parts in unit order.
+- FAO warns on LAYOUT-CROSSINGS (fix: reorder the pins as above), LAYOUT-LABEL-ORDER (fix the labels or add a row
+  group) and LAYOUT-IRREGULAR (tell the person).
 
 # Safety rules (EECOM enforces them; design for them up front)
 - Every LED has a series resistor (220–1 kΩ at 5 V). No pin drives more than 20 mA; keep the total under 200 mA.

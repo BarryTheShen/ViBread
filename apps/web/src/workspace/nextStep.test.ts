@@ -45,6 +45,7 @@ describe("nextStepOf", () => {
     expect(nextStepOf(detail("VERIFY", { released: 1 }), undefined, [run("run-1", "incomplete"), run("virtual-2", "pass")])).toEqual({ kind: "bench-real" });
     expect(nextStepOf(detail("DEBUG", { released: 1 }), undefined, [run("virtual-1", "pass"), run("run-2", "fail")])).toEqual({ kind: "bench" });
     expect(nextStepOf(detail("VERIFY", { released: 1 }), undefined, [run("virtual-1", "fail")])).toEqual({ kind: "bench" });
+    expect(nextStepOf(detail("VERIFY", { released: 1 }), undefined, [run("run-1", "pass"), run("virtual-2", "pass")])).toEqual({ kind: "bench" });
   });
 
   it("build progress starts at 0 and never goes negative", () => {

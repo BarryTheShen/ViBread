@@ -11,9 +11,10 @@ import type {
   ReleaseRequest,
   Revision,
   RevisionResults,
+  SafetyOverride,
   SelfTestPlan,
 } from "@vibread/core";
-import { HARDWARE_KINDS, MODULES, normalizeObservation, parsePartsText, type HardwareKind, type HardwareView } from "@vibread/core";
+import { HARDWARE_KINDS, MODULES, isPracticeRun, normalizeObservation, parsePartsText, type HardwareKind, type HardwareView } from "@vibread/core";
 import type { CatalogView, InventoryEntry, InventoryUpsertRequest, PartType, ScanAcceptRequest, ScanItem } from "@vibread/core";
 import { applyCalibration, compileBenchFirmware, compileSketch, uploadCommand } from "@vibread/firmware";
 import { calibrationMacros, evaluateRun, planSelfTest } from "@vibread/bench";
@@ -51,6 +52,30 @@ interface WebUser {
   name: string;
   email?: string;
   image?: string;
+}
+function parseSafetyOverride(value: unknown): SafetyOverride | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw httpError(400, "INVALID_OVERRIDE", "override must be an object");
+  const reason = "reason" in value ? value.reason : undefined;
+  if (reason !== undefined && (typeof reason !== "string" || reason.length > 200)) {
+    throw httpError(400, "INVALID_OVERRIDE", "override.reason must be an optional string of at most 200 characters");
+  }
+  return reason === undefined ? {} : { reason };
+}
+
+function requireWebOverride(actor: Actor, override: SafetyOverride | undefined): void {
+  if (override !== undefined && (actor.kind !== "human" || actor.channel !== "web")) {
+    throw httpError(403, "override_not_allowed", "Safety overrides are only allowed from a human web action.");
+  }
+}
+
+function overrideReasonSuffix(reason: string | undefined): string {
+  return reason === undefined ? "" : `. Reason: ${reason}`;
+}
+
+function benchBypassText(run: NonNullable<RevisionResults["bench"]>[number] | undefined): string {
+  if (!run) return "passing bench self-test not run";
+  return `bench self-test ${run.verdict}${run.runId.startsWith("virtual-") ? " (virtual practice)" : ""}`;
 }
 
 export function missionOwnerMiddleware(ctx: AppContext): RequestHandler {
@@ -356,21 +381,30 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.post("/missions/:id/confirm", async (req, res) => {
     const missionId = String(req.params.id);
+    const body = (req.body ?? {}) as { override?: unknown };
+    const override = parseSafetyOverride(body.override);
+    const actor = actorFor(res, ctx);
+    requireWebOverride(actor, override);
     const mission = await ctx.store.getMission(missionId);
     if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
     const released = mission.releasedRevision === undefined ? null : await ctx.store.getRevision(missionId, mission.releasedRevision);
     const latestBench = latestFullBenchRun(released);
-    if (!latestBench) throw httpError(409, "bench_run_required", "Run the bench test with your Arduino first.");
-    if (latestBench.verdict === "incomplete") throw httpError(409, "bench_run_incomplete", "The last bench test didn't finish. Run it again and answer each question on the bench screen.");
-    if (latestBench.verdict !== "pass") throw httpError(409, "bench_run_failed", "The last bench test didn't pass. Fix the wiring and run it again.");
-    if (latestBench.runId.startsWith("virtual-")) {
+    const practicePass = released?.results.bench?.findLast((run) => isPracticeRun(run) && run.verdict === "pass");
+    if ((!latestBench && practicePass) || (latestBench !== undefined && isPracticeRun(latestBench))) {
       throw httpError(409, "real_board_required", "The virtual board passed. Run the bench with your real Arduino to complete the mission.");
+    }
+    const accepted = latestBench !== undefined && (latestBench.verdict === "pass" || latestBench.overriddenBy !== undefined);
+    if (!override && !latestBench) throw httpError(409, "bench_run_required", "Run the bench test with your Arduino first.");
+    if (!override && latestBench && !accepted && latestBench.verdict === "incomplete") {
+      throw httpError(409, "bench_run_incomplete", "The last bench test didn't finish. Run it again and answer each question on the bench screen.");
+    }
+    if (!override && latestBench && !accepted && latestBench.verdict !== "pass") {
+      throw httpError(409, "bench_run_failed", "The last bench test didn't pass. Fix the wiring and run it again.");
     }
     const phase = await ctx.machine.phase(missionId);
     if (phase !== "LAUNCH") throw httpError(409, "bad_phase", "mission can only be confirmed after launch");
     const next = await ctx.machine.send(missionId, { type: "USER_CONFIRMED" });
     if (next !== "DONE") throw httpError(409, "bad_phase", "mission could not be confirmed from its current phase");
-    const actor = actorFor(res, ctx);
     await ctx.store.appendEvent({
       missionId,
       channel: actor.channel,
@@ -380,6 +414,18 @@ export function mountApi(app: Express, ctx: AppContext): void {
       revision: mission.currentRevision,
       data: { phase: next },
     });
+    if (override) {
+      const bypassed = accepted ? ["bench completion requirement"] : [benchBypassText(latestBench)];
+      await ctx.store.appendEvent({
+        missionId,
+        channel: actor.channel,
+        actor,
+        kind: "mission.override",
+        text: `Mission complete confirmed by ${actor.name ?? actor.id} with an override — bypassed: ${bypassed.join(", ")}${overrideReasonSuffix(override.reason)}`,
+        revision: mission.currentRevision,
+        data: { bypassed, ...(override.reason !== undefined ? { reason: override.reason } : {}) },
+      });
+    }
     res.json(await ctx.missions.detail(missionId));
   });
 
@@ -390,14 +436,18 @@ export function mountApi(app: Express, ctx: AppContext): void {
     if (body.acknowledgeMissingReview !== undefined && typeof body.acknowledgeMissingReview !== "boolean") {
       throw httpError(400, "INVALID_ACKNOWLEDGEMENT", "acknowledgeMissingReview must be a boolean");
     }
+    const override = parseSafetyOverride(body.override);
+    const actor: Actor = { kind: "human", id: user.id, name: user.name, channel: "web" };
+    requireWebOverride(actor, override);
     const missionId = String(req.params.id);
     const mission = await ctx.store.getMission(missionId);
     if (!mission || mission.ownerId !== user.id) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
     const detail = await ctx.runtime.release({
       missionId,
       revision,
-      actor: { kind: "human", id: user.id, name: user.name, channel: "web" },
+      actor,
       ...(body.acknowledgeMissingReview ? { acknowledgeMissingReview: true } : {}),
+      ...(override ? { override } : {}),
     });
     res.json(detail);
   });
@@ -416,22 +466,85 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.post("/missions/:id/bench/requests/:approvalId/start", async (req, res) => {
     const missionId = String(req.params.id);
+    const body = (req.body ?? {}) as { override?: unknown };
+    const override = parseSafetyOverride(body.override);
+    const actor = actorFor(res, ctx);
+    requireWebOverride(actor, override);
     const current = await currentRevisionForBench(ctx, missionId);
     if (current.revision === null) throw httpError(409, "request_not_runnable", "Nothing is released for the bench yet");
     const approval = await ctx.broker.get(String(req.params.approvalId));
+    if (override && approval?.action !== "flash-app") throw httpError(400, "INVALID_OVERRIDE", "override is only supported when starting an app flash");
+    let bypassed: string[] = [];
     if (approval?.action === "flash-app") {
       const released = await ctx.store.getRevision(missionId, current.revision);
       const latestBench = latestFullBenchRun(released);
-      if (!latestBench || latestBench.verdict !== "pass") throw httpError(409, "needs_passing_selftest", "Run a passing bench self-test before flashing the app.");
+      const accepted = latestBench !== undefined && (latestBench.verdict === "pass" || latestBench.overriddenBy !== undefined);
+      if (!override && !accepted) throw httpError(409, "needs_passing_selftest", "Run a passing bench self-test before flashing the app.");
+      if (override && !accepted) bypassed = [benchBypassText(latestBench)];
     }
     const started = await sqlApprovalBroker(ctx).startBenchRequest({
       approvalId: String(req.params.approvalId),
       missionId,
       revisionHash: current.hash,
       revision: current.revision,
-      actor: actorFor(res, ctx),
+      actor,
     });
+    if (override) {
+      const listed = bypassed.length > 0 ? bypassed.join(", ") : "no safety checks";
+      await ctx.store.appendEvent({
+        missionId,
+        channel: actor.channel,
+        actor,
+        kind: "bench.override",
+        text: `App flash started by ${actor.name ?? actor.id} with an override — bypassed: ${listed}${overrideReasonSuffix(override.reason)}`,
+        revision: current.revision,
+        data: { bypass: "self-test", action: "flash-app", approvalId: String(req.params.approvalId), bypassed, ...(override.reason !== undefined ? { reason: override.reason } : {}) },
+      });
+    }
     res.json(started);
+  });
+  router.post("/missions/:id/bench/override", async (req, res) => {
+    const missionId = String(req.params.id);
+    const body = (req.body ?? {}) as { bypass?: unknown; runId?: unknown; reason?: unknown };
+    if (body.bypass !== "power-check" && body.bypass !== "self-test") throw httpError(400, "INVALID_OVERRIDE", "bypass must be power-check or self-test");
+    const override = parseSafetyOverride({ ...(body.reason !== undefined ? { reason: body.reason } : {}) });
+    const actor = actorFor(res, ctx);
+    requireWebOverride(actor, override);
+    const current = await currentRevisionForBench(ctx, missionId);
+    if (current.revision === null) throw httpError(409, "request_not_runnable", "Nothing is released for the bench yet");
+    const revision = await ctx.store.getRevision(missionId, current.revision);
+    if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "released revision not found");
+    if (body.bypass === "power-check") {
+      await ctx.store.appendEvent({
+        missionId,
+        channel: actor.channel,
+        actor,
+        kind: "bench.override",
+        text: `Power check continued by ${actor.name ?? actor.id} with an override — bypassed: board power check failed or timed out${overrideReasonSuffix(override?.reason)}`,
+        revision: revision.n,
+        data: { bypass: "power-check", bypassed: ["board power check failed or timed out"], ...(override?.reason !== undefined ? { reason: override.reason } : {}) },
+      });
+      res.json({ ok: true, bypass: body.bypass });
+      return;
+    }
+    if (typeof body.runId !== "string" || body.runId.length === 0) throw httpError(400, "INVALID_OVERRIDE", "runId is required for a self-test override");
+    if (isPracticeRun({ runId: body.runId })) throw httpError(400, "INVALID_OVERRIDE", "a virtual self-test cannot be overridden");
+    const run = revision.results.bench?.find((candidate) => candidate.runId === body.runId);
+    if (!run || run.kind !== "selftest" || run.verdict === "pass") throw httpError(400, "INVALID_OVERRIDE", "runId must identify a failed or incomplete real self-test on the released revision");
+    const overriddenBy = { actor, at: new Date().toISOString(), ...(override?.reason !== undefined ? { reason: override.reason } : {}) };
+    const bench = (revision.results.bench ?? []).map((candidate) => candidate.runId === run.runId ? { ...candidate, overriddenBy } : candidate);
+    await ctx.store.saveResults(missionId, revision.n, { bench });
+    const bypassed = [`bench self-test ${run.verdict}`];
+    await ctx.store.appendEvent({
+      missionId,
+      channel: actor.channel,
+      actor,
+      kind: "bench.override",
+      text: `Bench self-test accepted by ${actor.name ?? actor.id} with an override — bypassed: ${bypassed.join(", ")}${overrideReasonSuffix(override?.reason)}`,
+      revision: revision.n,
+      data: { bypass: body.bypass, runId: run.runId, verdict: run.verdict, bypassed, ...(override?.reason !== undefined ? { reason: override.reason } : {}) },
+    });
+    res.json({ ...run, overriddenBy });
   });
   router.post("/missions/:id/bench/requests/:approvalId/deny", async (req, res) => {
     const missionId = String(req.params.id);
@@ -573,13 +686,13 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const built = await missionFirmware(ctx, String(req.params.id), body.kind);
     if (!built.ok) return res.status(built.status).json(built.body);
     const fallbackUpload = uploadCommand({ hexPath: "<downloaded .hex file>", port: "<port>", board: built.board });
-    res.json({ hex: built.hex, design: built.design, fallbackUpload, ...(body.kind === "bench" ? { plan: built.plan } : {}) });
+    res.json({ hex: built.hex, design: built.design, fallbackUpload, ...(body.kind === "bench" ? { plan: built.plan } : {}), ...(body.kind === "app" ? { calibration: built.calibration ?? "default" } : {}) });
   });
   mountNativeFlashRoutes(router, ctx, (missionId, kind) => missionFirmware(ctx, missionId, kind));
   router.post("/missions/:id/bench/runs", async (req, res) => {
     const missionId = String(req.params.id);
     const body = req.body as BenchRunRequest & { runId?: unknown };
-    const runPrefix = typeof body.runId === "string" && body.runId.startsWith("virtual-") ? "virtual" : "run";
+    const runPrefix = typeof body.runId === "string" && isPracticeRun({ runId: body.runId }) ? "virtual" : "run";
     const revision = await ctx.store.getRevision(missionId, body.revision);
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
     const serverPlan = revision.results.selftest;
@@ -606,7 +719,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     await ctx.store.saveResults(missionId, revision.n, { bench: [...(revision.results.bench ?? []), result] });
     ctx.debug.event(missionId, "bench", "bench run evaluated", { runId: result.runId, verdict: result.verdict, kind: result.kind, revision: revision.n });
     await ctx.db.insert(runs).values({ id: result.runId, missionId, revision: revision.n, kind: result.kind, result: JSON.stringify(result), createdAt: new Date() });
-    const virtual = result.runId.startsWith("virtual-");
+    const virtual = isPracticeRun(result);
     await ctx.store.appendEvent({
       missionId,
       channel: "web",
@@ -788,7 +901,7 @@ function sqlApprovalBroker(ctx: AppContext): SqlApprovalBroker {
  */
 function latestFullBenchRun(revision: Revision | null | undefined): NonNullable<RevisionResults["bench"]>[number] | undefined {
   const planned = revision?.results.selftest?.tests;
-  return revision?.results.bench?.findLast((run) => !planned || planned.every((test) => run.results.some((result) => result.test === test)));
+  return revision?.results.bench?.findLast((run) => !isPracticeRun(run) && (!planned || planned.every((test) => run.results.some((result) => result.test === test))));
 }
 
 async function currentRevisionForBench(ctx: AppContext, missionId: string): Promise<{ revision: number | null; hash: string }> {
@@ -801,7 +914,7 @@ async function currentRevisionForBench(ctx: AppContext, missionId: string): Prom
 }
 
 type BuiltFirmware =
-  | { ok: true; hex: string; board: BoardProfileId; design: string; plan?: SelfTestPlan }
+  | { ok: true; hex: string; board: BoardProfileId; design: string; plan?: SelfTestPlan; calibration?: "measured" | "default" }
   | { ok: false; status: number; body: unknown };
 
 /** The released revision's bench/app HEX (what the web flash and native flash upload): built once, then reused. */
@@ -811,20 +924,23 @@ async function missionFirmware(ctx: AppContext, missionId: string, kind: Firmwar
   if (mission.releasedRevision === undefined) throw httpError(409, "RELEASE_REQUIRED", "Press GO for build first");
   const revision = await ctx.store.getRevision(missionId, mission.releasedRevision);
   if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "released revision not found");
-  const key = kind === "bench" ? "bench.hex" : "app.hex";
   const board = revision.circuit.board.profile;
+  const calibratedRun = kind === "app" ? latestFullBenchRun(revision) : undefined;
+  const hasMeasuredCalibration = (calibratedRun?.verdict === "pass" || calibratedRun?.overriddenBy !== undefined) && (calibratedRun?.calibration?.length ?? 0) > 0;
+  // app.hex keeps the uncalibrated build (Try it, downloads); a calibrated build is keyed by the run it came from.
+  const key = kind === "bench" ? "bench.hex" : hasMeasuredCalibration ? `app-${calibratedRun?.runId}.hex` : "app.hex";
   const cachedHash = revision.results.artifacts[key];
   if (cachedHash) {
     const cached = await ctx.store.getArtifact(cachedHash);
-    if (cached) return { ok: true, hex: Buffer.from(cached.data).toString("utf8"), board, design: revision.hash, ...(kind === "bench" && revision.results.selftest ? { plan: revision.results.selftest } : {}) };
+    if (cached) return { ok: true, hex: Buffer.from(cached.data).toString("utf8"), board, design: revision.hash, ...(kind === "bench" && revision.results.selftest ? { plan: revision.results.selftest } : {}), ...(kind === "app" ? { calibration: hasMeasuredCalibration ? "measured" : "default" } : {}) };
   }
   let plan = revision.results.selftest;
   let compile: CompileResult;
   if (kind === "bench") {
-    plan = planSelfTest(revision.circuit, revision.hash);
+    plan = planSelfTest(revision.circuit, revision.hash, revision.results.layout);
     compile = await compileBenchFirmware(plan);
   } else {
-    const calibrations = latestFullBenchRun(revision)?.calibration ?? [];
+    const calibrations = hasMeasuredCalibration ? calibratedRun?.calibration ?? [] : [];
     compile = await compileSketch({
       source: applyCalibration(revision.circuit.sketch.source, calibrationMacros(calibrations)),
       board,
@@ -843,7 +959,7 @@ async function missionFirmware(ctx: AppContext, missionId: string, kind: Firmwar
     ...(kind === "bench" && plan ? { selftest: plan } : {}),
   };
   await ctx.store.saveResults(missionId, revision.n, resultPatch);
-  return { ok: true, hex: compile.hex, board, design: revision.hash, ...(kind === "bench" && plan ? { plan } : {}) };
+  return { ok: true, hex: compile.hex, board, design: revision.hash, ...(kind === "bench" && plan ? { plan } : {}), ...(kind === "app" ? { calibration: hasMeasuredCalibration ? "measured" : "default" } : {}) };
 }
 
 function userFromLocals(res: Response): WebUser | undefined {

@@ -1,4 +1,5 @@
 import {
+  BOARD_PROFILES,
   CONSOLE_LABELS,
   parseCircuit,
   type Circuit,
@@ -66,11 +67,20 @@ class Run {
   readonly extra: Record<ConsoleId, Finding[]> = { EECOM: [], GUIDO: [], FIDO: [], FAO: [], RETRO: [] };
   /** Bench firmware HEX, kept for the background fault dictionary. */
   benchHex?: string;
+  /** The breadboard layout once the assembly branch has it (undefined when it couldn't lay out): the self-test numbers
+   * LEDs by where they are built. */
+  readonly layoutReady: Promise<Layout | undefined>;
+  private resolveLayout!: (layout: Layout | undefined) => void;
+  layoutDone(layout: Layout | undefined): void {
+    this.resolveLayout(layout);
+  }
 
   constructor(
     private readonly store: MissionStore,
     readonly revision: Revision,
-  ) {}
+  ) {
+    this.layoutReady = new Promise((resolve) => (this.resolveLayout = resolve));
+  }
 
   get hash(): string {
     return this.revision.hash;
@@ -209,9 +219,15 @@ export function createPipeline(deps: {
   async function layoutBranch(run: Run, lib: typeof AssemblyLib, circuit: Circuit, kept?: Layout): Promise<void> {
     const { hash } = run;
     const laid = await run.stage("layout", () => {
-      const layout = kept ?? lib.layoutBoard(circuit);
-      return { layout, layoutHash: lib.layoutHash(layout), lvs: lib.lvs(circuit, layout) };
+      // The allocator says which candidate layout it chose and why (for the mission debug log, via FAO evidence). A
+      // kept layout from before issue #26 has no Uno orientation; it was drawn D0 … D13 left to right, which is
+      // "usb-right", so mid-build pictures keep the header the person already wired to.
+      const chosen = kept
+        ? { layout: kept.boardOrientation || BOARD_PROFILES[kept.board]?.placement === "straddle" ? kept : { ...kept, boardOrientation: "usb-right" as const }, decision: undefined }
+        : lib.layoutWithDecision(circuit);
+      return { layout: chosen.layout, decision: chosen.decision, layoutHash: lib.layoutHash(chosen.layout), lvs: lib.lvs(circuit, chosen.layout) };
     });
+    run.layoutDone(laid.ok ? laid.value.layout : undefined);
     if (!laid.ok) {
       // A circuit that can't be placed is reported as such (tool-side unless the design contradicts itself), not as a crash.
       const failure = laid.error instanceof lib.LayoutFitError ? lib.layoutFailureReport({ error: laid.error, revisionHash: hash }) : undefined;
@@ -237,12 +253,13 @@ export function createPipeline(deps: {
     ]);
     if (!drawn.ok) faoExtra.push(crashFinding("FAO", "breadboard drawing", drawn.error));
     if (images && !images.ok) faoExtra.push(crashFinding("FAO", "step pictures", images.error));
-    run.reports.set("FAO", withFindings(faoBase, faoExtra, { stageMs: (fao.ms ?? 0) + laid.ms }));
+    run.reports.set("FAO", withFindings(faoBase, faoExtra, { stageMs: (fao.ms ?? 0) + laid.ms, ...(laid.value.decision ? { layoutDecision: laid.value.decision } : {}) }));
   }
 
   async function assemblyBranch(run: Run, circuit: Circuit, kept?: Layout): Promise<void> {
     const loaded = await run.stage("assemblyLoad", () => import("@vibread/assembly"));
     if (!loaded.ok) {
+      run.layoutDone(undefined);
       run.reports.set("FAO", report("FAO", [crashFinding("FAO", "assembly", loaded.error)], "The assembly tools could not load.", run.hash));
       return;
     }
@@ -260,7 +277,9 @@ export function createPipeline(deps: {
 
   /** Physical verification prep: self-test plan + bench firmware (never LLM-written). Failures land on GUIDO. */
   async function benchBranch(run: Run, circuit: Circuit): Promise<void> {
-    const planned = await run.stage("selftest", async () => (await import("@vibread/bench")).planSelfTest(circuit, run.hash));
+    // LEDs are numbered left to right as built, so the plan waits for the layout (or for it to fail).
+    const layout = await run.layoutReady;
+    const planned = await run.stage("selftest", async () => (await import("@vibread/bench")).planSelfTest(circuit, run.hash, layout));
     if (!planned.ok) {
       run.extra.GUIDO.push(crashFinding("GUIDO", "self-test plan", planned.error));
       return;

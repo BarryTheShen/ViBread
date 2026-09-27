@@ -6,7 +6,7 @@ import { buildSteps, layoutBoard } from "@vibread/assembly";
 import { compileBenchFirmware } from "@vibread/firmware";
 import { GOLDEN } from "@vibread/fixtures";
 import { SimSession } from "@vibread/sim/browser";
-import { checkpointChecksForRevision, checkpointChecksPass, checkpointTests, describeCheckpointChecks, isFullSelfTestStep } from "./checkpointChecks.js";
+import { checkpointChecksForRevision, checkpointChecksPass, checkpointStatusText, checkpointTests, describeCheckpointChecks, isFullSelfTestStep } from "./checkpointChecks.js";
 
 /**
  * Issue 21: every run here is the real thing — the design's bench firmware on the simulator, answered the way the page
@@ -221,6 +221,40 @@ describe("checkpoint checklist wording", () => {
 
   it("uses the USB VCC wording for the board-power check", () => {
     expect(describeCheckpointChecks({ tests: ["rails.vcc"] })[0]?.expected).toBe("Board powered (USB VCC ≈ 5 V)");
+  });
+
+  it("lets a virtual practice pass tick the checkpoint so Try without a board can walk the build", () => {
+    const practice: BenchRunResult = {
+      runId: "virtual-practice",
+      revision: 1,
+      kind: "selftest",
+      step: 3,
+      results: [{ test: "rails.vcc", status: "pass", subjects: [], summary: "ok" }],
+      diagnosis: { attribution: "none", candidates: [], summary: "ok" },
+      calibration: [],
+      verdict: "pass",
+    };
+    const checks = describeCheckpointChecks({ tests: ["rails.vcc"], runs: [practice], step: 3 });
+    expect(checks[0]?.status).toBe("pass");
+    expect(checkpointChecksPass(checks)).toBe(true);
+  });
+
+  it("accepts an explicitly overridden real self-test without changing its failed verdict", () => {
+    const overridden: BenchRunResult = {
+      runId: "real-overridden",
+      revision: 1,
+      kind: "selftest",
+      results: [{ test: "rails.vcc", status: "fail", subjects: [], summary: "power failed" }],
+      diagnosis: { attribution: "wiring", candidates: [], summary: "power failed" },
+      calibration: [],
+      verdict: "fail",
+      overriddenBy: { actor: { kind: "human", id: "operator", channel: "web" }, at: new Date().toISOString(), reason: "meter checked" },
+    };
+    const check = describeCheckpointChecks({ tests: ["rails.vcc"], runs: [overridden] })[0]!;
+    expect(overridden.verdict).toBe("fail");
+    expect(check.status).toBe("override");
+    expect(checkpointStatusText(check.status)).toBe("Accepted by override");
+    expect(checkpointChecksPass([check])).toBe(true);
   });
 
   it("splits continuity into one row per net and only collapses consecutive LEDs into a range", () => {

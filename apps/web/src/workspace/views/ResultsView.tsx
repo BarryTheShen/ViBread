@@ -17,7 +17,7 @@ import Paper from "@mui/material/Paper";
 import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
-import type { Attribution, BenchRunResult, BenchTestResult, RevisionDetail } from "@vibread/core";
+import { isPracticeRun, type Attribution, type BenchRunResult, type BenchTestResult, type RevisionDetail } from "@vibread/core";
 import type { ReactElement } from "react";
 import { useMemo, useState } from "react";
 import { Link as RouterLink } from "react-router";
@@ -82,7 +82,7 @@ function timedOutPrompt(run: BenchRunResult): string | undefined {
 
 /** One bench run: verdict, summary, (causes unless shown above) and every test the board reported. */
 function RunCard({ run, causes }: { run: BenchRunResult; causes: boolean }) {
-  const practice = run.runId.startsWith("virtual-");
+  const practice = isPracticeRun(run);
   const verdict =
     run.verdict === "pass"
       ? { label: "Passed", color: "success" as const, icon: <CheckCircleIcon /> }
@@ -154,7 +154,7 @@ function RunCard({ run, causes }: { run: BenchRunResult; causes: boolean }) {
 
 /** The latest run's diagnosis: what failed, the likeliest causes, and the breadboard with the suspect spots highlighted. */
 function LatestDiagnosis({ revision, run, benchHref }: { revision: RevisionDetail; run: BenchRunResult | undefined; benchHref: string }) {
-  const practice = run?.runId.startsWith("virtual-") ?? false;
+  const practice = run !== undefined && isPracticeRun(run);
   const [picked, setPicked] = useState(0);
   const [showAll, setShowAll] = useState(false);
   const boardUrl = revision.artifactUrls["breadboard.svg"];
@@ -250,7 +250,8 @@ function LatestDiagnosis({ revision, run, benchHref }: { revision: RevisionDetai
 
 export function ResultsView({ missionId, revision }: { missionId: string; revision: RevisionDetail }) {
   const runs = [...(revision.results.bench ?? [])].reverse();
-  const latest = runs[0];
+  // Practice is useful history, but a later virtual run must not replace the real board's diagnosis.
+  const latest = runs.find((run) => !isPracticeRun(run)) ?? runs[0];
   const benchHref = benchPanelPath(missionId, "");
   return (
     <Stack sx={{ gap: 2 }}>

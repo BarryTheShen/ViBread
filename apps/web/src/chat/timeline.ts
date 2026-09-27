@@ -1,4 +1,4 @@
-import { CONSOLE_IDS, type RevisionSummary, type TimelineEvent, type Verdict } from "@vibread/core";
+import { CONSOLE_IDS, isPracticeRun, type RevisionSummary, type TimelineEvent, type Verdict } from "@vibread/core";
 import type { PanelView } from "../contracts.js";
 import { isRecord } from "../lib/guards.js";
 
@@ -280,7 +280,7 @@ function stepsRow(item: TimelineItem): RowModel {
 function benchRow(event: TimelineEvent): RowModel {
   const data = isRecord(event.data) ? event.data : {};
   const verdict = typeof data.verdict === "string" ? data.verdict : undefined;
-  const virtual = typeof data.runId === "string" && data.runId.startsWith("virtual-");
+  const virtual = typeof data.runId === "string" && isPracticeRun({ runId: data.runId });
   const kind = data.kind === "rails" ? "power check" : data.kind === "checkpoint" ? "checkpoint" : "self-test";
   const board = virtual ? "Virtual board" : "Your board";
   const passed = verdict === "pass";
@@ -333,6 +333,12 @@ function singleRow(event: TimelineEvent): RowModel {
       return { ...base, icon: "go", title: "Released with a recorded independent review", tone: "info", view: "checks" };
     case "release.review-waived":
       return { ...base, icon: "go", title: "Released without the independent review", tone: "warning", view: "checks" };
+    case "release.override":
+      return { ...base, icon: "go", title: "Released with override", status: whoDid(event), tone: "warning", view: "steps" };
+    case "mission.override":
+      return { ...base, icon: "done", title: "Mission complete with override", status: whoDid(event), tone: "warning", view: "results" };
+    case "bench.override":
+      return { ...base, icon: "bench", title: "Bench override", status: whoDid(event), tone: "warning", view: "bench" };
     case "bench.run":
       return benchRow(event);
     case "photo.checked":

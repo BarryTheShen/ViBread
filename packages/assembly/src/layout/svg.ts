@@ -15,7 +15,7 @@ import {
   type Part,
   type StepList,
 } from "@vibread/core";
-import { PANEL_CSS, renderPartsPanel } from "./panel.js";
+import { PANEL_CSS, renderPartsPanel, renderRepeatPanel } from "./panel.js";
 
 const DEFAULT_WIDTH = 1200;
 const BOARD_LEFT = 70;
@@ -111,7 +111,7 @@ function pinNames(part: Part): string[] {
   return modulePins(part).map((pin) => pin.id);
 }
 
-function boardPinPoints(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard">): Map<string, Point> {
+function boardPinPoints(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard" | "boardOrientation">): Map<string, Point> {
   const points = new Map<string, Point>();
   const profile = BOARD_PROFILES[layout.board];
   if (profile.placement === "straddle" && layout.boardAnchor) {
@@ -124,19 +124,26 @@ function boardPinPoints(layout: Pick<Layout, "board" | "boardAnchor" | "breadboa
     });
     return points;
   }
-  const digital = profile.pins.filter((pin) => /^D\d+$/.test(pin.name)).sort((a, b) => Number(a.name.slice(1)) - Number(b.name.slice(1)));
+  // As on a real Uno lying flat below the breadboard. USB on the left: the digital header is the row nearest the
+  // breadboard, reading AREF, D13 … D0 left to right, and the power/analog header IOREF … VIN, A0 … A5 behind it. USB on
+  // the right is the same board turned 180°: the power/analog header is nearest (A5 … A0, VIN … IOREF) and the digital
+  // header behind it (D0 … D13, AREF).
+  const digital = profile.pins.filter((pin) => /^D\d+$/.test(pin.name)).sort((a, b) => Number(b.name.slice(1)) - Number(a.name.slice(1)));
   const analog = profile.pins.filter((pin) => /^A\d+$/.test(pin.name)).sort((a, b) => Number(a.name.slice(1)) - Number(b.name.slice(1)));
   const boardLeft = BOARD_LEFT + 80;
   const boardWidth = BOARD_RIGHT - boardLeft - 20;
-  digital.forEach((pin, index) => points.set(pin.name, { x: boardLeft + ((index + 0.5) / digital.length) * boardWidth, y: 620 }));
-  const lower = ["IOREF", "RESET", "3V3", "5V", "GND", "VIN", ...analog.map((pin) => pin.name), "AREF"];
-  const unique = [...new Set(lower.filter((name) => profile.pins.some((pin) => pin.name === name)))];
-  unique.forEach((name, index) => points.set(name, { x: boardLeft + ((index + 0.5) / unique.length) * boardWidth, y: 665 }));
+  const flip = layout.boardOrientation === "usb-right";
+  const upper = [...(profile.pins.some((pin) => pin.name === "AREF") ? ["AREF"] : []), ...digital.map((pin) => pin.name)];
+  const lower = [...new Set(["IOREF", "RESET", "3V3", "5V", "GND", "VIN", ...analog.map((pin) => pin.name)].filter((name) => profile.pins.some((pin) => pin.name === name)))];
+  // The USB end keeps a margin for its marker, so the pins sit a little away from it.
+  const place = (names: string[], y: number) => (flip ? [...names].reverse() : names).forEach((name, index) => points.set(name, { x: boardLeft + ((index + 0.5) / names.length) * boardWidth - (flip ? 60 : 0), y }));
+  place(flip ? lower : upper, 620);
+  place(flip ? upper : lower, 665);
   return points;
 }
 
 /** Arduino header pins as drawn, one list per header row, left to right (empty for a Nano on the breadboard). */
-export function boardHeaderRows(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard">): string[][] {
+export function boardHeaderRows(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard" | "boardOrientation">): string[][] {
   if (BOARD_PROFILES[layout.board].placement === "straddle") return [];
   const rows = new Map<number, { pin: string; x: number }[]>();
   for (const [pin, point] of boardPinPoints(layout)) rows.set(point.y, [...(rows.get(point.y) ?? []), { pin, x: point.x }]);
@@ -144,15 +151,20 @@ export function boardHeaderRows(layout: Pick<Layout, "board" | "boardAnchor" | "
 }
 
 /** Breadboard row drawn straight above an Uno header pin (the allocator puts that pin's circuit there). */
-export function headerRow(breadboard: Layout["breadboard"], board: Layout["board"], pin: string): number | undefined {
+export function headerRow(breadboard: Layout["breadboard"], board: Layout["board"], pin: string, boardOrientation?: Layout["boardOrientation"]): number | undefined {
   if (BOARD_PROFILES[board].placement === "straddle") return undefined;
-  const point = boardPinPoints({ board, breadboard }).get(pin);
+  const point = boardPinPoints({ board, breadboard, ...(boardOrientation ? { boardOrientation } : {}) }).get(pin);
   if (!point) return undefined;
   const rows = BREADBOARD_PROFILES[breadboard].rows;
   return Math.max(1, Math.min(rows, Math.round(1 + ((point.x - BOARD_LEFT) / (BOARD_RIGHT - BOARD_LEFT)) * (rows - 1))));
 }
 
-function endpointPoint(layout: Layout, endpoint: Jumper["from"], pins: Map<string, Point>): Point {
+/** Where a jumper end is drawn: its hole, or its Arduino header pin. */
+export function endpointPosition(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard" | "boardOrientation">, endpoint: Jumper["from"]): Point {
+  return endpointPoint(layout, endpoint, boardPinPoints(layout));
+}
+
+function endpointPoint(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard" | "boardOrientation">, endpoint: Jumper["from"], pins: Map<string, Point>): Point {
   if ("hole" in endpoint) return holePoint(layout, endpoint.hole) ?? { x: BOARD_LEFT, y: TOP_HOLE_Y };
   return pins.get(endpoint.board) ?? { x: BOARD_LEFT, y: 620 };
 }
@@ -203,6 +215,11 @@ function focusViewBox(input: RenderInput, state: ViewState, pins: Map<string, Po
     const text = `${jumper.id} ${jumper.net}`;
     points.push(from, to, jumperGeometry(from, to, Math.max(48, text.length * 7 + 14), 18).label);
   }
+  // The first copy of a repeated unit keeps the other copies' ghosts in view, so the ×N reads at a glance.
+  if (step.repeat?.role === "template") for (const copy of step.repeat.copies.slice(1)) for (const hole of copy.holes) {
+    const point = holePoint(input.layout, hole);
+    if (point) points.push(point);
+  }
   if (points.length === 0) return undefined;
   const rowPitch = (BOARD_RIGHT - BOARD_LEFT) / Math.max(1, boardRows(input.layout) - 1);
   const marginX = rowPitch * 4;
@@ -224,6 +241,60 @@ function focusViewBox(input: RenderInput, state: ViewState, pins: Map<string, Po
   left = Math.max(0, Math.min(1200 - width, centerX - width / 2));
   top = Math.max(0, Math.min(700 - height, centerY - height / 2));
   return { x: left, y: top, width, height };
+}
+
+/**
+ * Repeated units (issue #25). On the step that builds the first copy: a "×N" badge on it and a dashed ghost where each
+ * other copy goes, with the Arduino pin it takes. On the repeat step: the badge over the whole row and each copy's
+ * number, so the picture matches the checklist.
+ */
+function renderRepeatMarks(input: RenderInput): string {
+  const step = input.steps && input.upToStep !== undefined ? input.steps.steps[input.upToStep - 1] : undefined;
+  const repeat = step?.repeat;
+  if (!repeat) return "";
+  const boxOf = (holes: string[]) => {
+    const points = holes.flatMap((hole) => holePoint(input.layout, hole) ?? []);
+    return { left: Math.min(...points.map((p) => p.x)) - 11, right: Math.max(...points.map((p) => p.x)) + 11, top: Math.min(...points.map((p) => p.y)) - 11, bottom: Math.max(...points.map((p) => p.y)) + 11 };
+  };
+  const badge = (x: number, y: number, text: string) => {
+    const width = text.length * 9 + 18;
+    return `<g class="repeat-badge"><rect x="${x - width / 2}" y="${y - 13}" width="${width}" height="26" rx="13" class="repeat-badge-bg"/><text x="${x}" y="${y + 5}" text-anchor="middle" class="repeat-badge-text">${escapeSvg(text)}</text></g>`;
+  };
+  const copyBoxes = repeat.copies.map((copy) => boxOf(copy.holes));
+  const copyLabel = (copy: (typeof repeat.copies)[number], index: number): string => {
+    if (copy.boardPins.length === 0) return String(copy.index);
+    const full = `${copy.index} · ${copy.boardPins.join(" ")}`;
+    const center = (copyBoxes[index]!.left + copyBoxes[index]!.right) / 2;
+    const previous = index > 0 ? (copyBoxes[index - 1]!.left + copyBoxes[index - 1]!.right) / 2 : Number.POSITIVE_INFINITY;
+    const next = index + 1 < copyBoxes.length ? (copyBoxes[index + 1]!.left + copyBoxes[index + 1]!.right) / 2 : Number.POSITIVE_INFINITY;
+    const spacing = Math.min(Math.abs(center - previous), Math.abs(next - center));
+    return spacing < full.length * 7 ? String(copy.index) : full;
+  };
+  const marks: string[] = [];
+  if (repeat.role === "template") {
+    for (let index = 1; index < repeat.copies.length; index += 1) {
+      const copy = repeat.copies[index]!;
+      const box = copyBoxes[index]!;
+      marks.push(`<g class="repeat-ghost" data-repeat-copy="${copy.index}"><rect x="${box.left}" y="${box.top}" width="${box.right - box.left}" height="${box.bottom - box.top}" rx="8" class="ghost-box"/><text x="${(box.left + box.right) / 2}" y="${box.bottom + 14}" text-anchor="middle" class="ghost-label">${escapeSvg(copyLabel(copy, index))}</text></g>`);
+    }
+    // Beside the first copy, at the channel, clear of its wire and the ghosts.
+    const first = copyBoxes[0]!;
+    const text = `×${repeat.count}`;
+    marks.push(badge(first.left - (text.length * 9 + 18) / 2 - 6, CHANNEL_Y, text));
+  } else {
+    for (let index = 0; index < repeat.copies.length; index += 1) {
+      const copy = repeat.copies[index]!;
+      const box = copyBoxes[index]!;
+      marks.push(`<text x="${(box.left + box.right) / 2}" y="${box.bottom + 14}" text-anchor="middle" class="ghost-label" data-repeat-copy="${copy.index}">${escapeSvg(copyLabel(copy, index))}</text>`);
+    }
+    const all = boxOf(repeat.copies.flatMap((copy) => copy.holes));
+    const text = `×${repeat.count} · ${repeat.columns} columns apart`;
+    const width = text.length * 9 + 18;
+    // Right of the row at the channel (left of it when the row reaches the board's right end).
+    const x = all.right + width / 2 + 6 <= BOARD_RIGHT ? all.right + width / 2 + 6 : all.left - width / 2 - 6;
+    marks.push(badge(x, CHANNEL_Y, text));
+  }
+  return `<g id="repeat-marks">${marks.join("")}</g>`;
 }
 
 function isHighlighted(kind: "part" | "jumper", id: string, highlight: RenderInput["highlight"]): boolean {
@@ -263,11 +334,12 @@ function renderHoles(layout: Layout, highlight: RenderInput["highlight"]): strin
       }
     }
   }
-  if (highlightedHoles.length > 0) {
+  // A long list (a repeat step's twenty holes) is left to the step text and checklist.
+  if (highlightedHoles.length > 0 && highlightedHoles.length <= 6) {
     const x = highlightedHoles.reduce((sum, entry) => sum + entry.point.x, 0) / highlightedHoles.length;
     const minY = Math.min(...highlightedHoles.map((entry) => entry.point.y));
     const maxY = Math.max(...highlightedHoles.map((entry) => entry.point.y));
-    const labelY = minY < CHANNEL_Y ? minY - 14 : maxY + 22;
+    const labelY = minY < CHANNEL_Y ? Math.max(minY - 14, RAIL_Y["T+"] + 26) : maxY + 22;
     chunks.push(`<text x="${x}" y="${labelY}" text-anchor="middle" class="hole-callout">${highlightedHoles.length === 1 ? "hole" : "holes"} ${highlightedHoles.map((entry) => entry.hole).sort().join(" · ")}</text>`);
   }
   return chunks.join("");
@@ -285,7 +357,9 @@ function renderBoard(layout: Layout, pins: Map<string, Point>): string {
   }
   const left = 56;
   const width = 1088;
-  return `<rect x="${left}" y="582" width="${width}" height="108" rx="12" class="mcu uno"/><text x="${left + width / 2}" y="603" text-anchor="middle" class="board-title">Arduino Uno R3</text><text x="${left + 12}" y="612" class="header-label">DIGITAL HEADER</text><text x="${left + 12}" y="662" class="header-label">POWER / ANALOG HEADER</text>${[...pins.entries()].map(([pin, point]) => `<g id="pin-${escapeSvg(pin)}"><circle cx="${point.x}" cy="${point.y}" r="6" class="header-pin"/><text x="${point.x}" y="${point.y + (point.y < 620 ? -10 : 17)}" text-anchor="middle" class="pin-label">${escapeSvg(pin)}</text></g>`).join("")}`;
+  return `<rect x="${left}" y="582" width="${width}" height="108" rx="12" class="mcu uno"/><text x="${left + width / 2}" y="603" text-anchor="middle" class="board-title">Arduino Uno R3</text>${layout.boardOrientation === "usb-right"
+    ? `<text x="${left + width - 12}" y="612" text-anchor="end" class="header-label">POWER / ANALOG HEADER</text><text x="${left + width - 12}" y="662" text-anchor="end" class="header-label">DIGITAL HEADER</text><text x="${left + width - 12}" y="637" text-anchor="end" class="header-label">USB END ▶</text>`
+    : `<text x="${left + 12}" y="612" class="header-label">DIGITAL HEADER</text><text x="${left + 12}" y="662" class="header-label">POWER / ANALOG HEADER</text><text x="${left + 12}" y="637" class="header-label">◀ USB END</text>`}${[...pins.entries()].map(([pin, point]) => `<g id="pin-${escapeSvg(pin)}"><circle cx="${point.x}" cy="${point.y}" r="6" class="header-pin"/><text x="${point.x}" y="${point.y + (point.y < 620 ? -10 : 17)}" text-anchor="middle" class="pin-label">${escapeSvg(pin)}</text></g>`).join("")}`;
 }
 
 function partGeometry(layout: Pick<Layout, "breadboard">, part: Part, placement: Pick<Layout["placements"][number], "pins">): { pins: Map<string, Point>; center: Point; angle: number } {
@@ -321,7 +395,8 @@ export function partDrawingBox(breadboard: Layout["breadboard"], part: Part, pin
   const { x, y } = geometry.center;
   const boxes: DrawingBox[] = points.map((point) => ({ left: point.x - 5, top: point.y - 5, right: point.x + 5, bottom: point.y + 5 }));
   const around = (rx: number, ry: number) => boxes.push({ left: x - rx, top: y - ry, right: x + rx, bottom: y + ry });
-  if (part.module === "resistor") around(24, 10);
+  // A resistor standing across the channel is drawn upright.
+  if (part.module === "resistor") (Math.abs(Math.sin((geometry.angle * Math.PI) / 180)) > 0.5 ? around(10, 24) : around(24, 10));
   else if (part.module === "led") {
     around(14, 14);
     for (const point of points) boxes.push({ left: point.x - 2, top: point.y - 20, right: point.x + 24, bottom: point.y + 20 });
@@ -363,7 +438,23 @@ function renderLed(part: Part, geometry: ReturnType<typeof partGeometry>, state:
   const gradientId = `led-gradient-${escapeSvg(part.id)}`;
   const bodyFill = brightness > 0.02 ? cssColor(ledColor) : "#68747c";
   const bodyOpacity = brightness > 0.02 ? 1 : 0.55;
-  return `<defs><radialGradient id="${gradientId}" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="${cssColor(ledColor)}" stop-opacity="0.95"/><stop offset="45%" stop-color="${cssColor(ledColor)}" stop-opacity="0.55"/><stop offset="100%" stop-color="${cssColor(ledColor)}" stop-opacity="0"/></radialGradient></defs><line x1="${a.x}" y1="${a.y}" x2="${k.x}" y2="${k.y}" class="lead"/><circle id="glow-${escapeSvg(part.id)}" cx="${geometry.center.x}" cy="${geometry.center.y}" r="42" fill="url(#${gradientId})" opacity="${brightness}" class="led-glow"/><circle cx="${geometry.center.x}" cy="${geometry.center.y}" r="12" fill="${bodyFill}" opacity="${bodyOpacity}" class="led-dome"/><text x="${a.x}" y="${a.y - 10}" class="pin-cue">A +</text><text x="${k.x}" y="${k.y + 17}" class="pin-cue">K −</text>`;
+  return `<defs><radialGradient id="${gradientId}" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="${cssColor(ledColor)}" stop-opacity="0.95"/><stop offset="45%" stop-color="${cssColor(ledColor)}" stop-opacity="0.55"/><stop offset="100%" stop-color="${cssColor(ledColor)}" stop-opacity="0"/></radialGradient></defs>${leadPath(a, k)}<circle id="glow-${escapeSvg(part.id)}" cx="${geometry.center.x}" cy="${geometry.center.y}" r="42" fill="url(#${gradientId})" opacity="${brightness}" class="led-glow"/><circle cx="${geometry.center.x}" cy="${geometry.center.y}" r="12" fill="${bodyFill}" opacity="${bodyOpacity}" class="led-dome"/><text x="${a.x}" y="${a.y - 10}" class="pin-cue">A +</text><text x="${k.x}" y="${k.y + 17}" class="pin-cue">K −</text>`;
+}
+
+/**
+ * A straight lead, except where it would run over a hole of a rail it doesn't enter (an LED from row a into the far
+ * T− rail passes T+): it steps aside by 8 px while crossing that rail line, so it's plain which rail it goes into.
+ */
+function leadPath(from: Point, to: Point): string {
+  const [top, bottom] = from.y < to.y ? [from, to] : [to, from];
+  const crossed = Object.values(RAIL_Y).filter((y) => y > top.y + 2 && y < bottom.y - 2);
+  if (crossed.length === 0 || Math.abs(from.x - to.x) > 1) return `<line x1="${from.x}" y1="${from.y}" x2="${to.x}" y2="${to.y}" class="lead"/>`;
+  const x = from.x;
+  const jog = x + 8;
+  const points = [`${top.x} ${top.y}`];
+  for (const y of crossed.sort((a, b) => a - b)) points.push(`${x} ${y - 10}`, `${jog} ${y - 4}`, `${jog} ${y + 4}`, `${x} ${y + 10}`);
+  points.push(`${bottom.x} ${bottom.y}`);
+  return `<path d="M ${points.join(" L ")}" class="lead" fill="none"/>`;
 }
 
 function renderResistor(part: Part, geometry: ReturnType<typeof partGeometry>): string {
@@ -373,7 +464,7 @@ function renderResistor(part: Part, geometry: ReturnType<typeof partGeometry>): 
   const bodyWidth = 48;
   const bodyHeight = 20;
   const bandsSvg = bands.map((band, index) => `<rect x="${-bodyWidth / 2 + 9 + index * 9}" y="${-bodyHeight / 2}" width="5" height="${bodyHeight}" fill="${BAND_COLORS[band] ?? "#888"}"/>`).join("");
-  return `<line x1="${first.x}" y1="${first.y}" x2="${last.x}" y2="${last.y}" class="lead"/><g transform="translate(${geometry.center.x} ${geometry.center.y})"><rect x="${-bodyWidth / 2}" y="${-bodyHeight / 2}" width="${bodyWidth}" height="${bodyHeight}" rx="5" class="resistor-body"/>${bandsSvg}</g>`;
+  return `${leadPath(first, last)}<g transform="translate(${geometry.center.x} ${geometry.center.y})${Math.abs(Math.sin((geometry.angle * Math.PI) / 180)) > 0.5 ? " rotate(90)" : ""}"><rect x="${-bodyWidth / 2}" y="${-bodyHeight / 2}" width="${bodyWidth}" height="${bodyHeight}" rx="5" class="resistor-body"/>${bandsSvg}</g>`;
 }
 
 /** Metal lead from the body's edge to the hole it sits in, with a foot on the hole. */
@@ -422,7 +513,8 @@ function renderPart(input: RenderInput, part: Part, placement: Layout["placement
   else body = `<rect x="${geometry.center.x - 24}" y="${geometry.center.y - 14}" width="48" height="28" rx="4" class="generic-body"/>`;
   const newItem = state.newParts.has(part.id);
   const highlighted = isHighlighted("part", part.id, input.highlight);
-  const label = state.final || newItem ? partLabel(geometry.center, state.final ? part.id : `${part.id} ${valueLabel(part)}`) : "";
+  // Many new parts at once (a repeat step): names only, so neighbouring labels don't run into each other.
+  const label = state.final || newItem ? partLabel(geometry.center, state.final || state.newParts.size > 2 ? part.id : `${part.id} ${valueLabel(part)}`) : "";
   const pinTitle = pinNames(part).map((pin) => `${pin}:${placement.pins[pin] ?? "?"}`).join(" ");
   return `<g id="part-${escapeSvg(part.id)}" class="${classes("part", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(part.id)} ${escapeSvg(MODULES[part.module].name)}"><title>${escapeSvg(part.id)} — ${escapeSvg(pinTitle)}</title>${body}${label}</g>`;
 }
@@ -639,8 +731,8 @@ export function renderBreadboardSvg(input: RenderInput): string {
   const surfaceTop = railSides.includes("top") ? RAIL_Y["T-"] - 22 : 120;
   const surfaceBottom = railSides.includes("bottom") ? RAIL_Y["B-"] + 8 : 495;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${renderHeight}" viewBox="${viewBox}" data-vibread="breadboard" role="img" aria-label="ViBread landscape breadboard assembly"><title>${escapeSvg(input.circuit.title)} breadboard</title><desc>Numbered columns run left to right. Lettered rows a through e are above the centre channel; f through j are below it. New step items are drawn at full strength; earlier ones are dimmed.</desc><style>
-svg{font-family:Arial,"DejaVu Sans",sans-serif;background:${CANVAS_FILL}}.end-badge{fill:#fff;stroke-width:3}.end-badge-text{fill:#1B1D2B;font-size:13px;font-weight:800}.board-surface{fill:${BOARD_FILL};stroke:#B8C0C9;stroke-width:2}.channel{fill:#D5DAE0}.hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.rail-hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.row-label,.column-label,.rail-label,.channel-label{fill:#3B4552;font-size:12px;font-weight:700}.column-label{font-size:15px}.column-guide{fill:#3B4552;font-size:13px;font-weight:700}.rail-label{font-size:12px}.rail-plus{stroke:#E03131;stroke-width:3}.rail-minus{stroke:#1C7ED6;stroke-width:3}.rail-tick{stroke:#C3CAD2;stroke-width:1}.lead{stroke:#6C7680;stroke-width:3}.leg{stroke:#8D99AE;stroke-width:3;stroke-linecap:round}.leg-foot{fill:#C9D0D8;stroke:#4A525C;stroke-width:1.5}.led-dome{stroke:#F8FAFC;stroke-width:2}.led-glow{filter:blur(3px)}.resistor-body{fill:#E2C89A;stroke:#7A5A3A;stroke-width:2}.button-body{fill:#2B2F36;stroke:#11151A;stroke-width:2}.button-cap{fill:#C92A2A;stroke:#3B0D0D;stroke-width:2}.sensor-body{fill:#9CA3AF;stroke:#111827;stroke-width:2}.sensor-mark{stroke:#17212B;stroke-width:2}.pot-body{fill:#4F6570;stroke:#EEF2F5;stroke-width:2}.pot-arrow{stroke:#F1C453;stroke-width:4}.pot-arrowhead{fill:#F1C453}.buzzer-body{fill:#212529;stroke:#0B0D10;stroke-width:2}.buzzer-hole{fill:#495057;stroke:#0B0D10;stroke-width:1}.sound-ring{fill:none;stroke:#E8590C;stroke-width:3;stroke-dasharray:6 5}.generic-body{fill:#5F7880;stroke:#E5F2F4;stroke-width:2}.mcu{fill:#1B3339;stroke:#90C5BD;stroke-width:3}.board-title{fill:#F3F7F8;font-weight:700;font-size:15px}.header-label{fill:#90C5BD;font-size:11px;font-weight:700}.header-pin{fill:#F2C94C;stroke:#12181D;stroke-width:2}.pin-label{fill:#F3F7F8;font-size:12px;font-weight:700}.pin-cue{fill:#1B1D2B;font-size:11px;font-weight:700}.part-label{fill:#1B1D2B;font-size:12px;font-weight:700}.label-bg{fill:#FFFFFF;stroke:#8D99AE;stroke-width:1}.leader{stroke:#5C6773;stroke-width:1.5}.wire-casing{fill:none;stroke:#1B1D2B;stroke-width:6.5;stroke-linecap:round;opacity:.55}.wire-path{fill:none;stroke-width:4;stroke-linecap:round}.wire-bg{fill:#1B1D2B}.wire-label{fill:#fff;font-size:11px;font-weight:700}.vb-old{opacity:.48}.part.vb-hl,.wire.vb-hl{filter:drop-shadow(0 0 5px #fff)}.vb-new{filter:drop-shadow(0 0 8px #f7d774)}.hole.vb-hl,.rail-hole.vb-hl{fill:#ffe166;stroke:#111;stroke-width:2}
-</style><rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/><rect x="${BOARD_LEFT - 36}" y="${surfaceTop}" width="${BOARD_RIGHT - BOARD_LEFT + 72}" height="${surfaceBottom - surfaceTop}" rx="14" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout)}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}${newJumpers}${jumperLabels}<g class="legend"><rect x="${BOARD_RIGHT - 196}" y="${BOARD_TOP + 5}" width="184" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 22}" class="part-label">Columns 1–${BREADBOARD_PROFILES[input.layout.breadboard].rows} left → right</text><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 38}" class="part-label">Rows a–e top · f–j bottom</text></g></svg>`;
+svg{font-family:Arial,"DejaVu Sans",sans-serif;background:${CANVAS_FILL}}.ghost-box{fill:#E8590C;fill-opacity:.08;stroke:#E8590C;stroke-width:2;stroke-dasharray:6 4}.ghost-label{fill:#C2410C;font-size:12px;font-weight:800;paint-order:stroke;stroke:${BOARD_FILL};stroke-width:3px}.repeat-badge-bg{fill:#E8590C}.repeat-badge-text{fill:#fff;font-size:15px;font-weight:800}.end-badge{fill:#fff;stroke-width:3}.end-badge-text{fill:#1B1D2B;font-size:13px;font-weight:800}.board-surface{fill:${BOARD_FILL};stroke:#B8C0C9;stroke-width:2}.channel{fill:#D5DAE0}.hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.rail-hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.row-label,.column-label,.rail-label,.channel-label{fill:#3B4552;font-size:12px;font-weight:700}.column-label{font-size:15px}.column-guide{fill:#3B4552;font-size:13px;font-weight:700}.rail-label{font-size:12px}.rail-plus{stroke:#E03131;stroke-width:3}.rail-minus{stroke:#1C7ED6;stroke-width:3}.rail-tick{stroke:#C3CAD2;stroke-width:1}.lead{stroke:#6C7680;stroke-width:3}.leg{stroke:#8D99AE;stroke-width:3;stroke-linecap:round}.leg-foot{fill:#C9D0D8;stroke:#4A525C;stroke-width:1.5}.led-dome{stroke:#F8FAFC;stroke-width:2}.led-glow{filter:blur(3px)}.resistor-body{fill:#E2C89A;stroke:#7A5A3A;stroke-width:2}.button-body{fill:#2B2F36;stroke:#11151A;stroke-width:2}.button-cap{fill:#C92A2A;stroke:#3B0D0D;stroke-width:2}.sensor-body{fill:#9CA3AF;stroke:#111827;stroke-width:2}.sensor-mark{stroke:#17212B;stroke-width:2}.pot-body{fill:#4F6570;stroke:#EEF2F5;stroke-width:2}.pot-arrow{stroke:#F1C453;stroke-width:4}.pot-arrowhead{fill:#F1C453}.buzzer-body{fill:#212529;stroke:#0B0D10;stroke-width:2}.buzzer-hole{fill:#495057;stroke:#0B0D10;stroke-width:1}.sound-ring{fill:none;stroke:#E8590C;stroke-width:3;stroke-dasharray:6 5}.generic-body{fill:#5F7880;stroke:#E5F2F4;stroke-width:2}.mcu{fill:#1B3339;stroke:#90C5BD;stroke-width:3}.board-title{fill:#F3F7F8;font-weight:700;font-size:15px}.header-label{fill:#90C5BD;font-size:11px;font-weight:700}.header-pin{fill:#F2C94C;stroke:#12181D;stroke-width:2}.pin-label{fill:#F3F7F8;font-size:12px;font-weight:700}.pin-cue{fill:#1B1D2B;font-size:11px;font-weight:700}.part-label{fill:#1B1D2B;font-size:12px;font-weight:700}.label-bg{fill:#FFFFFF;stroke:#8D99AE;stroke-width:1}.leader{stroke:#5C6773;stroke-width:1.5}.wire-casing{fill:none;stroke:#1B1D2B;stroke-width:6.5;stroke-linecap:round;opacity:.55}.wire-path{fill:none;stroke-width:4;stroke-linecap:round}.wire-bg{fill:#1B1D2B}.wire-label{fill:#fff;font-size:11px;font-weight:700}.vb-old{opacity:.48}.part.vb-hl,.wire.vb-hl{filter:drop-shadow(0 0 5px #fff)}.vb-new{filter:drop-shadow(0 0 8px #f7d774)}.hole.vb-hl,.rail-hole.vb-hl{fill:#ffe166;stroke:#111;stroke-width:2}
+</style><rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/><rect x="${BOARD_LEFT - 36}" y="${surfaceTop}" width="${BOARD_RIGHT - BOARD_LEFT + 72}" height="${surfaceBottom - surfaceTop}" rx="14" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout)}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}${renderRepeatMarks(input)}${newJumpers}${jumperLabels}<g class="legend"><rect x="${BOARD_RIGHT - 196}" y="${BOARD_TOP + 5}" width="184" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 22}" class="part-label">Columns 1–${BREADBOARD_PROFILES[input.layout.breadboard].rows} left → right</text><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 38}" class="part-label">Rows a–e top · f–j bottom</text></g></svg>`;
   const scopedSvg = scopeSvgStyles(svg);
   const backgroundSvg = focusBox ? scopedSvg.replace(`<rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/>`, `<rect x="0" y="0" width="${width}" height="700" fill="${BOARD_FILL}"/>`) : scopedSvg;
   const boardSvg = focusBox
@@ -659,7 +751,8 @@ const FOCUS_PANEL_ZOOM = 1.5;
  */
 function withPartsPanel(input: RenderInput, state: ViewState, boardSvg: string, view: ViewBox, width: number, focused: boolean): string {
   if (!input.steps || input.upToStep === undefined || (state.newParts.size === 0 && state.newJumpers.size === 0)) return boardSvg;
-  const panel = renderPartsPanel({
+  const current = input.steps.steps[input.upToStep - 1];
+  const panel = current?.repeat?.role === "repeat" ? renderRepeatPanel(current.repeat, focused ? FOCUS_PANEL_ZOOM : 1) : renderPartsPanel({
     circuit: input.circuit,
     layout: input.layout,
     parts: [...state.newParts],
@@ -678,7 +771,8 @@ function withPartsPanel(input: RenderInput, state: ViewState, boardSvg: string, 
   const totalHeight = Math.round((view.height + panelHeight) * (width / view.width));
   const open = boardSvg.match(/^<svg\b[^>]*>/)![0];
   const inner = boardSvg.slice(open.length, boardSvg.lastIndexOf("</svg>"));
-  const arrows = panel.anchors.map((anchor) => {
+  // Arrows only for one or two drawn parts: from a crowded panel they would criss-cross the board.
+  const arrows = (panel.anchors.length > 0 && state.newParts.size <= 2 && state.newParts.size + state.newJumpers.size <= 2 ? panel.anchors : []).map((anchor) => {
     const hole = holePoint(input.layout, anchor.hole);
     if (!hole) return "";
     const lift = 8 * unit;

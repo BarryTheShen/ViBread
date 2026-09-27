@@ -3,7 +3,7 @@ import { CONSOLE_LABELS, type ConsoleId, type MissionStore, type Revision, type 
 import { DETERMINISTIC_CONSOLES, SYSTEM_ACTOR, deterministicGo, errorMessage, statusReport, type Pipeline } from "@vibread/tools";
 import type { Logger } from "pino";
 import type { DebugLog } from "../services/debug-log.js";
-import { BUILD_PROGRESS_EVENT, BUILD_STEP_EVENT, doneSteps, remapProgress, sameStepStructure } from "../services/build-progress.js";
+import { BUILD_PROGRESS_EVENT, BUILD_STEP_EVENT, doneSteps, remapProgress, reshownCount, sameStepStructure } from "../services/build-progress.js";
 import { WIRE_COLOR_EVENT } from "../services/wire-colors.js";
 
 /** Longest a server shutdown waits for the revision being re-derived. */
@@ -89,15 +89,18 @@ export function createDerivedRefresher(deps: {
     if (done.length && revision.results.steps && after.results.steps && !sameStepStructure(revision.results.steps, after.results.steps)) {
       const mapped = remapProgress(revision.results.steps, after.results.steps, done);
       progress = { from: Math.max(...done), to: mapped.length ? Math.max(...mapped) : 0 };
+      const reshown = reshownCount(revision.results.steps, after.results.steps, done, mapped);
       await store.appendEvent({
         missionId,
         channel: "system",
         actor: SYSTEM_ACTOR,
         kind: BUILD_PROGRESS_EVENT,
         text:
-          progress.to > 0
-            ? `The build steps were updated (same placement, clearer steps). Your progress carries over: continue at step ${progress.to + 1} of ${after.results.steps.steps.length}.`
-            : `The build steps were updated (same placement, clearer steps). Start again at step 1 of ${after.results.steps.steps.length}; what's already on your board stays where it is.`,
+          progress.to <= 0
+            ? `The build steps were updated (same placement, clearer steps). Start again at step 1 of ${after.results.steps.steps.length}; what's already on your board stays where it is.`
+            : reshown > 0
+              ? `The build steps were updated (same placement, repeated parts grouped). Continue at step ${progress.to + 1} of ${after.results.steps.steps.length}; parts you already placed stay where they are, so skip any that step shows again.`
+              : `The build steps were updated (same placement, clearer steps). Your progress carries over: continue at step ${progress.to + 1} of ${after.results.steps.steps.length}.`,
         revision: revision.n,
         data: { done: mapped, before: { steps: revision.results.steps.steps.length, reached: progress.from } },
       });
