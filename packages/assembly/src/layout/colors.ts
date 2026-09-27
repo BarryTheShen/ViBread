@@ -2,10 +2,11 @@
  * Jumper wire colours (issue #15).
  *
  * Default rule: red = the 5 V net, black = GND. Every signal net belongs to a "line": an Arduino pin's net plus the
- * part-to-part nets behind it (D4 → R1 → LED1 is one line), and a line has one colour on every wire, in every step.
- * Lines doing the same job (all LED lines, all key lines) take consecutive colours in resistor-colour-code order
- * (orange, yellow, green, blue, purple, white), ordered by Arduino pin, so neighbouring lines always differ and the
- * legend reads "orange–yellow–green–blue = LED1–LED4 (D2–D5)".
+ * serial part-to-part nets behind it (D4 → R1 → LED1: the R1–LED1 net has exactly two members), and a line has one
+ * colour on every wire, in every step. A part-to-part net with three or more members is a bus (5 V → R2 → every LED
+ * anode) and is a line of its own. Lines doing the same job (all LED lines, all key lines) take consecutive colours
+ * in resistor-colour-code order (orange, yellow, green, blue, purple, white), ordered by Arduino pin, so the legend
+ * reads "orange–yellow–green–blue = LED1–LED4 (D2–D5)". Two lines that touch the same part never share a colour.
  *
  * Overrides come from the builder: `wire:<jumper id>` recolours one wire, `net:<net id>` a whole net. Values are a kit
  * colour name or a custom `#rrggbb`.
@@ -14,6 +15,8 @@ import { BOARD_PART, isWireColorValue, type Circuit, type Layout, type WireColor
 
 /** Resistor-code order, skipping red/black (reserved for power) and brown/gray (hard to tell apart on a board). */
 const SIGNAL_SEQUENCE: readonly WireColor[] = ["orange", "yellow", "green", "blue", "purple", "white"];
+/** Only when every sequence colour is taken by a touching line. */
+const SPARE_SIGNAL_COLORS = ["brown", "gray"] as const;
 
 export type WireColorOverrides = Record<string, string>;
 
@@ -77,7 +80,8 @@ function lines(circuit: Circuit): Line[] {
     for (let index = 0; index < nets.length; index += 1) {
       for (const part of partsOf(nets[index]!)) {
         for (const other of signals) {
-          if (assigned.has(other.id) || pinsOf(other.id).length > 0) continue;
+          // Only serial links join the seed's line: a part-to-part net with exactly two members. A bus is its own line.
+          if (assigned.has(other.id) || pinsOf(other.id).length > 0 || other.pins.length !== 2) continue;
           if (!other.pins.some((ref) => ref.part === part)) continue;
           assigned.add(other.id);
           nets.push(other.id);
@@ -88,14 +92,15 @@ function lines(circuit: Circuit): Line[] {
     const moduleOf = (id: string) => circuit.parts.find((part) => part.id === id)?.module;
     // The sketch's pin role names the part the line is for (a key line with its LED is still a key line).
     const rolePart = circuit.roles.find((entry) => pinsOf(seed).includes(entry.pin) && parts.includes(entry.part))?.part;
+    const boardPins = nets.flatMap(pinsOf).sort((a, b) => boardPinRank(a) - boardPinRank(b));
+    // A part-to-part bus (3+ members, no Arduino pin) is named by its net, not by the parts it feeds.
+    if (boardPins.length === 0 && partsOf(seed).length > 2) {
+      out.push({ nets, boardPins, role: "bus", parts });
+      return;
+    }
     const modules = new Set<string | undefined>(rolePart ? [moduleOf(rolePart)] : parts.map(moduleOf));
     const [module, role] = ROLE_ORDER.find(([key]) => modules.has(key)) ?? ["", "line"];
-    out.push({
-      nets,
-      boardPins: nets.flatMap(pinsOf).sort((a, b) => boardPinRank(a) - boardPinRank(b)),
-      role,
-      parts: rolePart ? [rolePart] : parts.filter((id) => moduleOf(id) === module),
-    });
+    out.push({ nets, boardPins, role, parts: rolePart ? [rolePart] : parts.filter((id) => moduleOf(id) === module) });
   };
   for (const net of seeds) if (!assigned.has(net.id)) grow(net.id);
   for (const net of [...signals].sort((a, b) => a.id.localeCompare(b.id))) if (!assigned.has(net.id)) grow(net.id);
@@ -111,14 +116,20 @@ export function defaultNetColors(circuit: Circuit): Record<string, WireColor> {
   }
   const all = lines(circuit);
   const roles = [...new Set(all.map((line) => line.role))];
-  let next = 0;
-  for (const role of roles) {
-    for (const line of all.filter((entry) => entry.role === role)) {
-      const color = SIGNAL_SEQUENCE[next % SIGNAL_SEQUENCE.length]!;
-      next += 1;
-      for (const net of line.nets) colors[net] = color;
-    }
-  }
+  const ordered = roles.flatMap((role) => all.filter((entry) => entry.role === role));
+  // Lines touching a common part are drawn next to each other and must differ (the sequence wraps after six).
+  const partsOfLine = ordered.map((line) => new Set(circuit.nets.filter((net) => line.nets.includes(net.id)).flatMap((net) => net.pins.map((ref) => ref.part)).filter((part) => part !== BOARD_PART)));
+  const chosen: WireColor[] = [];
+  ordered.forEach((line, index) => {
+    const neighbours = new Set(ordered.map((_, other) => other).filter((other) => other < index && [...partsOfLine[index]!].some((part) => partsOfLine[other]!.has(part))).map((other) => chosen[other]!));
+    const palette = [...SIGNAL_SEQUENCE, ...SPARE_SIGNAL_COLORS];
+    // A bus reaches across the drawing, so it prefers a colour no other line uses at all.
+    const unused = line.role === "bus" ? palette.find((candidate) => !chosen.includes(candidate) && !ordered.slice(index + 1).some((_, later) => SIGNAL_SEQUENCE[(index + 1 + later) % SIGNAL_SEQUENCE.length] === candidate)) : undefined;
+    const preferred = unused ?? SIGNAL_SEQUENCE[index % SIGNAL_SEQUENCE.length]!;
+    const color = !neighbours.has(preferred) ? preferred : (palette.find((candidate) => !neighbours.has(candidate)) ?? preferred);
+    chosen.push(color);
+    for (const net of line.nets) colors[net] = color;
+  });
   return colors;
 }
 
@@ -180,7 +191,17 @@ export function wireLegend(circuit: Circuit, layout: Layout, overrides: WireColo
     entries.push({ colors: [nets[net.id]!], label: net.kind === "power" ? `${net.id} (power)` : `${net.id} (ground)` });
   }
   const all = lines(circuit).filter((line) => line.nets.some((net) => used.has(net)));
-  for (const role of [...new Set(all.map((line) => line.role))]) {
+  for (const line of all.filter((entry) => entry.role === "bus")) {
+    // "LED1–LED4, R2": one range per kind of part.
+    const byPrefix = new Map<string, string[]>();
+    for (const part of line.parts) {
+      const prefix = part.replace(/\d+$/, "");
+      byPrefix.set(prefix, [...(byPrefix.get(prefix) ?? []), part]);
+    }
+    const members = [...byPrefix.values()].map((ids) => range(ids.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })))).join(", ");
+    entries.push({ colors: [nets[line.nets[0]!]!], label: `${line.nets[0]} bus (${members})` });
+  }
+  for (const role of [...new Set(all.map((line) => line.role))].filter((role) => role !== "bus")) {
     const group = all.filter((line) => line.role === role);
     const parts = group.flatMap((line) => line.parts);
     const pins = group.flatMap((line) => line.boardPins);
