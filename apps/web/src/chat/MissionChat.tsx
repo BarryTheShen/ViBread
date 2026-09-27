@@ -511,7 +511,9 @@ export function MissionThread({ chat: instance, history, reloadHistory, detail, 
         setStoppedHere(new Set()); // the saved replies carry the server's own stopped mark
       });
     }
-    if (wasBusy.current !== busy || wasStreaming.current !== streaming) invalidateMissions();
+    // A send from this browser updates the list itself (missionTransport.ts); refetching as it starts could race the POST
+    // and briefly put "Waiting for you" back. Runs started elsewhere show up here as busy while not streaming.
+    if ((wasBusy.current !== busy && !streaming) || (wasStreaming.current && !streaming)) invalidateMissions();
     wasBusy.current = busy;
     wasStreaming.current = streaming;
   }, [busy, streaming, chat, invalidateMissions, reloadHistory]);
@@ -580,6 +582,7 @@ export function MissionChat(props: MissionChatProps) {
 }
 
 function ChatRuntime({ missionId, history, ...props }: MissionChatProps & { history: UIMessage[]; reloadHistory(): Promise<UIMessage[] | undefined> }) {
-  const [chat] = useState(() => new Chat<UIMessage>({ id: missionId, transport: createMissionTransport(missionId), messages: history }));
+  const queryClient = useQueryClient();
+  const [chat] = useState(() => new Chat<UIMessage>({ id: missionId, transport: createMissionTransport(missionId, queryClient), messages: history }));
   return <MissionThread chat={chat} history={history} {...props} />;
 }
