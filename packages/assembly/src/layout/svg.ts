@@ -17,7 +17,7 @@ import {
   type Part,
   type StepList,
 } from "@vibread/core";
-import { PANEL_CSS, renderPartsPanel, renderRepeatBanner, renderRepeatPanel } from "./panel.js";
+import { PANEL_CSS, renderPartsPanel, renderRepeatBanner } from "./panel.js";
 
 const DEFAULT_WIDTH = 1200;
 const BOARD_LEFT = 70;
@@ -1013,10 +1013,10 @@ const FOCUS_PANEL_ZOOM = 1.5;
 function withPartsPanel(input: RenderInput, state: ViewState, boardSvg: string, view: ViewBox, width: number, focused: boolean): string {
   if (!input.steps || input.upToStep === undefined || (state.newParts.size === 0 && state.newJumpers.size === 0)) return boardSvg;
   const current = input.steps.steps[input.upToStep - 1];
-  // The repeat step: the drawn checklist under the whole board; under a focus crop only a one-line banner (the screen
-  // has the tickable list, and a phone would give the drawn one a third of the picture).
+  // The repeat step: a one-line banner under the whole board and under a focus crop alike. The copies are drawn on the
+  // board, the step text lists them, and both screens have the tickable checklist.
   const repeat = current?.repeat?.role === "repeat" ? current.repeat : undefined;
-  const panel = repeat ? (focused ? renderRepeatBanner(repeat) : renderRepeatPanel(repeat)) : renderPartsPanel({
+  const panel = repeat ? renderRepeatBanner(repeat) : renderPartsPanel({
     circuit: input.circuit,
     layout: input.layout,
     parts: [...state.newParts],
