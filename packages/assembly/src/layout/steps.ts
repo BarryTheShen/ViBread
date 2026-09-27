@@ -23,6 +23,7 @@ import { layoutHash } from "./allocator.js";
 import { aWire } from "./colors.js";
 import { earlierItems, headerLandmark, holeLandmark, legName, type Earlier } from "./landmarks.js";
 import { repeatQuality } from "./quality.js";
+import { jumperRoute } from "./svg.js";
 import { findUnits, repeatedUnits, type Unit } from "./units.js";
 
 function endpointText(endpoint: Jumper["from"]): string {
@@ -202,6 +203,20 @@ function bridgeText(jumper: Jumper, color: string): string {
   const from = "hole" in jumper.from ? jumper.from.hole : "";
   const to = "hole" in jumper.to ? jumper.to.hole : "";
   return `Join the two halves of the ${from.includes("+") ? "+" : "−"} rail with a short ${color} wire across the gap: end 1 in hole ${from}, end 2 in hole ${to}.`;
+}
+
+/**
+ * ", the rail's last hole (column 60); run it around the right end of the breadboard, not across it": where an Uno
+ * rail wire drawn along the board edge (issue #28) enters its rail, and which way it goes round. Empty otherwise.
+ */
+function feedRouteText(layout: Layout, jumper: Jumper): string {
+  const end = [jumper.from, jumper.to].find((entry) => "hole" in entry);
+  const rail = end && "hole" in end ? parseHole(end.hole) : null;
+  if (rail?.kind !== "rail" || !jumperRoute(layout, jumper)) return "";
+  const positions = BREADBOARD_PROFILES[layout.breadboard].railPositions;
+  const left = rail.position - positions[0]! <= positions.at(-1)! - rail.position;
+  const where = rail.position === positions[0] ? "the rail's first hole" : rail.position === positions.at(-1) ? "the rail's last hole" : `near the ${left ? "left" : "right"} end of the rail`;
+  return `, ${where} (column ${rail.position}); run it around the ${left ? "left" : "right"} end of the breadboard, not across it`;
 }
 
 function testsForSubsection(circuit: Circuit): TestId[] {
@@ -384,7 +399,7 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
           railEnds.push({ jumper: jumper.id, ends: wire.ends });
           if (isRailBridge(profile, jumper)) return bridgeText(jumper, colorOf(jumper));
           railLandmarks.push(...wire.landmarks);
-          return `${capitalize(aWire(colorOf(jumper)))}: ${wire.ends[0].text} → ${wire.ends[1].text}.`;
+          return `${capitalize(aWire(colorOf(jumper)))}: ${wire.ends[0].text} → ${wire.ends[1].text}${feedRouteText(layout, jumper)}.`;
         }).join(" ")}`
       : !power
         ? `Your ${profile.shortName} has no power rails: 5 V and GND reach their strips with wires later.`

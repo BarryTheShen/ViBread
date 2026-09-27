@@ -6,7 +6,7 @@
  */
 import { parseHole, type Circuit, type Layout } from "@vibread/core";
 
-import { endpointPosition } from "./svg.js";
+import { endpointPosition, jumperRoute, segmentsCross } from "./svg.js";
 import { repeatedUnits, statedIndex, type UnitSet } from "./units.js";
 
 /** Hole pitch in drawing units (bb-830: 1010 / 62). */
@@ -42,27 +42,20 @@ export interface LayoutQuality {
 
 type Point = { x: number; y: number };
 
-function cross(o: Point, a: Point, b: Point): number {
-  return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
-}
-
-/** Proper intersection of two segments (touching ends or sharing an end do not count). */
-function segmentsCross(a: [Point, Point], b: [Point, Point]): boolean {
-  const near = (p: Point, q: Point) => Math.abs(p.x - q.x) < 0.5 && Math.abs(p.y - q.y) < 0.5;
-  if (near(a[0], b[0]) || near(a[0], b[1]) || near(a[1], b[0]) || near(a[1], b[1])) return false;
-  const d1 = cross(b[0], b[1], a[0]);
-  const d2 = cross(b[0], b[1], a[1]);
-  const d3 = cross(a[0], a[1], b[0]);
-  const d4 = cross(a[0], a[1], b[1]);
-  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
-}
-
-/** Pairs of jumpers whose straight end-to-end lines cross in the drawing. */
+/**
+ * Pairs of jumpers that cross in the drawing: each wire's straight end-to-end line, or the route an edge-hugging wire
+ * (an Uno rail feed, a split-rail bridge) is drawn along.
+ */
 export function jumperCrossings(layout: Layout): [string, string][] {
-  const segments = layout.jumpers.map((jumper) => ({ id: jumper.id, line: [endpointPosition(layout, jumper.from), endpointPosition(layout, jumper.to)] as [Point, Point] }));
+  const wires = layout.jumpers.map((jumper) => {
+    const points = jumperRoute(layout, jumper) ?? [endpointPosition(layout, jumper.from), endpointPosition(layout, jumper.to)];
+    return { id: jumper.id, segments: points.slice(1).map((point, index) => [points[index]!, point] as [Point, Point]) };
+  });
   const pairs: [string, string][] = [];
-  for (let i = 0; i < segments.length; i += 1) {
-    for (let j = i + 1; j < segments.length; j += 1) if (segmentsCross(segments[i]!.line, segments[j]!.line)) pairs.push([segments[i]!.id, segments[j]!.id]);
+  for (let i = 0; i < wires.length; i += 1) {
+    for (let j = i + 1; j < wires.length; j += 1) {
+      if (wires[i]!.segments.some((a) => wires[j]!.segments.some((b) => segmentsCross(a, b)))) pairs.push([wires[i]!.id, wires[j]!.id]);
+    }
   }
   return pairs;
 }

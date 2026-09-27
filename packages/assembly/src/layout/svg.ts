@@ -1,6 +1,8 @@
 import {
   BOARD_PROFILES,
   BREADBOARD_PROFILES,
+  isRailBridge,
+  partVariant,
   railBridge,
   COLUMNS,
   MODULES,
@@ -169,6 +171,126 @@ function endpointPoint(layout: Pick<Layout, "board" | "boardAnchor" | "breadboar
   return pins.get(endpoint.board) ?? { x: BOARD_LEFT, y: 620 };
 }
 
+function cross(o: Point, a: Point, b: Point): number {
+  return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+}
+
+/** Proper intersection of two segments (touching ends or sharing an end do not count). */
+export function segmentsCross(a: [Point, Point], b: [Point, Point]): boolean {
+  const near = (p: Point, q: Point) => Math.abs(p.x - q.x) < 0.5 && Math.abs(p.y - q.y) < 0.5;
+  if (near(a[0], b[0]) || near(a[0], b[1]) || near(a[1], b[0]) || near(a[1], b[1])) return false;
+  const d1 = cross(b[0], b[1], a[0]);
+  const d2 = cross(b[0], b[1], a[1]);
+  const d3 = cross(a[0], a[1], b[0]);
+  const d4 = cross(a[0], a[1], b[1]);
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0));
+}
+
+type RouteLayout = Pick<Layout, "board" | "boardAnchor" | "breadboard" | "boardOrientation" | "placements" | "jumpers">;
+
+/**
+ * Edge lanes for the Uno's rail feeds (issue #28), one per rail so the two feeds never cross: the outer rail's wire
+ * (− is the rail nearest the board edge, top and bottom) runs outermost, under the Uno and beside the breadboard.
+ */
+const FEED_LANES = { inner: { side: 26, under: 686 }, outer: { side: 14, under: 695 } } as const;
+/** How far a split-rail bridge's staple stands off its rail, toward the board edge. */
+const BRIDGE_STANDOFF = 12;
+
+/** An edge-hugging wire: its polyline and where its step label goes (beside the wire, clear of the strips). */
+type EdgeRoute = { points: Point[]; label: (labelWidth: number, labelHeight: number) => Point };
+
+/**
+ * Drawn route of a wire that hugs the board edge (issue #28), or undefined for an ordinary wire (an S-curve or arc).
+ * - An Uno 5 V / GND → rail wire into the rail's end hole: it leaves its header pin through the gap beside it (and
+ *   between the pins of the header row below), runs along the bottom edge of the Uno, up the side of the breadboard,
+ *   and into the end hole along the rail line, so it never crosses the strips, the parts or the other Uno wires. Only
+ *   when no rail hole lies between its hole and the rail's end (it would run over them).
+ * - A split-rail bridge: a flat staple on the board-edge side of its rail.
+ */
+export function jumperRoute(layout: RouteLayout, jumper: Pick<Jumper, "from" | "to">): Point[] | undefined {
+  return edgeRoute(layout, jumper, boardPinPoints(layout))?.points;
+}
+
+function edgeRoute(layout: RouteLayout, jumper: Pick<Jumper, "from" | "to">, pins: Map<string, Point>): EdgeRoute | undefined {
+  const profile = BREADBOARD_PROFILES[layout.breadboard];
+  if ("hole" in jumper.from && "hole" in jumper.to) {
+    const rail = parseHole(jumper.from.hole);
+    if (!isRailBridge(profile, jumper) || rail?.kind !== "rail") return undefined;
+    const [from, to] = [holePoint(layout, jumper.from.hole)!, holePoint(layout, jumper.to.hole)!];
+    const outward = rail.rail.startsWith("T") ? -1 : 1;
+    const y = RAIL_Y[rail.rail] + outward * BRIDGE_STANDOFF;
+    const outer = rail.rail.endsWith("-");
+    return {
+      points: [from, { x: from.x, y }, { x: to.x, y }, to],
+      // The − rail's label beyond its staple (the board edge); the + rail's on the board side, past the "gap" mark.
+      label: (_width, height) => ({ x: (from.x + to.x) / 2, y: outer ? y + outward * (height / 2 + 4) : from.y - outward * (height / 2 + 21) }),
+    };
+  }
+  const boardFirst = "board" in jumper.from;
+  const [boardEnd, railEnd] = boardFirst ? [jumper.from, jumper.to] : [jumper.to, jumper.from];
+  if (!("board" in boardEnd) || !("hole" in railEnd) || BOARD_PROFILES[layout.board].placement === "straddle") return undefined;
+  const rail = parseHole(railEnd.hole);
+  const pin = pins.get(boardEnd.board);
+  const positions = profile.railPositions;
+  if (rail?.kind !== "rail" || !pin || positions.length === 0) return undefined;
+  const left = rail.position - positions[0]! <= positions.at(-1)! - rail.position;
+  const used = new Set([...layout.placements.flatMap((placement) => Object.values(placement.pins)), ...layout.jumpers.flatMap((entry) => [entry.from, entry.to]).flatMap((end) => ("hole" in end ? [end.hole] : []))]);
+  if (positions.some((position) => (left ? position < rail.position : position > rail.position) && used.has(`${rail.rail}${position}`))) return undefined;
+  const outer = rail.rail.endsWith("-");
+  const lane = outer ? FEED_LANES.outer : FEED_LANES.inner;
+  const sideX = left ? lane.side : DEFAULT_WIDTH - lane.side;
+  const hole = holePoint(layout, railEnd.hole)!;
+  // Leave the pin beside its label (drawn under it) and drop through a gap between the pins of the header row below
+  // (or, on the bottom row, of its own row) or past a row's end: the nearest one whose route crosses no other wire.
+  // The + feed also keeps clear of the − feed, which picks first and runs in the outer lanes.
+  const header = [...pins.values()];
+  const below = header.filter((point) => point.y > pin.y + 1).map((point) => point.x);
+  const row = (below.length > 0 ? below : header.filter((point) => Math.abs(point.y - pin.y) <= 1).map((point) => point.x)).sort((a, b) => a - b);
+  // Several spots across each gap: a wire leaving a neighbouring pin leans across part of it.
+  const exits = [row[0]! - 30, ...row.slice(1).flatMap((x, index) => [0.5, 0.35, 0.65, 0.2, 0.8].map((share) => row[index]! + (x - row[index]!) * share)), row.at(-1)! + 30];
+  const toward = left ? -1 : 1;
+  exits.sort((a, b) => Math.abs(a - pin.x) - Math.abs(b - pin.x) || (b - a) * toward);
+  const feed = (entry: Jumper) => ("board" in entry.from && "hole" in entry.to && parseHole(entry.to.hole)?.kind === "rail") || ("board" in entry.to && "hole" in entry.from && parseHole(entry.from.hole)?.kind === "rail");
+  const obstacles: Point[][] = layout.jumpers.filter((entry) => !isRailBridge(profile, entry) && !feed(entry)).map((entry) => [endpointPoint(layout, entry.from, pins), endpointPoint(layout, entry.to, pins)]);
+  if (!outer) {
+    for (const other of layout.jumpers.filter((entry) => feed(entry) && [entry.from, entry.to].some((end) => "hole" in end && end.hole.startsWith(`${rail.rail[0]}-`)))) {
+      obstacles.push(edgeRoute(layout, other, pins)?.points ?? [endpointPoint(layout, other.from, pins), endpointPoint(layout, other.to, pins)]);
+    }
+  }
+  const routeFor = (exitX: number) => [pin, { x: exitX, y: pin.y + 10 }, { x: exitX, y: lane.under }, { x: sideX, y: lane.under }, { x: sideX, y: hole.y }, hole];
+  const crossings = (points: Point[]) => obstacles.reduce((sum, line) => sum + points.slice(1).filter((point, index) => line.slice(1).some((end, at) => segmentsCross([points[index]!, point], [line[at]!, end]))).length, 0);
+  const scored = exits.map((exitX) => {
+    const route = routeFor(exitX);
+    return { route, crossings: crossings(route) };
+  });
+  const route = (scored.find((entry) => entry.crossings === 0) ?? [...scored].sort((a, b) => a.crossings - b.crossings)[0]!).route;
+  return {
+    points: boardFirst ? route : route.reverse(),
+    // Just inside the side lanes, beside the centre channel (no holes there): the + feed's label above the − feed's.
+    label: (width, height) => {
+      const x = FEED_LANES.inner.side + 8 + width / 2;
+      return { x: left ? x : DEFAULT_WIDTH - x, y: CHANNEL_Y + (outer ? 1 : -1) * (height / 2 + 3) };
+    },
+  };
+}
+
+/** A polyline with its corners rounded (radius up to `radius`, never more than half a segment). */
+function roundedPath(points: Point[], radius = 8): string {
+  const parts = [`M ${points[0]!.x} ${points[0]!.y}`];
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const [a, p, b] = [points[index - 1]!, points[index]!, points[index + 1]!];
+    const inLength = Math.hypot(p.x - a.x, p.y - a.y) || 1;
+    const outLength = Math.hypot(b.x - p.x, b.y - p.y) || 1;
+    const r = Math.min(radius, inLength / 2, outLength / 2);
+    const start = { x: p.x - ((p.x - a.x) / inLength) * r, y: p.y - ((p.y - a.y) / inLength) * r };
+    const end = { x: p.x + ((b.x - p.x) / outLength) * r, y: p.y + ((b.y - p.y) / outLength) * r };
+    parts.push(`L ${start.x} ${start.y}`, `Q ${p.x} ${p.y} ${end.x} ${end.y}`);
+  }
+  const last = points.at(-1)!;
+  parts.push(`L ${last.x} ${last.y}`);
+  return parts.join(" ");
+}
+
 function viewState(steps: StepList | undefined, upToStep: number | undefined): ViewState {
   if (!steps || upToStep === undefined) return { newParts: new Set(), newJumpers: new Set(), final: true };
   const limit = Math.max(0, Math.min(upToStep, steps.steps.length));
@@ -209,11 +331,10 @@ function focusViewBox(input: RenderInput, state: ViewState, pins: Map<string, Po
   for (const jumperId of state.newJumpers) {
     const jumper = jumpers.get(jumperId);
     if (!jumper) continue;
-    const from = endpointPoint(input.layout, jumper.from, pins);
-    const to = endpointPoint(input.layout, jumper.to, pins);
-    // Keep the wire's arc and its step label in the crop too.
+    // Keep the whole wire (an edge-routed one's lanes too) and its step label in the crop.
     const text = `${jumper.id} ${jumper.net}`;
-    points.push(from, to, jumperGeometry(from, to, Math.max(48, text.length * 7 + 14), 18).label);
+    const shape = wireShape(input.layout, jumper, pins, Math.max(48, text.length * 7 + 14), 18);
+    points.push(...shape.points, shape.label);
   }
   // The first copy of a repeated unit keeps the other copies' ghosts in view, so the ×N reads at a glance.
   if (step.repeat?.role === "template") for (const copy of step.repeat.copies.slice(1)) for (const hole of copy.holes) {
@@ -395,6 +516,7 @@ export function partDrawingBox(breadboard: Layout["breadboard"], part: Part, pin
   const { x, y } = geometry.center;
   const boxes: DrawingBox[] = points.map((point) => ({ left: point.x - 5, top: point.y - 5, right: point.x + 5, bottom: point.y + 5 }));
   const around = (rx: number, ry: number) => boxes.push({ left: x - rx, top: y - ry, right: x + rx, bottom: y + ry });
+  const pot = part.module === "potentiometer" ? potOutline({ breadboard }, part, geometry) : undefined;
   // A resistor standing across the channel is drawn upright.
   if (part.module === "resistor") (Math.abs(Math.sin((geometry.angle * Math.PI) / 180)) > 0.5 ? around(10, 24) : around(24, 10));
   else if (part.module === "led") {
@@ -402,7 +524,7 @@ export function partDrawingBox(breadboard: Layout["breadboard"], part: Part, pin
     for (const point of points) boxes.push({ left: point.x - 2, top: point.y - 20, right: point.x + 24, bottom: point.y + 20 });
   } else if (part.module === "button") around(20, 20);
   else if (part.module === "photoresistor") around(18, 18);
-  else if (part.module === "potentiometer") around(21, 21);
+  else if (pot) boxes.push(pot.extent);
   else if (part.module.startsWith("buzzer")) {
     const [p, n] = [geometry.pins.get("P") ?? geometry.center, geometry.pins.get("N") ?? geometry.center];
     const radius = Math.max(14, Math.hypot(p.x - n.x, p.y - n.y) / 2 - 6);
@@ -410,7 +532,8 @@ export function partDrawingBox(breadboard: Layout["breadboard"], part: Part, pin
     boxes.push({ left: p.x - 5, top: p.y - 20, right: p.x + 5, bottom: p.y });
   } else around(24, 14);
   const width = Math.max(42, part.id.length * 7 + 12);
-  boxes.push({ left: x - width / 2, top: y - 43, right: x + width / 2, bottom: y - 13 });
+  const label = pot?.label ?? geometry.center;
+  boxes.push({ left: label.x - width / 2, top: label.y - 43, right: label.x + width / 2, bottom: label.y - 13 });
   return {
     left: Math.min(...boxes.map((box) => box.left)),
     top: Math.min(...boxes.map((box) => box.top)),
@@ -485,8 +608,45 @@ function renderPhotoresistor(geometry: ReturnType<typeof partGeometry>): string 
   return `<circle cx="${geometry.center.x}" cy="${geometry.center.y}" r="18" class="sensor-body"/><path d="M ${geometry.center.x - 11} ${geometry.center.y + 10} l 8 -22 8 22" class="sensor-mark" fill="none"/>`;
 }
 
-function renderPot(geometry: ReturnType<typeof partGeometry>): string {
-  return `<circle cx="${geometry.center.x}" cy="${geometry.center.y}" r="21" class="pot-body"/><path d="M ${geometry.center.x - 8} ${geometry.center.y + 9} L ${geometry.center.x + 12} ${geometry.center.y - 11}" class="pot-arrow"/><circle cx="${geometry.center.x + 12}" cy="${geometry.center.y - 11}" r="3" class="pot-arrowhead"/>`;
+/** A pot's body stands off its row by this much (its legs), toward the centre channel, and is this tall. */
+const POT_LEG = 10;
+const POT_BODY_HEIGHT = 58;
+
+/**
+ * Where a potentiometer is drawn (issue #28): a body as wide as the columns it covers (its variant's size: a 10 mm
+ * trimmer 4 columns, a 16 mm panel pot 6; 6 for a plain breadboard pot), standing off its row toward the centre
+ * channel (over the channel for a pot in row e or f, leaving the rest of its strips clear for wires), legs A/W/B from
+ * its edge to their holes, named inside the body's edge, and the knob beyond them. `extent` is all of that plus the
+ * leg feet; `label` is where the part's name goes (above its row, or above the body when the body is above the row).
+ */
+function potOutline(layout: Pick<Layout, "breadboard">, part: Part, geometry: ReturnType<typeof partGeometry>): { body: DrawingBox; extent: DrawingBox; near: number; knob: Point; label: Point; toward: -1 | 1 } {
+  const xs = [...geometry.pins.values()].map((point) => point.x);
+  const pitch = (BOARD_RIGHT - BOARD_LEFT) / Math.max(1, boardRows(layout) - 1);
+  const size = partVariant(part)?.sizeMm;
+  const columns = size ? Math.max(3, Math.round(size / 2.54)) : 6;
+  const [first, last] = [Math.min(...xs), Math.max(...xs)];
+  const mid = (first + last) / 2;
+  const half = Math.max((columns * pitch) / 2, (last - first) / 2 + pitch / 2) - 2;
+  const row = geometry.center.y;
+  const toward = row < CHANNEL_Y ? 1 : -1;
+  const near = row + toward * POT_LEG;
+  const far = near + toward * POT_BODY_HEIGHT;
+  const body = { left: mid - half, right: mid + half, top: Math.min(near, far), bottom: Math.max(near, far) };
+  return {
+    body,
+    extent: { left: body.left, right: body.right, top: Math.min(body.top, row - 5), bottom: Math.max(body.bottom, row + 5) },
+    near,
+    knob: { x: mid, y: near + toward * 34 },
+    label: { x: mid, y: toward > 0 ? row : body.top + 12 },
+    toward,
+  };
+}
+
+function renderPot(layout: Pick<Layout, "breadboard">, part: Part, geometry: ReturnType<typeof partGeometry>): string {
+  const { body, near, knob, toward } = potOutline(layout, part, geometry);
+  const legs = [...geometry.pins.values()].map((point) => `<line x1="${point.x}" y1="${near}" x2="${point.x}" y2="${point.y}" class="leg"/><circle cx="${point.x}" cy="${point.y}" r="3.5" class="leg-foot"/>`).join("");
+  const names = [...geometry.pins].map(([pin, point]) => `<text x="${point.x}" y="${near + (toward > 0 ? 12 : -4)}" text-anchor="middle" class="pot-pin">${escapeSvg(pin)}</text>`).join("");
+  return `${legs}<rect x="${body.left}" y="${body.top}" width="${body.right - body.left}" height="${body.bottom - body.top}" rx="6" class="pot-base"/>${names}<circle cx="${knob.x}" cy="${knob.y}" r="21" class="pot-body"/><path d="M ${knob.x - 8} ${knob.y + 9} L ${knob.x + 12} ${knob.y - 11}" class="pot-arrow"/><circle cx="${knob.x + 12}" cy="${knob.y - 11}" r="3" class="pot-arrowhead"/>`;
 }
 
 /** Round body centred between its two pins, both pins on their holes; `sound-<ID>` rings show it sounding. */
@@ -508,13 +668,14 @@ function renderPart(input: RenderInput, part: Part, placement: Layout["placement
   else if (part.module === "resistor") body = renderResistor(part, geometry);
   else if (part.module === "button") body = renderButton(geometry);
   else if (part.module === "photoresistor") body = renderPhotoresistor(geometry);
-  else if (part.module === "potentiometer") body = renderPot(geometry);
+  else if (part.module === "potentiometer") body = renderPot(input.layout, part, geometry);
   else if (part.module.startsWith("buzzer")) body = renderBuzzer(part, geometry, input.partStates?.[part.id] ?? 0);
   else body = `<rect x="${geometry.center.x - 24}" y="${geometry.center.y - 14}" width="48" height="28" rx="4" class="generic-body"/>`;
   const newItem = state.newParts.has(part.id);
   const highlighted = isHighlighted("part", part.id, input.highlight);
   // Many new parts at once (a repeat step): names only, so neighbouring labels don't run into each other.
-  const label = state.final || newItem ? partLabel(geometry.center, state.final || state.newParts.size > 2 ? part.id : `${part.id} ${valueLabel(part)}`) : "";
+  const labelAt = part.module === "potentiometer" ? potOutline(input.layout, part, geometry).label : geometry.center;
+  const label = state.final || newItem ? partLabel(labelAt, state.final || state.newParts.size > 2 ? part.id : `${part.id} ${valueLabel(part)}`) : "";
   const pinTitle = pinNames(part).map((pin) => `${pin}:${placement.pins[pin] ?? "?"}`).join(" ");
   return `<g id="part-${escapeSvg(part.id)}" class="${classes("part", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(part.id)} ${escapeSvg(MODULES[part.module].name)}"><title>${escapeSvg(part.id)} — ${escapeSvg(pinTitle)}</title>${body}${label}</g>`;
 }
@@ -569,6 +730,18 @@ function jumperGeometry(from: Point, to: Point, labelWidth: number, labelHeight:
   return { path: `M ${from.x} ${from.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${to.x} ${to.y}`, label: { x: point.x + nx * offset, y: point.y + ny * offset } };
 }
 
+/**
+ * A wire's drawn path, its label spot, and its points: an edge-hugging route (issue #28, `edge`, outlined light so a
+ * black wire still shows on the dark canvas), else the curve above.
+ */
+function wireShape(layout: RouteLayout, jumper: Pick<Jumper, "from" | "to">, pins: Map<string, Point>, labelWidth: number, labelHeight: number): { path: string; label: Point; points: Point[]; edge: boolean } {
+  const route = edgeRoute(layout, jumper, pins);
+  if (route) return { path: roundedPath(route.points), label: route.label(labelWidth, labelHeight), points: route.points, edge: true };
+  const from = endpointPoint(layout, jumper.from, pins);
+  const to = endpointPoint(layout, jumper.to, pins);
+  return { ...jumperGeometry(from, to, labelWidth, labelHeight), points: [from, to], edge: false };
+}
+
 /** "1" and "2" badges on a new wire's two ends, matching "End 1" / "End 2" in the step text. */
 function endBadges(jumper: Jumper, from: Point, to: Point, stroke: string): string {
   return ([[from, 1], [to, 2]] as const)
@@ -585,13 +758,13 @@ function renderJumper(input: RenderInput, jumper: Jumper, pins: Map<string, Poin
   const text = `${jumper.id} ${jumper.net}`;
   const labelHeight = 18;
   const labelWidth = Math.max(48, text.length * 7 + 14);
-  const { path, label: at } = jumperGeometry(from, to, labelWidth, labelHeight);
+  const { path, label: at, edge } = wireShape(input.layout, jumper, pins, labelWidth, labelHeight);
   const newItem = state.newJumpers.has(jumper.id);
   const highlighted = isHighlighted("jumper", jumper.id, input.highlight);
   const label = newItem
     ? `<g class="wire-tag" data-jumper-label="${escapeSvg(jumper.id)}"><rect x="${at.x - labelWidth / 2}" y="${at.y - labelHeight / 2}" width="${labelWidth}" height="${labelHeight}" rx="5" class="wire-bg" stroke="${stroke}"/><text x="${at.x}" y="${at.y + 4}" text-anchor="middle" class="wire-label">${escapeSvg(text)}</text></g>${endBadges(jumper, from, to, stroke)}`
     : "";
-  const wire = `<g id="wire-${escapeSvg(jumper.id)}" data-jumper="${escapeSvg(jumper.id)}" data-net="${escapeSvg(jumper.net)}" class="${classes("wire", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(jumper.id)} ${escapeSvg(jumper.net)}"><title>${escapeSvg(jumper.id)} — ${escapeSvg(jumper.net)}: ${escapeSvg(endpointLabel(jumper.from))} to ${escapeSvg(endpointLabel(jumper.to))}</title><path d="${path}" class="wire-casing"/><path d="${path}" stroke="${stroke}" class="wire-path"/></g>`;
+  const wire = `<g id="wire-${escapeSvg(jumper.id)}" data-jumper="${escapeSvg(jumper.id)}" data-net="${escapeSvg(jumper.net)}" class="${classes("wire", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(jumper.id)} ${escapeSvg(jumper.net)}"><title>${escapeSvg(jumper.id)} — ${escapeSvg(jumper.net)}: ${escapeSvg(endpointLabel(jumper.from))} to ${escapeSvg(endpointLabel(jumper.to))}</title><path d="${path}" class="${classes("wire-casing", edge && "edge-route")}"/><path d="${path}" stroke="${stroke}" class="wire-path"/></g>`;
   return { wire, label };
 }
 
@@ -731,7 +904,7 @@ export function renderBreadboardSvg(input: RenderInput): string {
   const surfaceTop = railSides.includes("top") ? RAIL_Y["T-"] - 22 : 120;
   const surfaceBottom = railSides.includes("bottom") ? RAIL_Y["B-"] + 8 : 495;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${renderHeight}" viewBox="${viewBox}" data-vibread="breadboard" role="img" aria-label="ViBread landscape breadboard assembly"><title>${escapeSvg(input.circuit.title)} breadboard</title><desc>Numbered columns run left to right. Lettered rows a through e are above the centre channel; f through j are below it. New step items are drawn at full strength; earlier ones are dimmed.</desc><style>
-svg{font-family:Arial,"DejaVu Sans",sans-serif;background:${CANVAS_FILL}}.ghost-box{fill:#E8590C;fill-opacity:.08;stroke:#E8590C;stroke-width:2;stroke-dasharray:6 4}.ghost-label{fill:#C2410C;font-size:12px;font-weight:800;paint-order:stroke;stroke:${BOARD_FILL};stroke-width:3px}.repeat-badge-bg{fill:#E8590C}.repeat-badge-text{fill:#fff;font-size:15px;font-weight:800}.end-badge{fill:#fff;stroke-width:3}.end-badge-text{fill:#1B1D2B;font-size:13px;font-weight:800}.board-surface{fill:${BOARD_FILL};stroke:#B8C0C9;stroke-width:2}.channel{fill:#D5DAE0}.hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.rail-hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.row-label,.column-label,.rail-label,.channel-label{fill:#3B4552;font-size:12px;font-weight:700}.column-label{font-size:15px}.column-guide{fill:#3B4552;font-size:13px;font-weight:700}.rail-label{font-size:12px}.rail-plus{stroke:#E03131;stroke-width:3}.rail-minus{stroke:#1C7ED6;stroke-width:3}.rail-tick{stroke:#C3CAD2;stroke-width:1}.lead{stroke:#6C7680;stroke-width:3}.leg{stroke:#8D99AE;stroke-width:3;stroke-linecap:round}.leg-foot{fill:#C9D0D8;stroke:#4A525C;stroke-width:1.5}.led-dome{stroke:#F8FAFC;stroke-width:2}.led-glow{filter:blur(3px)}.resistor-body{fill:#E2C89A;stroke:#7A5A3A;stroke-width:2}.button-body{fill:#2B2F36;stroke:#11151A;stroke-width:2}.button-cap{fill:#C92A2A;stroke:#3B0D0D;stroke-width:2}.sensor-body{fill:#9CA3AF;stroke:#111827;stroke-width:2}.sensor-mark{stroke:#17212B;stroke-width:2}.pot-body{fill:#4F6570;stroke:#EEF2F5;stroke-width:2}.pot-arrow{stroke:#F1C453;stroke-width:4}.pot-arrowhead{fill:#F1C453}.buzzer-body{fill:#212529;stroke:#0B0D10;stroke-width:2}.buzzer-hole{fill:#495057;stroke:#0B0D10;stroke-width:1}.sound-ring{fill:none;stroke:#E8590C;stroke-width:3;stroke-dasharray:6 5}.generic-body{fill:#5F7880;stroke:#E5F2F4;stroke-width:2}.mcu{fill:#1B3339;stroke:#90C5BD;stroke-width:3}.board-title{fill:#F3F7F8;font-weight:700;font-size:15px}.header-label{fill:#90C5BD;font-size:11px;font-weight:700}.header-pin{fill:#F2C94C;stroke:#12181D;stroke-width:2}.pin-label{fill:#F3F7F8;font-size:12px;font-weight:700}.pin-cue{fill:#1B1D2B;font-size:11px;font-weight:700}.part-label{fill:#1B1D2B;font-size:12px;font-weight:700}.label-bg{fill:#FFFFFF;stroke:#8D99AE;stroke-width:1}.leader{stroke:#5C6773;stroke-width:1.5}.wire-casing{fill:none;stroke:#1B1D2B;stroke-width:6.5;stroke-linecap:round;opacity:.55}.wire-path{fill:none;stroke-width:4;stroke-linecap:round}.wire-bg{fill:#1B1D2B}.wire-label{fill:#fff;font-size:11px;font-weight:700}.vb-old{opacity:.48}.part.vb-hl,.wire.vb-hl{filter:drop-shadow(0 0 5px #fff)}.vb-new{filter:drop-shadow(0 0 8px #f7d774)}.hole.vb-hl,.rail-hole.vb-hl{fill:#ffe166;stroke:#111;stroke-width:2}
+svg{font-family:Arial,"DejaVu Sans",sans-serif;background:${CANVAS_FILL}}.ghost-box{fill:#E8590C;fill-opacity:.08;stroke:#E8590C;stroke-width:2;stroke-dasharray:6 4}.ghost-label{fill:#C2410C;font-size:12px;font-weight:800;paint-order:stroke;stroke:${BOARD_FILL};stroke-width:3px}.repeat-badge-bg{fill:#E8590C}.repeat-badge-text{fill:#fff;font-size:15px;font-weight:800}.end-badge{fill:#fff;stroke-width:3}.end-badge-text{fill:#1B1D2B;font-size:13px;font-weight:800}.board-surface{fill:${BOARD_FILL};stroke:#B8C0C9;stroke-width:2}.channel{fill:#D5DAE0}.hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.rail-hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.row-label,.column-label,.rail-label,.channel-label{fill:#3B4552;font-size:12px;font-weight:700}.column-label{font-size:15px}.column-guide{fill:#3B4552;font-size:13px;font-weight:700}.rail-label{font-size:12px}.rail-plus{stroke:#E03131;stroke-width:3}.rail-minus{stroke:#1C7ED6;stroke-width:3}.rail-tick{stroke:#C3CAD2;stroke-width:1}.lead{stroke:#6C7680;stroke-width:3}.leg{stroke:#8D99AE;stroke-width:3;stroke-linecap:round}.leg-foot{fill:#C9D0D8;stroke:#4A525C;stroke-width:1.5}.led-dome{stroke:#F8FAFC;stroke-width:2}.led-glow{filter:blur(3px)}.resistor-body{fill:#E2C89A;stroke:#7A5A3A;stroke-width:2}.button-body{fill:#2B2F36;stroke:#11151A;stroke-width:2}.button-cap{fill:#C92A2A;stroke:#3B0D0D;stroke-width:2}.sensor-body{fill:#9CA3AF;stroke:#111827;stroke-width:2}.sensor-mark{stroke:#17212B;stroke-width:2}.pot-base{fill:#2F4550;stroke:#9FB3BF;stroke-width:2}.pot-pin{fill:#EEF2F5;font-size:10px;font-weight:700}.pot-body{fill:#4F6570;stroke:#EEF2F5;stroke-width:2}.pot-arrow{stroke:#F1C453;stroke-width:4}.pot-arrowhead{fill:#F1C453}.buzzer-body{fill:#212529;stroke:#0B0D10;stroke-width:2}.buzzer-hole{fill:#495057;stroke:#0B0D10;stroke-width:1}.sound-ring{fill:none;stroke:#E8590C;stroke-width:3;stroke-dasharray:6 5}.generic-body{fill:#5F7880;stroke:#E5F2F4;stroke-width:2}.mcu{fill:#1B3339;stroke:#90C5BD;stroke-width:3}.board-title{fill:#F3F7F8;font-weight:700;font-size:15px}.header-label{fill:#90C5BD;font-size:11px;font-weight:700}.header-pin{fill:#F2C94C;stroke:#12181D;stroke-width:2}.pin-label{fill:#F3F7F8;font-size:12px;font-weight:700}.pin-cue{fill:#1B1D2B;font-size:11px;font-weight:700}.part-label{fill:#1B1D2B;font-size:12px;font-weight:700}.label-bg{fill:#FFFFFF;stroke:#8D99AE;stroke-width:1}.leader{stroke:#5C6773;stroke-width:1.5}.wire-casing{fill:none;stroke:#1B1D2B;stroke-width:6.5;stroke-linecap:round;opacity:.55}.wire-casing.edge-route{stroke:#C9D0D8;opacity:.9}.wire-path{fill:none;stroke-width:4;stroke-linecap:round}.wire-bg{fill:#1B1D2B}.wire-label{fill:#fff;font-size:11px;font-weight:700}.vb-old{opacity:.48}.part.vb-hl,.wire.vb-hl{filter:drop-shadow(0 0 5px #fff)}.vb-new{filter:drop-shadow(0 0 8px #f7d774)}.hole.vb-hl,.rail-hole.vb-hl{fill:#ffe166;stroke:#111;stroke-width:2}
 </style><rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/><rect x="${BOARD_LEFT - 36}" y="${surfaceTop}" width="${BOARD_RIGHT - BOARD_LEFT + 72}" height="${surfaceBottom - surfaceTop}" rx="14" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout)}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}${renderRepeatMarks(input)}${newJumpers}${jumperLabels}<g class="legend"><rect x="${BOARD_RIGHT - 196}" y="${BOARD_TOP + 5}" width="184" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 22}" class="part-label">Columns 1–${BREADBOARD_PROFILES[input.layout.breadboard].rows} left → right</text><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 38}" class="part-label">Rows a–e top · f–j bottom</text></g></svg>`;
   const scopedSvg = scopeSvgStyles(svg);
   const backgroundSvg = focusBox ? scopedSvg.replace(`<rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/>`, `<rect x="0" y="0" width="${width}" height="700" fill="${BOARD_FILL}"/>`) : scopedSvg;
