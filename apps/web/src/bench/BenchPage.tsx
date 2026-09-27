@@ -40,7 +40,7 @@ import { MONO_FONT } from "../theme.js";
 import { SerialMonitor } from "../components/SerialMonitor.js";
 
 const STEPS = ["Connect your board", "Make it safe", "Check power", "Test each part", "Find the problem", "Run your project", "Celebrate"];
-const BOARD_LOST_POWER = "Board lost power — unplug, then check the rails and the cable";
+const BOARD_LOST_POWER = "The board lost power or stopped answering when you plugged in — unplug now and check for a short between the red + and blue − rails, or a part bridging them.";
 
 interface FirmwareResponse {
   hex: string;

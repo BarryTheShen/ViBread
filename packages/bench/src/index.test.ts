@@ -50,18 +50,22 @@ async function run(lines: DeviceLine[], answers: Record<string, string>, runLayo
 }
 const railPlan: typeof plan = { ...plan, tests: ["rails.vcc"] };
 
-async function evaluateRail(mv?: number) {
-  const lines: DeviceLine[] = [
-    { t: "hello", fw: "vibread-bench", proto: 1, design: railPlan.design, board: railPlan.board },
-    ...(mv === undefined ? [] : [{ t: "vcc" as const, mv }]),
-  ];
+async function evaluateRail(
+  mv?: number,
+  options: { hello?: boolean; begin?: boolean; drop?: boolean; kind?: "rails" | "selftest" } = {},
+) {
+  const lines: DeviceLine[] = [];
+  if (options.hello !== false) lines.push({ t: "hello", fw: "vibread-bench", proto: 1, design: plan.design, board: plan.board });
+  if (options.begin) lines.push({ t: "begin", test: "rails.vcc" });
+  if (mv !== undefined) lines.push({ t: "vcc", mv });
+  if (options.drop) lines.push({ t: "log", msg: "USB reset after plug-in" });
   const result = await evaluateRun({
     circuit: moonPhaseLamp,
-    plan: railPlan,
+    plan: { ...railPlan, tests: ["rails.vcc"] },
     layout,
     lines,
     answers: {},
-    kind: "rails",
+    kind: options.kind ?? "rails",
     revision: 1,
     runId: "rail-test",
   });
@@ -73,20 +77,37 @@ async function evaluateRail(mv?: number) {
 
 describe("bench self-test", () => {
   it.each([
+    [4400, "fail"],
     [4490, "fail"],
     [4500, "pass"],
+    [5001, "pass"],
     [5500, "pass"],
     [5510, "fail"],
   ] as const)("evaluates the board-power VCC window at %d mV", async (mv, status) => {
     const rail = await evaluateRail(mv);
     expect(rail.status).toBe(status);
+    expect(rail.reason).toBeUndefined();
     expect(rail.subjects[0]).toMatchObject({ part: "board power", observed: `${mv} mV` });
   });
 
-  it("reports unknown only when the board-power VCC reading is missing", async () => {
-    const rail = await evaluateRail();
+  it("reports a missing VCC reading as a short-suspected power loss", async () => {
+    const rail = await evaluateRail(undefined, { begin: true });
+    expect(rail.status).toBe("fail");
+    expect(rail.reason).toBe("short-suspected");
+    expect(rail.summary).toBe("The board lost power or stopped answering when you plugged in — unplug now and check for a short between the red + and blue − rails, or a part bridging them");
+  });
+
+  it("reports a USB drop/reset as short-suspected even without a hello banner", async () => {
+    const rail = await evaluateRail(undefined, { hello: false, drop: true, kind: "selftest" });
+    expect(rail.status).toBe("fail");
+    expect(rail.reason).toBe("short-suspected");
+  });
+
+  it("keeps an unstarted board-power check unknown", async () => {
+    const rail = await evaluateRail(undefined, { hello: false, kind: "selftest" });
     expect(rail.status).toBe("unknown");
-    expect(rail.subjects[0]).toMatchObject({ part: "board power", observed: "no board VCC reading" });
+    expect(rail.reason).toBeUndefined();
+    expect(rail.subjects[0]).toMatchObject({ part: "board power", observed: "no hello banner or board VCC reading" });
   });
 
   it("derives safe subjects, order, timings, and friendly prompts", () => {

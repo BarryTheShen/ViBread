@@ -22,6 +22,8 @@ const ADC_FULL_SCALE = 1023;
 const LIGHT_CHANGE_MIN = ADC_FULL_SCALE * 0.15;
 const PINNED_LOW = 5;
 const PINNED_HIGH = 1018;
+const SHORT_SUSPECTED_REASON = "short-suspected" as const;
+const SHORT_SUSPECTED_MESSAGE = "The board lost power or stopped answering when you plugged in — unplug now and check for a short between the red + and blue − rails, or a part bridging them";
 
 type TestStatus = SubjectResult["status"];
 
@@ -125,8 +127,11 @@ function evaluateRails(context: EvaluationContext): BenchTestResult {
   const lines = context.lines;
   const hello = lines.find((line): line is Extract<DeviceLine, { t: "hello" }> => line.t === "hello");
   const vcc = lines.find((line): line is Extract<DeviceLine, { t: "vcc" }> => line.t === "vcc");
+  const railStarted = lines.some((line) => line.t === "begin" && line.test === "rails.vcc");
+  const streamShowsDrop = lines.some((line) => (line.t === "err" || line.t === "log") && /usb|power|reset|banner|disconnect|drop/i.test(line.msg));
+  const shortSuspected = vcc === undefined && (hello !== undefined || railStarted || streamShowsDrop);
   let status: TestStatus = vcc === undefined
-    ? "unknown"
+    ? shortSuspected ? "fail" : "unknown"
     : vcc.mv >= VCC_PASS_MV.min && vcc.mv <= VCC_PASS_MV.max
       ? "pass"
       : "fail";
@@ -148,14 +153,17 @@ function evaluateRails(context: EvaluationContext): BenchTestResult {
     observed,
     expected: `VCC ≈ 5 V (${VCC_PASS_MV.min}–${VCC_PASS_MV.max} mV) and design ${context.plan.design}`,
   };
-  const summary = status === "pass"
-    ? "Board power check passed (VCC ≈ 5 V). The part tests that follow exercise the breadboard rails."
-    : designMismatch
-      ? "Board identity or power check failed. The part tests that follow exercise the breadboard rails."
-      : status === "fail"
-        ? "Board power check failed (VCC must be ≈ 5 V). The part tests that follow exercise the breadboard rails."
-        : "Board power check needs a VCC reading. The part tests that follow exercise the breadboard rails.";
-  return testResult("rails.vcc", [subject], summary);
+  const summary = shortSuspected
+    ? SHORT_SUSPECTED_MESSAGE
+    : status === "pass"
+      ? "Board power check passed (VCC ≈ 5 V). The part tests that follow exercise the breadboard rails."
+      : designMismatch
+        ? "Board identity or power check failed. The part tests that follow exercise the breadboard rails."
+        : status === "fail"
+          ? "Board power check failed (VCC must be ≈ 5 V). The part tests that follow exercise the breadboard rails."
+          : "Board power check needs a VCC reading. The part tests that follow exercise the breadboard rails.";
+  const result = testResult("rails.vcc", [subject], summary);
+  return shortSuspected ? { ...result, reason: SHORT_SUSPECTED_REASON } : result;
 }
 
 function evaluatePins(context: EvaluationContext): { result: BenchTestResult; stuck: BenchTestResult | undefined } {
@@ -827,6 +835,7 @@ export async function evaluateRun(input: {
   const plannedTestsPresent = input.plan.tests.every((test) => executedTests.has(test));
   let verdict = verdictFor(results);
   if (verdict === "pass" && (!helloMatchesPlan || results.length === 0 || !plannedTestsPresent)) verdict = "incomplete";
+  const shortSuspectedRail = results.find((result) => result.test === "rails.vcc" && result.reason === SHORT_SUSPECTED_REASON);
   const fallback = verdict === "pass"
     ? "All bench checks passed."
     : verdict === "incomplete"
@@ -836,9 +845,9 @@ export async function evaluateRun(input: {
         : "Houston, we have a problem: a bench signature did not match the design.";
   const ruleCandidates = candidatesFor(events, context);
   const ruleDiagnosis: BenchRunResult["diagnosis"] = {
-    attribution: primary?.attribution ?? (context.signatures.designMismatch ? "design" : verdict === "pass" ? "none" : verdict === "incomplete" ? "unknown" : "component"),
+    attribution: shortSuspectedRail !== undefined ? "wiring" : primary?.attribution ?? (context.signatures.designMismatch ? "design" : verdict === "pass" ? "none" : verdict === "incomplete" ? "unknown" : "component"),
     candidates: ruleCandidates,
-    summary: summaryFor(primary, context, fallback),
+    summary: shortSuspectedRail?.summary ?? summaryFor(primary, context, fallback),
   };
   const baseResult: BenchRunResult = {
     runId: input.runId,
