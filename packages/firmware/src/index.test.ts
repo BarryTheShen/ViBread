@@ -2,7 +2,7 @@ import { readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { describe, expect, it } from "vitest";
 import { GOLDEN } from "@vibread/fixtures";
-import type { SelfTestPlan } from "@vibread/core";
+import { VCC_PASS_MV, type SelfTestPlan } from "@vibread/core";
 import { compileBenchFirmware, compileSketch, renderBenchFirmware } from "./index.js";
 
 const board = "uno-r3-atmega328p-5v" as const;
@@ -57,8 +57,8 @@ describe("firmware compiler", () => {
 
   it("renders and compiles the launch self-test within Uno budgets", async () => {
     const source = renderBenchFirmware(launchPlan);
-    expect(source).toContain('vbEmitEnd(PSTR("rails.vcc"), mv >= 4500 && mv <= 5500 ? PSTR("pass") : PSTR("fail"), nullptr);');
-    expect(source).not.toContain('PSTR("rails.vcc"), mv >= 4500 && mv <= 5500 ? PSTR("pass") : PSTR("unknown")');
+    expect(source).toContain(`vbEmitEnd(PSTR("rails.vcc"), mv >= ${VCC_PASS_MV.min} && mv <= ${VCC_PASS_MV.max} ? PSTR("pass") : PSTR("fail"), nullptr);`);
+    expect(source).not.toContain(`PSTR("rails.vcc"), mv >= ${VCC_PASS_MV.min} && mv <= ${VCC_PASS_MV.max} ? PSTR("pass") : PSTR("unknown")`);
     expect(source).toContain('PSTR("led1")');
     expect(source).toContain('PSTR("btn0-press")');
     expect(source).toContain('PSTR("btn1-release")');

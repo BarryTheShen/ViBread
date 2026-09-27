@@ -19,7 +19,13 @@ import { runDiagnosisRules, type DiagnosisSignature, type RuleCause, type RuleEv
 import { rankFaults, type FaultDictionary } from "./faults.js";
 
 const ADC_FULL_SCALE = 1023;
-const LIGHT_CHANGE_MIN = ADC_FULL_SCALE * 0.15;
+// Bench tolerances (loosened so real-world variation passes; a clearly wrong or missing wire still fails):
+// a pin reads as a steady level when ≥ 75 % of its samples agree, the light sensor must change by ≥ 8 % of full scale
+// between room light and covered, and a knob must sweep ≥ 30 % of full scale.
+const STEADY_HIGH_FRACTION = 0.75;
+const STEADY_LOW_FRACTION = 0.25;
+const LIGHT_CHANGE_MIN = ADC_FULL_SCALE * 0.08;
+const POT_SPAN_MIN_FRACTION = 0.3;
 const PINNED_LOW = 5;
 const PINNED_HIGH = 1018;
 const SHORT_SUSPECTED_REASON = "short-suspected" as const;
@@ -122,8 +128,8 @@ function ratio(line: Extract<DeviceLine, { t: "read" }>): number | undefined {
 function stableLevel(line: Extract<DeviceLine, { t: "read" }>): 0 | 1 | undefined {
   const value = ratio(line);
   if (value === undefined) return undefined;
-  if (value >= 0.9) return 1;
-  if (value <= 0.1) return 0;
+  if (value >= STEADY_HIGH_FRACTION) return 1;
+  if (value <= STEADY_LOW_FRACTION) return 0;
   return undefined;
 }
 
@@ -443,17 +449,17 @@ function evaluatePot(context: EvaluationContext, subject: Extract<SelfTestSubjec
   const missingAnswer = minAsk === undefined || maxAsk === undefined || answerMissing(context.answers[minAsk.id]) || answerMissing(context.answers[maxAsk.id]);
   if (min === undefined || max === undefined) {
     const status = statusForEnd(context.lines, "pot.sweep") === "fail" ? "fail" : "unknown";
-    return { part: subject.part, pin: subject.pin, status, observed: status === "fail" ? "device reported a failed pot test without ADC data" : "minimum or maximum ADC reading is missing", expected: "pot span ≥ 50% of full scale" };
+    return { part: subject.part, pin: subject.pin, status, observed: status === "fail" ? "device reported a failed pot test without ADC data" : "minimum or maximum ADC reading is missing", expected: `pot span ≥ ${POT_SPAN_MIN_FRACTION * 100}% of full scale` };
   }
   const span = Math.abs(max - min);
-  const status: TestStatus = span >= ADC_FULL_SCALE * 0.5 ? (missingAnswer ? "unknown" : "pass") : "fail";
-  return { part: subject.part, pin: subject.pin, status, observed: `ADC ${min} → ${max} (span ${Math.round(span)})`, expected: `span ≥ ${Math.round(ADC_FULL_SCALE * 0.5)} counts` };
+  const status: TestStatus = span >= ADC_FULL_SCALE * POT_SPAN_MIN_FRACTION ? (missingAnswer ? "unknown" : "pass") : "fail";
+  return { part: subject.part, pin: subject.pin, status, observed: `ADC ${min} → ${max} (span ${Math.round(span)})`, expected: `span ≥ ${Math.round(ADC_FULL_SCALE * POT_SPAN_MIN_FRACTION)} counts` };
 }
 
 function evaluatePots(context: EvaluationContext): BenchTestResult {
   const subjects = context.subjects.filter((subject): subject is Extract<SelfTestSubject, { kind: "pot" }> => subject.kind === "pot");
   const results = subjects.map((subject) => evaluatePot(context, subject));
-  return testResult("pot.sweep", results, aggregate(results.map((result) => result.status)) === "pass" ? "The knob swept across its usable range." : "The knob did not show a half-scale sweep.");
+  return testResult("pot.sweep", results, aggregate(results.map((result) => result.status)) === "pass" ? "The knob swept across its usable range." : `The knob did not sweep at least ${POT_SPAN_MIN_FRACTION * 100}% of its range.`);
 }
 
 function evaluateLeds(context: EvaluationContext): BenchTestResult {
