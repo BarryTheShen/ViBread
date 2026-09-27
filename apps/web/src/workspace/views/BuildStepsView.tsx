@@ -27,6 +27,7 @@ import { sendJson } from "../../api/client.js";
 import { queryKeys, useBuildState } from "../../api/hooks.js";
 import { checkpointChecksForRevision, checkpointChecksPass, checkpointStatusText, checkpointTests, isFullSelfTestStep, type CheckpointCheck } from "../../build/checkpointChecks.js";
 import { needVsHave } from "../../inventory/PartsView.js";
+import { RepeatChecklist } from "../../build/RepeatChecklist.js";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
 import { PhoneQr } from "../PhoneLink.js";
 import { StepWireChips, WireColorPicker, WireLegend, useWireColor, type WireTarget } from "../WireColors.js";
@@ -141,7 +142,7 @@ export function BuildStepsView({
   const navigate = useNavigate();
   const steps = revision.results.steps?.steps ?? [];
   const [index, setIndex] = useState(0);
-  const stepCard = useRef<HTMLDivElement>(null);
+  const stepNav = useRef<HTMLDivElement>(null);
   const build = useBuildState(missionId, released);
   const current = released && build.data?.revision === revision.n ? build.data.current : undefined;
   useEffect(() => setIndex(current !== undefined ? Math.max(0, current - 1) : 0), [revision.n, current]);
@@ -168,7 +169,9 @@ export function BuildStepsView({
   };
   useEffect(() => {
     if (!step) return;
-    stepCard.current?.scrollIntoView({ block: "start" });
+    // The nav row, not the card: scrolling the card to the top hid Previous/Next above it after every step change.
+    // "nearest" leaves a visible row alone and brings it back to the top when the builder had scrolled down to Done.
+    stepNav.current?.scrollIntoView({ block: "nearest" });
   }, [step?.n]);
 
   const didThis = useMutation({
@@ -205,7 +208,7 @@ export function BuildStepsView({
       {!released && (
         <Alert severity="warning">Preview only: this design isn't the build target yet. Press GO for build to start building it.</Alert>
       )}
-      <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
+      <Stack ref={stepNav} direction="row" sx={{ alignItems: "center", gap: 1 }}>
         <Button startIcon={<NavigateBeforeIcon />} disabled={index === 0} onClick={() => setIndex((i) => i - 1)}>
           Previous
         </Button>
@@ -223,7 +226,7 @@ export function BuildStepsView({
           Next
         </Button>
       </Stack>
-      <Paper ref={stepCard} variant="outlined" sx={{ p: 2 }}>
+      <Paper variant="outlined" sx={{ p: 2 }}>
         <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap", mb: 1 }}>
           <Typography variant="h6" component="h2" sx={{ flex: 1 }}>
             {step.title}
@@ -264,6 +267,7 @@ export function BuildStepsView({
         <WireLegend wires={wires} />
         <Typography sx={{ mt: 1.5 }}>{liveStep?.text ?? step.text}</Typography>
         <StepWireChips jumpers={step.adds.jumpers} layout={liveBuild?.layout} wires={wires} onEdit={openPicker} />
+        <RepeatChecklist key={step.n} step={step} />
         {setWireColor.isError && <Typography sx={{ color: "error.main" }}>Colour not saved: {setWireColor.error.message}</Typography>}
         {step.kind === "inventory" ? (
           <GatherParts revision={revision} inventory={inventory} />

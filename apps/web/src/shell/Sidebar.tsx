@@ -201,14 +201,18 @@ function MissionItem({ mission, collapsed }: { mission: MissionSummary; collapse
           />
         )}
       </ListItemButton>
-      <MissionActions
-        missionId={mission.id}
-        title={mission.title}
-        actions={actions}
-        onRename={startRename}
-        buttonLabel={`Actions for ${displayTitle}`}
-        triggerSx={{ position: "absolute", right: collapsed ? 0 : 4, top: "50%", transform: "translateY(-50%)" }}
-      />
+      {/* The rail is navigation only: its 56px row can't fit the ⋯ next to the status dot (it covered it, always on
+          touch screens), and renaming needs the full width. The mission header has the same actions. */}
+      {!collapsed && (
+        <MissionActions
+          missionId={mission.id}
+          title={mission.title}
+          actions={actions}
+          onRename={startRename}
+          buttonLabel={`Actions for ${displayTitle}`}
+          triggerSx={{ position: "absolute", right: 4, top: "50%", transform: "translateY(-50%)" }}
+        />
+      )}
     </Box>
   );
   return collapsed ? <Tooltip title={`${displayTitle} · ${statusLabel}`} placement="right">{item}</Tooltip> : item;

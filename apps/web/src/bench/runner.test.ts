@@ -147,7 +147,7 @@ describe("BenchRunner", () => {
     expect(runner.state.seenVcc?.mv).toBe(5000);
   });
 
-  it("reads VCC from the virtual board's one-character-at-a-time serial (Connect → Skip flash → Check board power)", async () => {
+  it("reads VCC from the virtual board's one-character-at-a-time serial (Connect → Load the safe firmware → Check board power)", async () => {
     vi.useFakeTimers();
     try {
       const transport = new VirtualChunkTransport();
