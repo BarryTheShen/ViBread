@@ -18,6 +18,7 @@ const build = (current: number, total: number): BuildState => ({
   revision: 1,
   steps: Array.from({ length: total }, (_, i) => ({ n: i + 1 }) as Step),
   current,
+  released: true,
   plug: "unplugged",
   updatedAt: "",
 });

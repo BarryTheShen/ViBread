@@ -1022,12 +1022,11 @@ function BuildModeScreen({ missionId }: { missionId: string }) {
     refetchIntervalInBackground: true,
     retry: false,
   });
-  // Released builds. Also fetched for a direct /b/<id> link: a mission without GO for build isn't in it, and its steps
-  // (the latest, unreviewed design) get a warning instead of looking like the build target.
+  // Released builds, for the chooser only: a direct /b/<id> link reads `released` from the build state itself.
   const phoneMissionsQuery = useQuery({
     queryKey: ["phone-builds"],
     queryFn: ({ signal }) => fetchPhoneMissions(signal),
-    refetchInterval: missionId ? 10_000 : false,
+    enabled: missionId.length === 0,
     retry: 1,
   });
 
@@ -1069,7 +1068,7 @@ function BuildModeScreen({ missionId }: { missionId: string }) {
   }
 
   const build = query.data;
-  const notReleased = Boolean(build && phoneMissionsQuery.data && !phoneMissionsQuery.data.some((mission) => mission.id === missionId));
+  const notReleased = build?.released === false;
   const stale = Boolean(build && query.dataUpdatedAt > 0 && now - query.dataUpdatedAt > STALE_AFTER_MS);
   // An unreleased preview gets the warning below instead of a "ready" chip.
   const headline = build?.headline?.trim() || (build && build.steps.length > 0 && !notReleased ? "Build checklist ready" : undefined);

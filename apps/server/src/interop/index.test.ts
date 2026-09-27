@@ -284,4 +284,25 @@ describe("MCP and A2A mounts", () => {
     const after = await rpc("read", "GetTask", { id: running!.id });
     expect(after.result?.status?.state).toBe("TASK_STATE_CANCELED");
   });
+
+  it("cancels an A2A task waiting in INPUT_REQUIRED after an ask-back", async () => {
+    const { baseUrl } = await openServer();
+    type TaskResult = { id?: string; contextId?: string; status?: { state?: string } };
+    // A waiting task has no running turn; CancelTask used to wait on its still-open event bus forever.
+    const rpc = async (token: string, method: string, params: unknown) => {
+      const response = await fetch(`${baseUrl}/a2a`, {
+        method: "POST",
+        headers: { "content-type": "application/json", "a2a-version": "1.0", authorization: `Bearer ${token}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+        signal: AbortSignal.timeout(3_000),
+      });
+      return (await response.json()) as { result?: TaskResult & { task?: TaskResult }; error?: unknown };
+    };
+    const asked = (await rpc("write", "SendMessage", { message: { messageId: "m-ask", role: "ROLE_USER", parts: [{ text: "Build a lamp" }] } })).result?.task;
+    expect(asked?.status?.state).toBe("TASK_STATE_INPUT_REQUIRED");
+    const canceled = await rpc("write", "CancelTask", { id: asked!.id });
+    expect(canceled.result).toMatchObject({ id: asked!.id, contextId: asked!.contextId, status: { state: "TASK_STATE_CANCELED" } });
+    const after = await rpc("read", "GetTask", { id: asked!.id });
+    expect(after.result?.status?.state).toBe("TASK_STATE_CANCELED");
+  });
 });

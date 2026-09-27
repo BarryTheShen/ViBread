@@ -276,6 +276,8 @@ export function createToolRegistry(deps: {
 
         let evaluated = await ops.evaluate(mission, revision.n, ctx.signal);
         if (testsNote) {
+          // Only claim the rest of the design is fine when every other deterministic console actually said GO.
+          const othersPassed = evaluated.results.reports.every((r) => r.console === "FIDO" || r.console === "RETRO" || r.verdict === "GO");
           // No suite: FIDO says why instead of waiting silently for tests that won't come.
           const fido = report(
             "FIDO",
@@ -286,7 +288,9 @@ export function createToolRegistry(deps: {
               title: "The simulation tests couldn't be written, so nothing was simulated.",
               detail: testsNote,
               fix: testsNeedClaude
-                ? "Don't propose again for this: it can't succeed until Claude is connected. Tell the person the design passed the other checks, and that they can connect Claude in ViBread's Settings (or set ANTHROPIC_API_KEY) to write the tests, or press GO for build with the override."
+                ? othersPassed
+                  ? "Don't propose again for this: it can't succeed until Claude is connected. Tell the person the design passed the other checks, and that they can connect Claude in ViBread's Settings (or set ANTHROPIC_API_KEY) to write the tests, or press GO for build with the override."
+                  : "Fix the other consoles' findings first and propose again; the simulation tests still can't be written until Claude is connected. Tell the person they can connect Claude in ViBread's Settings (or set ANTHROPIC_API_KEY) to write the tests."
                 : "Propose the same design again to retry the test writer.",
             }],
             testsNeedClaude ? "NO-GO: no simulation tests yet, because Claude isn't connected." : "NO-GO: the independent test writer's answer couldn't be used.",

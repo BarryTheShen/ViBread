@@ -6,7 +6,6 @@ import type {
   Actor,
   BenchRunRequest,
   BoardProfileId,
-  BuildState,
   CompileResult,
   Mission,
   ReleaseRequest,
@@ -33,8 +32,6 @@ import { mergeCapcomPrefs } from "./capcom/prefs.js";
 import { BUILD_VERSION } from "./version.js";
 import type { AppContext } from "./context.js";
 import { mountNativeFlashRoutes, type FirmwareKind } from "./routes/native-flash.js";
-/** GET/POST /build answers: BuildState plus `released` (false = the steps are a preview of an unreleased design). */
-type ReleasedBuildState = BuildState & { released: boolean };
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
 const fieldValueSchema = z.union([z.string(), z.number(), z.boolean()]);
 const inventoryUpsertSchema = z.object({
@@ -518,7 +515,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     res.json(detail);
   });
   router.get("/missions/:id/build", async (req, res) => {
-    res.json(await buildStateFor(String(req.params.id)));
+    res.json(await ctx.missions.build(String(req.params.id)));
   });
   router.get("/missions/:id/bench/requests", async (req, res) => {
     const missionId = String(req.params.id);
@@ -671,7 +668,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const before = await ctx.missions.build(missionId);
     const alreadyDone = before.revision !== undefined && doneSteps(await ctx.store.listEvents(missionId), before.revision).includes(n);
     if (alreadyDone) {
-      res.json({ ...before, released: true } satisfies ReleasedBuildState);
+      res.json(before);
       return;
     }
     await ctx.store.appendEvent({
@@ -687,17 +684,8 @@ export function mountApi(app: Express, ctx: AppContext): void {
     if (before.steps.length > 0 && n >= before.steps.length) {
       await ctx.machine.send(missionId, { type: "BUILD_DONE" });
     }
-    res.json(await buildStateFor(missionId));
+    res.json(await ctx.missions.build(missionId));
   });
-  /**
-   * BuildState plus whether a revision is released. Unreleased missions still show the latest design's steps (as a
-   * preview), but `released: false` tells Build Mode not to treat them as buildable, and POST /build/step answers 409.
-   */
-  async function buildStateFor(missionId: string): Promise<ReleasedBuildState> {
-    const state = await ctx.missions.build(missionId);
-    const mission = await ctx.store.getMission(missionId);
-    return { ...state, released: mission?.releasedRevision !== undefined && state.revision === mission.releasedRevision };
-  }
   /** The revision Build Mode shows (released, else the latest) with the builder's wire-colour overrides. */
   async function buildRevision(missionId: string): Promise<{ revision: Revision; overrides: Record<string, string> }> {
     const mission = await ctx.store.getMission(missionId);
@@ -712,7 +700,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const change = wireColorChange(revision, req.body);
     if ("error" in change) throw httpError(400, "INVALID_WIRE_COLOR", change.error);
     await ctx.store.appendEvent({ missionId, channel: "web", actor: actorFor(res, ctx), kind: WIRE_COLOR_EVENT, text: change.text, revision: revision.n, data: change.data });
-    res.json(await buildStateFor(missionId));
+    res.json(await ctx.missions.build(missionId));
   });
   router.get("/missions/:id/build/steps/:file", async (req, res) => {
     const match = /^(\d+)\.(svg|png)$/.exec(String(req.params.file));

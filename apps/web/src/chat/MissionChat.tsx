@@ -532,6 +532,20 @@ export function MissionThread({ chat: instance, history, reloadHistory, detail, 
     wasStreaming.current = streaming;
   }, [busy, streaming, chat, invalidateMissions, reloadHistory]);
 
+  // A run that fails without ever turning busy (started from iMessage, MCP or A2A) is only an `agent.error` event, which
+  // has no timeline row; its reason is saved as Claude's reply, so reload the history once no stream of ours is in flight.
+  const agentErrorId = useMemo(() => events.findLast((event) => event.kind === "agent.error")?.id, [events]);
+  const seenAgentErrorId = useRef(agentErrorId);
+  useEffect(() => {
+    if (agentErrorId === seenAgentErrorId.current || streaming) return;
+    seenAgentErrorId.current = agentErrorId;
+    void reloadHistory().then((saved) => {
+      if (!saved) return;
+      chat.setMessages(saved);
+      setStoppedHere(new Set());
+    });
+  }, [agentErrorId, streaming, chat, reloadHistory]);
+
   // A brand-new mission's run starts with the brief as the first message (creating a mission does not start a run).
   // The server moves a fresh mission BRIEF → CLARIFY on creation; either way no design exists yet.
   const kickedOff = useRef(false);

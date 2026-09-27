@@ -209,6 +209,8 @@ export interface BuildState {
   };
   /** 1-based index of the step the builder is on. */
   current: number;
+  /** False when no revision is released or the steps are a preview of a newer, unreleased design: not buildable yet. */
+  released: boolean;
   plug: "unplugged" | "plugged";
   /** Last thing that happened, for the phone header ("Self-test passed", "Houston, we have a problem…"). */
   headline?: string;

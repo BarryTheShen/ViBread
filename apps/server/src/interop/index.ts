@@ -655,8 +655,10 @@ function artifactForResult(taskId: string, contextId: string, result: AgentTurnR
 }
 
 function createA2aExecutor(ctx: AppContext): AgentExecutor {
-  /** Tasks whose turn is still running, with the context their cancel event must carry. */
-  const running = new Map<string, { contextId: string; canceled: boolean }>();
+  /** Every task this executor published and that is not finished yet (working or waiting in INPUT_REQUIRED) → its contextId. */
+  const open = new Map<string, string>();
+  /** Tasks whose turn is still running; `canceled` tells the turn not to publish its outcome. */
+  const running = new Map<string, { canceled: boolean }>();
   return {
     async execute(requestContext: RequestContext, eventBus: ExecutionEventBus): Promise<void> {
       const incoming = a2aUserMessage(requestContext);
@@ -676,11 +678,15 @@ function createA2aExecutor(ctx: AppContext): AgentExecutor {
       // A2A requires a task/message event before any status or artifact event, including continuations. Publishing it
       // before the turn makes the task visible to GetTask and CancelTask while ViBread works.
       eventBus.publish(AgentEvent.task(task));
-      const run = { contextId: task.contextId, canceled: false };
+      open.set(task.id, task.contextId);
+      const run = { canceled: false };
       running.set(task.id, run);
       let result: AgentTurnResult;
       try {
         result = await ctx.missions.say(missionId, text, actor);
+      } catch (error) {
+        open.delete(task.id);
+        throw error;
       } finally {
         running.delete(task.id);
       }
@@ -701,7 +707,7 @@ function createA2aExecutor(ctx: AppContext): AgentExecutor {
         );
         return;
       }
-
+      open.delete(task.id);
       const artifact = artifactForResult(task.id, task.contextId, result);
       eventBus.publish(
         AgentEvent.artifactUpdate({
@@ -724,17 +730,22 @@ function createA2aExecutor(ctx: AppContext): AgentExecutor {
     },
 
     async cancelTask(taskId: string, eventBus: ExecutionEventBus): Promise<void> {
+      const contextId = open.get(taskId);
+      if (contextId === undefined) throw new Error(`Task ${taskId} is not open on this ViBread server, so it cannot be canceled.`);
+      open.delete(taskId);
+      // Only a running turn needs telling; a task waiting in INPUT_REQUIRED has no turn, but its bus is still alive and
+      // CancelTask waits on it, so the CANCELED update and finish below are always published.
       const run = running.get(taskId);
-      if (!run) return;
-      run.canceled = true;
+      if (run) run.canceled = true;
       eventBus.publish(
         AgentEvent.statusUpdate({
           taskId,
-          contextId: run.contextId,
-          status: taskStatus(TaskState.TASK_STATE_CANCELED, a2aAgentMessage(run.contextId, taskId, "Task canceled. The ViBread mission keeps whatever this turn already changed.")),
+          contextId,
+          status: taskStatus(TaskState.TASK_STATE_CANCELED, a2aAgentMessage(contextId, taskId, "Task canceled. The ViBread mission keeps whatever this turn already changed.")),
           metadata: undefined,
         }),
       );
+      eventBus.finished();
     },
   };
 }
