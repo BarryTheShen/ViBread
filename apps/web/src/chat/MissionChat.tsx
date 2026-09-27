@@ -19,7 +19,7 @@ import Paper from "@mui/material/Paper";
 import Stack from "@mui/material/Stack";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Channel, MissionDetail, TimelineEvent } from "@vibread/core";
 import type { UIMessage } from "ai";
 import { createContext, useCallback, useContext, useEffect, useId, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
@@ -474,6 +474,26 @@ export function MissionThread({ chat: instance, history, reloadHistory, detail, 
   const streaming = chat.status === "submitted" || chat.status === "streaming";
   const [stoppedHere, setStoppedHere] = useState<ReadonlySet<string>>(() => new Set());
   const markStopped = useCallback((messageId: string) => setStoppedHere((ids) => new Set(ids).add(messageId)), []);
+  const queryClient = useQueryClient();
+  const invalidateMissions = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["missions"] });
+  }, [queryClient]);
+  const wasStreaming = useRef(streaming);
+  const askUserCount = useMemo(
+    () =>
+      chat.messages.reduce(
+        (count, message) =>
+          count +
+          message.parts.filter((part) => typeof part === "object" && part !== null && "toolName" in part && part.toolName === "ask_user").length,
+        0,
+      ),
+    [chat.messages],
+  );
+  const previousAskUserCount = useRef(0);
+  useEffect(() => {
+    if (askUserCount > previousAskUserCount.current) invalidateMissions();
+    previousAskUserCount.current = askUserCount;
+  }, [askUserCount, invalidateMissions]);
 
   // Runs this browser did not start (iMessage, Claude Code): follow the active stream while the server says busy, and
   // take the saved history as the truth once such a run ends.
@@ -491,8 +511,10 @@ export function MissionThread({ chat: instance, history, reloadHistory, detail, 
         setStoppedHere(new Set()); // the saved replies carry the server's own stopped mark
       });
     }
+    if (wasBusy.current !== busy || wasStreaming.current !== streaming) invalidateMissions();
     wasBusy.current = busy;
-  }, [busy, streaming, chat, reloadHistory]);
+    wasStreaming.current = streaming;
+  }, [busy, streaming, chat, invalidateMissions, reloadHistory]);
 
   // A brand-new mission's run starts with the brief as the first message (creating a mission does not start a run).
   // The server moves a fresh mission BRIEF → CLARIFY on creation; either way no design exists yet.

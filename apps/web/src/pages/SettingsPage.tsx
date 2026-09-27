@@ -400,7 +400,8 @@ function diagnosticEntries(value: unknown, fallbackArea: string): DiagnosticEntr
     if (typeof parsed !== "object" || parsed === null) return { at: "", area: fallbackArea, level: "info", message: String(parsed) };
     const item = parsed as Record<string, unknown>;
     const message = typeof item.message === "string" ? item.message : typeof item.msg === "string" ? item.msg : typeof item.text === "string" ? item.text : JSON.stringify(parsed);
-    const at = typeof item.at === "string" ? item.at : typeof item.timestamp === "string" ? item.timestamp : typeof item.time === "string" ? item.time : typeof item.ts === "string" ? item.ts : "";
+    const rawAt = item.at ?? item.timestamp ?? item.time ?? item.ts;
+    const at = typeof rawAt === "string" || typeof rawAt === "number" ? String(rawAt) : "";
     const area = typeof item.area === "string" ? item.area : typeof item.scope === "string" ? item.scope : fallbackArea;
     const level = typeof item.level === "string" ? item.level : typeof item.severity === "string" ? item.severity : "info";
     return { at, area, level, message };
@@ -435,7 +436,18 @@ function DiagnosticsSection() {
   const entries = [
     ...diagnosticEntries(serverLog.data, "server"),
     ...diagnosticEntries(missionLog.data, `mission:${missionId}`),
-  ];
+  ].sort((a, b) => {
+    const timeOf = (value: string) => {
+      const numeric = Number(value);
+      return Number.isFinite(numeric) ? numeric : Date.parse(value);
+    };
+    const aTime = timeOf(a.at);
+    const bTime = timeOf(b.at);
+    if (Number.isNaN(aTime) && Number.isNaN(bTime)) return 0;
+    if (Number.isNaN(aTime)) return 1;
+    if (Number.isNaN(bTime)) return -1;
+    return aTime - bTime;
+  });
   const areas = [...new Set(entries.map((entry) => entry.area))].sort();
   const levels = [...new Set(entries.map((entry) => entry.level))].sort();
   const filtered = entries.filter((entry) => (area === "all" || entry.area === area) && (level === "all" || entry.level === level));
