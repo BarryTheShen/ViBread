@@ -77,6 +77,7 @@ function HoldButton({ part, pressed, onChange }: { part: Part; pressed: boolean;
       variant={pressed ? "contained" : "outlined"}
       startIcon={<TouchAppIcon />}
       aria-pressed={pressed}
+      data-tour="tryit-button"
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
         onChange(true);
@@ -412,7 +413,7 @@ export function TryItTab({ missionId, revision, released }: { missionId: string;
           </Box>
         )}
         {sensors.map((p) => (
-          <Box key={p.id}>
+          <Box key={p.id} data-tour="tryit-light">
             <Typography id={`light-${p.id}`} variant="body2" sx={{ fontWeight: 600 }}>
               Room light at {partName(p)}: <Percent value={light[p.id] ?? DEFAULT_LIGHT} />
             </Typography>
