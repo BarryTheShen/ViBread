@@ -19,8 +19,9 @@ import Collapse from "@mui/material/Collapse";
 import IconButton from "@mui/material/IconButton";
 import Typography from "@mui/material/Typography";
 import type { SvgIconProps } from "@mui/material/SvgIcon";
-import { useId, useState, type ComponentType } from "react";
+import { useContext, useId, useState, type ComponentType } from "react";
 import type { MissionShellValue, TimelineRowProps } from "../contracts.js";
+import { MissionShellContext } from "./missionShell.js";
 import { describeItem, groupTimeline, type RowModel, type RowTone, type TimelineItem } from "./timeline.js";
 
 const ICONS: Record<RowModel["icon"], ComponentType<SvgIconProps>> = {
@@ -48,7 +49,8 @@ const TONE_COLOR: Record<RowTone, string> = {
 
 /** One timeline row (a single event or a group of them) as a compact, expandable one-liner inside the chat. */
 export function TimelineItemRow({ item, onOpenPanel }: { item: TimelineItem; onOpenPanel: MissionShellValue["openPanel"] }) {
-  const row = describeItem(item);
+  // Inside a mission page the newest design is known, so an older design's never-run checks read "superseded".
+  const row = describeItem(item, useContext(MissionShellContext)?.detail.mission.currentRevision);
   const [open, setOpen] = useState(false);
   const detailsId = useId();
   const Icon = ICONS[row.icon];

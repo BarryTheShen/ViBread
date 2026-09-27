@@ -65,6 +65,15 @@ describe("groupTimeline", () => {
     expect(describeItem(checks).status).toBe("all GO");
   });
 
+  it("an older design's checks that never ran read 'not run (superseded)' in neutral tone; the latest design keeps waiting", () => {
+    const [old] = groupTimeline([report(1, 1, "EECOM", "GO"), report(2, 1, "GUIDO", "GO"), report(3, 1, "FIDO", "PENDING"), report(4, 1, "RETRO", "PENDING")]);
+    expect(describeItem(old, 2)).toMatchObject({ status: "2 GO · 2 not run (superseded)", tone: "neutral" });
+    expect(describeItem(old, 2).details.at(-1)).toMatch(/^Not run — superseded by r2/);
+    expect(describeItem(old, 1)).toMatchObject({ status: "2 GO · 2 PENDING", tone: "warning" });
+    const [failed] = groupTimeline([report(1, 1, "EECOM", "NO-GO"), report(2, 1, "FIDO", "PENDING")]);
+    expect(describeItem(failed, 3)).toMatchObject({ status: "1 NO-GO · 1 not run (superseded)", tone: "error" });
+  });
+
   it("keeps a revision's reports in one row when 'ready for GO' is logged between them, but not a much later vote", () => {
     const ready = ev("phase.changed", 2, { revision: 1, data: { event: { type: "DESIGN_READY", revision: 1 } } });
     const items = groupTimeline([report(2, 1, "GUIDO", "GO"), ready, report(2, 1, "FAO", "GO"), report(900, 1, "RETRO", "SKIPPED")]);

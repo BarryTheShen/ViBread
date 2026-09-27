@@ -217,8 +217,13 @@ function channelName(channel: TimelineEvent["channel"]): string {
   return channel === "imessage" ? "iMessage" : channel === "mcp" ? "Claude Code" : channel === "a2a" ? "another agent" : channel === "web" ? "this app" : "ViBread";
 }
 
-function checksRow(item: TimelineItem): RowModel {
+/**
+ * `latestRevision`: the mission's newest design. On an older design a check that is still PENDING never runs (the newer
+ * design replaced it), so it reads "not run (superseded by rN)" in neutral tone instead of waiting forever.
+ */
+function checksRow(item: TimelineItem, latestRevision: number | undefined): RowModel {
   const revision = item.events[0].revision;
+  const supersededBy = revision !== undefined && latestRevision !== undefined && revision < latestRevision ? latestRevision : undefined;
   // A console can report twice for one revision (RETRO after the others); keep its latest verdict.
   const latest = new Map<string, Verdict>();
   for (const event of item.events) {
@@ -235,16 +240,18 @@ function checksRow(item: TimelineItem): RowModel {
       : `${verdicts.length} GO`
     : (["GO", "NO-GO", "PENDING", "SKIPPED"] as const)
         .filter((v) => count(v) > 0)
-        .map((v) => `${count(v)} ${v}`)
+        .map((v) => (v === "PENDING" && supersededBy !== undefined ? `${count(v)} not run (superseded)` : `${count(v)} ${v}`))
         .join(" · ");
-  const tone: RowTone = count("NO-GO") > 0 ? "error" : allGo ? "success" : "warning";
+  const waiting = count("PENDING") > 0 && supersededBy === undefined;
+  const tone: RowTone = count("NO-GO") > 0 ? "error" : allGo ? "success" : waiting || count("SKIPPED") > 0 ? "warning" : "neutral";
   const recorded = item.events.map(recordedOf).find((l) => l !== undefined);
   return {
     icon: "checks",
     title: verdicts.length === 1 ? `Check${revision !== undefined ? ` · design r${revision}` : ""}` : `Checks${revision !== undefined ? ` · design r${revision}` : ""}`,
     status,
     tone,
-    details: item.events.map((e) => e.text),
+    // Short status (the row is one line); the expanded row says which design replaced this one.
+    details: [...item.events.map((e) => e.text), ...(supersededBy !== undefined && count("PENDING") > 0 ? [`Not run — superseded by r${supersededBy}: the newer design replaced this one before these checks ran.`] : [])],
     view: "checks",
     revision,
     ...(recorded ? { recorded } : {}),
@@ -350,8 +357,8 @@ function singleRow(event: TimelineEvent): RowModel {
   }
 }
 
-export function describeItem(item: TimelineItem): RowModel {
-  if (item.group === "checks") return checksRow(item);
+export function describeItem(item: TimelineItem, latestRevision?: number): RowModel {
+  if (item.group === "checks") return checksRow(item, latestRevision);
   if (item.group === "steps") return stepsRow(item);
   return singleRow(item.events[0]);
 }
