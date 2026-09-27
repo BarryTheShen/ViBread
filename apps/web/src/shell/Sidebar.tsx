@@ -23,6 +23,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Link as RouterLink, useLocation, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { getJson } from "../api/client.js";
+import { ProjectImportButton } from "../project/ProjectImportButton.js";
 import { WEB_VERSION } from "../version.js";
 import { useConnections, useMissions } from "../api/hooks.js";
 const COLLAPSED_KEY = "vibread.sidebar.collapsed";
@@ -216,6 +217,9 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         ) : (
           <Button component={RouterLink} to="/" variant="contained" color="primary" startIcon={<AddIcon />} fullWidth sx={{ justifyContent: "flex-start", px: 1.75 }}>New mission <Typography component="span" sx={{ ml: "auto", opacity: 0.7, fontSize: "0.75rem", fontWeight: 500 }}>{newMissionShortcut}</Typography></Button>
         )}
+      </Box>
+      <Box sx={{ mt: 0.25, px: collapsed ? 1 : 1.25 }}>
+        <ProjectImportButton collapsed={collapsed} />
       </Box>
 
       <List disablePadding sx={{ px: collapsed ? 1 : 1.25, display: "grid", gap: 0.25 }}>

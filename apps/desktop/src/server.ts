@@ -58,6 +58,7 @@ export class ServerProcess extends EventEmitter {
       // localhost; phones get the LAN origin through VIBREAD_PHONE_URL.
       PUBLIC_URL: `http://localhost:${port}`,
       VIBREAD_PHONE_URL: info.publicUrl,
+      VIBREAD_RUNTIME: "desktop",
       ANTHROPIC_API_KEY: this.apiKey() ?? process.env.ANTHROPIC_API_KEY,
       NODE_ENV: "production",
     });

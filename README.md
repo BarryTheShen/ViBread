@@ -26,6 +26,20 @@ before any wiring, a rail checkpoint, and a read-before-drive self-test whose te
 (rule table + a simulated single-fault dictionary). A "Try it" tab runs the real compiled sketch live in the browser.
 Photo check (Claude vision) is advisory only.
 
+Derived results (layout, build steps and their pictures, schematic, check reports) carry the version of the code that made
+them. When an update changes that code, the server re-derives existing missions' current and released revisions in the
+background after it starts (the old results stay on screen until the new ones are saved). The design, tests and chat are
+never touched; a build in progress keeps its placement and wire colours, gets new steps drawn from that placement, and
+continues where it was (timeline note). The version is a fingerprint of golden outputs, so most pipeline changes are
+picked up without a manual bump; raise `DERIVATION_VERSION` in `packages/tools/src/pipeline.ts` for changes it can't see.
+
+### Export and import a project
+
+Use the mission’s ⋯ menu or the panel download menu to choose **Project file (.vibread)**. The single portable file keeps the mission brief, every design revision, chat history, build progress, wire-colour choices, inventory and hardware snapshot, plus any photos you attached or checked. Derived drawings, pictures and firmware are intentionally left out; when the file is opened on another ViBread server, the current design is checked again and older revisions are checked in the background.
+
+Choose **Import project** below **New mission** in the sidebar and select the `.vibread` file (you can also drop it anywhere in the window). Import creates a new mission owned by the signed-in user; it never transfers credentials, tokens, pairing links or account identifiers. The import screen stays busy while the current revision is checked, then opens the new mission.
+
+
 The same mission is reachable from **iMessage** ("CAPCOM", via Photon Spectrum) and from **Claude Code** over MCP. There
 are no design permission modes: Claude can edit the design directly. **GO for build** is human-only (the web button or an
 iMessage `GO`). Physical actions (flash, self-test, rewiring) still wait for a click at the bench; remote agents can only
@@ -172,15 +186,21 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 
 1. **Home** — describe the circuit and tap the parts you own.
 2. **Mission workspace** — Claude edits the design directly; grouped tool rows show its work, and question cards let you
-   answer clarifications. Stop/resume is available while a run is active. Tabs include Schematic, Steps, Code, Tests, Try
-   it, Replay, Telemetry, Photo, and Diagnostics. The console bar shows EECOM · GUIDO · FIDO · FAO · RETRO. **GO for
-   build** (you are the Flight Director) is a human action from the web button or iMessage `GO`.
-3. **Build Mode on the phone** — scan the QR code in the Steps tab (`/b/<mission>`): one step at a time, focused picture,
-   exact holes, plug state, "I did this", "Check with camera".
-4. **Bench** (`/m/<mission>/bench`, Chrome/Edge) — connect the board, flash safe firmware, rail checkpoint, self-test with
-   on-screen prompts, diagnosis with the suspect holes highlighted, then flash the app firmware with the light-sensor
-   calibration. "Try without a board" runs the same firmware in a simulated board, with injectable wiring faults. Physical
-   actions always wait for the click on this page.
+   answer clarifications. Stop/resume is available while a run is active. The side panel's **Show** menu lists its views
+   by stage, in build order: **1 Design** (Parts, Schematic, Code) · **2 Simulate** (Try it, Tests with each scenario's
+   replay, Checks) · **3 Build** (Build steps, Bench, Photo checks) · **4 Debug** (Bench results: the latest diagnosis
+   and everything the board reported). The view and design version are kept in the address (`?panel=…&rev=…`). The status
+   dots show EECOM · GUIDO · FIDO · FAO · RETRO. **GO for build** (you are the Flight Director) is a human action from the
+   web button or iMessage `GO`.
+3. **Build Mode on the phone** — scan the QR code in Build steps (`/b/<mission>`): one step at a time, focused picture,
+   exact holes, plug state, "I did this", "Check with camera". After the inventory and the board-orientation steps comes
+   a bare-board check: plug in just the Arduino, connect, flash the safe firmware and check its power before anything
+   goes on the breadboard.
+4. **Bench** (the panel's Bench view, `/m/<mission>?panel=bench`; Chrome/Edge) — connect the board, flash safe
+   firmware, power checkpoint, self-test with on-screen prompts, diagnosis with the suspect holes highlighted, then flash
+   the app firmware with the light-sensor calibration. A build step's checkpoint opens it scoped to that step's tests;
+   the old `/m/<mission>/bench` address redirects here. "Try without a board" runs the same firmware in a simulated board,
+   with injectable wiring faults. Physical actions always wait for the click in this view.
 
 ### Connect your Claude account
 

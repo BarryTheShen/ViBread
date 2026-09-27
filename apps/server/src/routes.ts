@@ -356,7 +356,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const mission = await ctx.store.getMission(missionId);
     if (!mission) throw httpError(404, "MISSION_NOT_FOUND", "mission not found");
     const released = mission.releasedRevision === undefined ? null : await ctx.store.getRevision(missionId, mission.releasedRevision);
-    const latestBench = released?.results.bench?.at(-1);
+    const latestBench = latestFullBenchRun(released);
     if (!latestBench) throw httpError(409, "bench_run_required", "Run the bench test with your Arduino first.");
     if (latestBench.verdict === "incomplete") throw httpError(409, "bench_run_incomplete", "The last bench test didn't finish. Run it again and answer each question on the bench screen.");
     if (latestBench.verdict !== "pass") throw httpError(409, "bench_run_failed", "The last bench test didn't pass. Fix the wiring and run it again.");
@@ -418,7 +418,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     const approval = await ctx.broker.get(String(req.params.approvalId));
     if (approval?.action === "flash-app") {
       const released = await ctx.store.getRevision(missionId, current.revision);
-      const latestBench = released?.results.bench?.at(-1);
+      const latestBench = latestFullBenchRun(released);
       if (!latestBench || latestBench.verdict !== "pass") throw httpError(409, "needs_passing_selftest", "Run a passing bench self-test before flashing the app.");
     }
     const started = await sqlApprovalBroker(ctx).startBenchRequest({
@@ -632,6 +632,8 @@ export function mountApi(app: Express, ctx: AppContext): void {
       runId: `${runPrefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       ...(faultDictionary ? { faultDictionary } : {}),
     });
+    // Which build step's checkpoint asked for it (issue #24): that step's checklist is the one this run answers.
+    if (typeof body.step === "number" && Number.isInteger(body.step) && body.step > 0) result.step = body.step;
     await ctx.store.saveResults(missionId, revision.n, { bench: [...(revision.results.bench ?? []), result] });
     ctx.debug.event(missionId, "bench", "bench run evaluated", { runId: result.runId, verdict: result.verdict, kind: result.kind, revision: revision.n });
     await ctx.db.insert(runs).values({ id: result.runId, missionId, revision: revision.n, kind: result.kind, result: JSON.stringify(result), createdAt: new Date() });
@@ -645,7 +647,8 @@ export function mountApi(app: Express, ctx: AppContext): void {
       revision: revision.n,
       data: result,
     });
-    if (!virtual) {
+    // A build-step checkpoint (a subset of the plan) never moves the mission: only a run of the whole plan verifies it.
+    if (!virtual && plan === serverPlan) {
       const phase = await ctx.machine.phase(missionId);
       if (body.kind === "selftest" && (phase === "ASSEMBLE" || phase === "DEBUG")) {
         await ctx.machine.send(missionId, { type: "VERIFY_STARTED" });
@@ -807,6 +810,16 @@ export function mountApi(app: Express, ctx: AppContext): void {
 
 function sqlApprovalBroker(ctx: AppContext): SqlApprovalBroker {
   return ctx.broker as SqlApprovalBroker;
+}
+
+/**
+ * The latest bench run that covered the revision's whole self-test plan. A build-step checkpoint runs a few of the
+ * plan's tests (issues #21, #24); it must not stand in for the full self-test that completes a mission, unlocks the app
+ * flash, or supplies the light-sensor calibration.
+ */
+function latestFullBenchRun(revision: Revision | null | undefined): NonNullable<RevisionResults["bench"]>[number] | undefined {
+  const planned = revision?.results.selftest?.tests;
+  return revision?.results.bench?.findLast((run) => !planned || planned.every((test) => run.results.some((result) => result.test === test)));
 }
 
 async function currentRevisionForBench(ctx: AppContext, missionId: string): Promise<{ revision: number | null; hash: string }> {

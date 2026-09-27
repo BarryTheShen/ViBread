@@ -155,6 +155,11 @@ export interface BenchRunResult {
   diagnosis: Diagnosis;
   calibration: Calibration[];
   verdict: "pass" | "fail" | "incomplete";
+  /**
+   * The build step whose checkpoint asked for this run (issue #24). A run counts for a step's checklist when it has no
+   * step or the same step, so the bare-board check never answers for a later checkpoint that runs the same test.
+   */
+  step?: number;
 }
 
 // ---------- photo check ----------

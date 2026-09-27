@@ -219,6 +219,8 @@ export interface BenchRunRequest {
   lines: DeviceLine[];
   /** Answers the person gave to `ask` lines: ask id → value. */
   answers: Record<string, string>;
+  /** The build step whose checkpoint asked for this run (issue #24); absent when the bench was opened on its own. */
+  step?: number;
 }
 export interface BenchFirmwareResponse {
   hex: string;

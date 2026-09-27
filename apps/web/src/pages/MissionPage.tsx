@@ -22,13 +22,14 @@ import { ArtifactPanel } from "../workspace/ArtifactPanel.js";
 import { ResizablePanel } from "../workspace/ResizablePanel.js";
 import { MissionCompleteCard } from "../workspace/MissionCompleteCard.js";
 import { MissionHeader } from "../workspace/MissionHeader.js";
-import { readPanel, writePanel, type PanelState } from "../workspace/panelUrl.js";
+import { autoOpenedPanel, canonicalPanelParams, readPanel, writePanel, type PanelState } from "../workspace/panelUrl.js";
 
 const EMPTY_EVENTS: TimelineEvent[] = [];
 
 /**
  * Opens the panel by itself at the moments the plan names (§3.2): the first design (Schematic), GO for build (Build
- * steps) and a bench problem (Diagnosis). Only on changes seen while the page is open, never on first load.
+ * steps) and a bench problem (Bench results). Only on changes seen while the page is open, never on first load, and
+ * never away from an open bench (autoOpenedPanel).
  */
 function useAutoPanel(detail: MissionDetail | undefined, events: TimelineEvent[], open: (view: PanelView) => void) {
   const seen = useRef<{ revision?: number; released?: number; failures: string[] } | null>(null);
@@ -38,7 +39,7 @@ function useAutoPanel(detail: MissionDetail | undefined, events: TimelineEvent[]
     const before = seen.current;
     seen.current = now;
     if (!before) return;
-    if (now.failures.some((id) => !before.failures.includes(id))) open("diagnosis");
+    if (now.failures.some((id) => !before.failures.includes(id))) open("results");
     else if (now.released !== undefined && now.released !== before.released) open("steps");
     else if (before.revision === undefined && now.revision !== undefined) open("schematic");
   }, [detail, events, open]);
@@ -81,8 +82,13 @@ export default function MissionPage() {
     [setPanel],
   );
   const closePanel = useCallback(() => setPanel((p) => ({ ...p, open: false })), [setPanel]);
-  const autoOpen = useCallback((view: PanelView) => setPanel(() => ({ open: true, view })), [setPanel]);
+  const autoOpen = useCallback((view: PanelView) => setPanel((current) => autoOpenedPanel(current, view)), [setPanel]);
   useAutoPanel(detail, events, autoOpen);
+  // Old links (`?panel=replay`, `telemetry`, `diagnosis`) open the merged view; show its current id in the address bar.
+  useEffect(() => {
+    const canonical = canonicalPanelParams(searchParams);
+    if (canonical) setSearchParams(canonical, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   const shell = useMemo<MissionShellValue | null>(
     () =>
@@ -114,6 +120,26 @@ export default function MissionPage() {
   }
 
   const m = detail.mission;
+  // A phone that follows a link to one panel view (a build step's bench check, a shared link) gets that view full-screen.
+  const phonePanel = phone && panel.open && searchParams.has("panel");
+  if (phonePanel) {
+    return (
+      <MissionShellContext.Provider value={shell}>
+        <Box sx={{ height: "100%", minHeight: 0 }}>
+          <ArtifactPanel
+            missionId={missionId}
+            detail={detail}
+            view={panel.view}
+            revision={panel.revision}
+            console={panel.console}
+            onViewChange={(view) => setPanel((p) => ({ ...p, view, console: undefined }))}
+            onRevisionChange={(revision) => setPanel((p) => ({ ...p, revision }))}
+            onClose={closePanel}
+          />
+        </Box>
+      </MissionShellContext.Provider>
+    );
+  }
   if (phone) {
     return (
       <Box sx={{ minHeight: "100%", display: "grid", placeItems: "center", p: 2 }}>

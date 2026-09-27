@@ -14,6 +14,10 @@ import Divider from "@mui/material/Divider";
 import Link from "@mui/material/Link";
 import MobileStepper from "@mui/material/MobileStepper";
 import Paper from "@mui/material/Paper";
+import List from "@mui/material/List";
+import ListItem from "@mui/material/ListItem";
+import ListItemIcon from "@mui/material/ListItemIcon";
+import ListItemText from "@mui/material/ListItemText";
 import Skeleton from "@mui/material/Skeleton";
 import Stack from "@mui/material/Stack";
 import ToggleButton from "@mui/material/ToggleButton";
@@ -29,6 +33,8 @@ import ErrorOutlined from "@mui/icons-material/ErrorOutlined";
 import FactCheckOutlined from "@mui/icons-material/FactCheckOutlined";
 import HelpOutlineOutlined from "@mui/icons-material/HelpOutlineOutlined";
 import ImageNotSupportedOutlined from "@mui/icons-material/ImageNotSupportedOutlined";
+import ReplayOutlined from "@mui/icons-material/ReplayOutlined";
+import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
 import KeyboardArrowLeft from "@mui/icons-material/KeyboardArrowLeft";
 import KeyboardArrowRight from "@mui/icons-material/KeyboardArrowRight";
 import Usb from "@mui/icons-material/Usb";
@@ -36,11 +42,13 @@ import UsbOff from "@mui/icons-material/UsbOff";
 import WifiOff from "@mui/icons-material/WifiOff";
 import { useNavigate, useParams } from "react-router";
 import { StepWireChips, WireColorPicker, WireLegend, useWireColor, type WireTarget } from "../workspace/WireColors.js";
+import { checkpointChecksForRevision, checkpointChecksPass, checkpointStatusText, describeCheckpointChecks, isFullSelfTestStep, type CheckpointCheck } from "./checkpointChecks.js";
 import {
   BuildApiError,
   createInventoryScan,
   fetchBuildState,
   fetchPhoneMissions,
+  revisionQueryOptions,
   postBuildStep,
   postPhotoCheck,
   type PhoneMission,
@@ -153,10 +161,15 @@ function preloadImage(url?: string): void {
   image.src = url;
   void image.decode().catch(() => undefined);
 }
+function imageFallbackAspect(step: BuildStep, view: ImageView): string {
+  return view === "whole" || !step.focusImageUrl ? "10 / 9" : "40 / 49";
+}
+
 
 
 function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: boolean }) {
   const [imageView, setImageView] = useState<ImageView>("focused");
+  const [aspectRatio, setAspectRatio] = useState(() => imageFallbackAspect(step, "focused"));
   const [displayedUrl, setDisplayedUrl] = useState<string | undefined>(() => step.focusImageUrl ?? step.imageUrl);
   const [loading, setLoading] = useState(Boolean(step.focusImageUrl ?? step.imageUrl));
   const [failed, setFailed] = useState(false);
@@ -198,6 +211,7 @@ function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: bo
 
   useEffect(() => {
     setImageView("focused");
+    setAspectRatio(imageFallbackAspect(step, "focused"));
     requestImage(step.focusImageUrl ?? step.imageUrl);
     return () => {
       loadId.current += 1;
@@ -217,6 +231,7 @@ function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: bo
   const handleImageViewChange = (_event: MouseEvent<HTMLElement>, next: ImageView | null) => {
     if (next) {
       setImageView(next);
+      setAspectRatio(imageFallbackAspect(step, next));
       requestImage(next === "whole" ? step.imageUrl : step.focusImageUrl ?? step.imageUrl);
     }
   };
@@ -230,7 +245,7 @@ function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: bo
         sx={{
           position: "relative",
           width: "100%",
-          aspectRatio: { xs: "16 / 9", sm: "4 / 3" },
+          aspectRatio,
           overflow: "hidden",
           bgcolor: "canvas.main",
         }}
@@ -245,6 +260,10 @@ function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: bo
             component="img"
             image={displayedUrl}
             alt={`${showWholeBoard ? "Whole board" : "Focused step"} illustration for step ${step.n}: ${step.title}`}
+            onLoad={(event) => {
+              const image = event.currentTarget;
+              if (image.naturalWidth > 0 && image.naturalHeight > 0) setAspectRatio(`${image.naturalWidth} / ${image.naturalHeight}`);
+            }}
             onError={handleImageError}
             sx={{ position: "absolute", inset: 0, zIndex: 1, width: "100%", height: "100%", objectFit: "contain" }}
           />
@@ -337,7 +356,31 @@ function StepWireColors({ missionId, build, step }: { missionId: string; build: 
   );
 }
 
-function StepCard({ step, total, reducedMotion, wires }: { step: BuildStep; total: number; reducedMotion: boolean; wires?: React.ReactNode }) {
+function CheckpointCheckList({ checks }: { checks: CheckpointCheck[] }) {
+  return (
+    <Box sx={{ mt: 1.5 }}>
+      <Typography variant="subtitle2" sx={{ fontWeight: 800 }}>
+        Run on the laptop
+      </Typography>
+      <List dense disablePadding sx={{ mt: 0.5 }}>
+        {checks.map((check) => {
+          const Icon = check.status === "pass" ? CheckCircleOutlined : check.status === "fail" ? ErrorOutlined : check.status === "manual" ? VisibilityOutlined : check.status === "incomplete" ? ReplayOutlined : FactCheckOutlined;
+          const status = checkpointStatusText(check.status);
+          return (
+            <ListItem key={check.id} disableGutters>
+              <ListItemIcon sx={{ minWidth: 32 }}>
+                <Icon color={check.status === "pass" ? "success" : check.status === "fail" ? "error" : "disabled"} aria-hidden="true" />
+              </ListItemIcon>
+              <ListItemText primary={check.expected} secondary={check.diagnosis ? `${status} — ${check.diagnosis}` : status} />
+            </ListItem>
+          );
+        })}
+      </List>
+    </Box>
+  );
+}
+
+function StepCard({ step, total, reducedMotion, wires, checkpointChecks }: { step: BuildStep; total: number; reducedMotion: boolean; wires?: React.ReactNode; checkpointChecks?: CheckpointCheck[] }) {
   return (
     <Card
       component="article"
@@ -420,6 +463,7 @@ function StepCard({ step, total, reducedMotion, wires }: { step: BuildStep; tota
                 </Typography>
               </Box>
             </Stack>
+            <CheckpointCheckList checks={checkpointChecks ?? []} />
           </Paper>
         )}
       </CardContent>
@@ -526,6 +570,26 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
   const safeActiveStep = Math.min(Math.max(activeStep, 0), Math.max(steps.length - 1, 0));
   const lastStepNumber = steps[steps.length - 1]?.n;
   const currentStepNumber = steps[safeActiveStep]?.n;
+  // `steps` may be empty (the page says so below); `step` is only used past that check.
+  const step: BuildStep | undefined = steps[safeActiveStep];
+  // The checks run on the laptop and land on this revision: while a checkpoint step is on screen, poll like the build
+  // state does, so the phone unlocks (or shows a new failure) within a couple of seconds of the laptop's run.
+  const revisionQuery = useQuery(revisionQueryOptions(missionId, build.revision, !finished && Boolean(step?.checkpoint)));
+  const fullSelfTest = step !== undefined && isFullSelfTestStep(step);
+  const checkpointChecks = step?.checkpoint
+    ? revisionQuery.data
+      ? checkpointChecksForRevision({
+          circuit: revisionQuery.data.circuit,
+          revisionHash: revisionQuery.data.hash,
+          tests: step.checkpoint.tests,
+          plan: revisionQuery.data.results.selftest,
+          runs: revisionQuery.data.results.bench,
+          fullSelfTest,
+          step: step.n,
+        })
+      : describeCheckpointChecks({ tests: step.checkpoint.tests, fullSelfTest })
+    : [];
+  const checkpointPassed = !step?.checkpoint || checkpointChecksPass(checkpointChecks);
   useEffect(() => {
     for (const index of [safeActiveStep - 1, safeActiveStep, safeActiveStep + 1]) {
       const candidate = steps[index];
@@ -597,7 +661,6 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
     );
   }
 
-  const step = steps[safeActiveStep];
   const handlePhotoChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -657,7 +720,7 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
         }
       />
 
-      <StepCard step={step} total={steps.length} reducedMotion={reducedMotion} wires={<StepWireColors missionId={missionId} build={build} step={step} />} />
+      <StepCard step={step} total={steps.length} reducedMotion={reducedMotion} checkpointChecks={checkpointChecks} wires={<StepWireColors missionId={missionId} build={build} step={step} />} />
 
       <Button
         type="button"
@@ -665,18 +728,30 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
         size="large"
         fullWidth
         onClick={handleStepDone}
-        disabled={stepMutation.isPending}
+        disabled={stepMutation.isPending || !checkpointPassed}
         aria-busy={stepMutation.isPending}
         startIcon={stepMutation.isPending ? <CircularProgress color="inherit" size={20} /> : undefined}
         sx={{ minHeight: 52, borderRadius: 2.5, fontWeight: 800 }}
       >
-        {stepMutation.isPending ? "Saving…" : "I did this"}
+        {stepMutation.isPending ? "Saving…" : "Done"}
       </Button>
       {stepMutation.error && (
         <Alert severity="error" icon={<CloudOffOutlined />}>
           <AlertTitle>Could not save this step</AlertTitle>
           {errorMessage(stepMutation.error)}
         </Alert>
+      )}
+      {step.checkpoint && (
+        <Button
+          type="button"
+          variant="text"
+          fullWidth
+          disabled={stepMutation.isPending}
+          onClick={() => stepMutation.mutate(step.n)}
+          sx={{ minHeight: 44 }}
+        >
+          Skip checks and continue
+        </Button>
       )}
 
       <Divider sx={{ my: 0.5 }} />

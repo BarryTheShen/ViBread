@@ -7,20 +7,11 @@
  */
 import type { InventoryItem, MissionDetail, TimelineEvent } from "@vibread/core";
 
-/** Views of the right-hand artifact panel (§3.2). */
-export const PANEL_VIEWS = [
-  "parts",
-  "schematic",
-  "steps",
-  "code",
-  "tests",
-  "tryit",
-  "replay",
-  "checks",
-  "telemetry",
-  "diagnosis",
-  "photos",
-] as const;
+/**
+ * Views of the right-hand artifact panel (§3.2), in the order a project uses them (issue #24). The Show menu groups them
+ * by stage (workspace/panelViews.ts); old ids (`replay`, `telemetry`, `diagnosis`) still open their merged view.
+ */
+export const PANEL_VIEWS = ["parts", "schematic", "code", "tryit", "tests", "checks", "steps", "bench", "photos", "results"] as const;
 export type PanelView = (typeof PANEL_VIEWS)[number];
 
 /** What the header's next-step button shows (§2). Derived from MissionDetail + BuildState by S3's `nextStepOf`. */

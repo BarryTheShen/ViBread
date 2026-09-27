@@ -4,11 +4,7 @@ import ReplayIcon from "@mui/icons-material/Replay";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import FormControl from "@mui/material/FormControl";
-import InputLabel from "@mui/material/InputLabel";
-import MenuItem from "@mui/material/MenuItem";
 import Paper from "@mui/material/Paper";
-import Select from "@mui/material/Select";
 import Slider from "@mui/material/Slider";
 import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
@@ -19,13 +15,19 @@ import { useArtifactJson } from "../../api/hooks.js";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
 import { applyFrame, breadboardUrl, describePartState, frameIndexAt } from "../replay.js";
 
-/** Replays a recorded simulation trace on the breadboard drawing by toggling `glow-<ID>` / `sound-<ID>` opacity. */
-export function ReplayTab({ revision }: { revision: RevisionDetail }) {
+/** The recorded trace of one simulated scenario (undefined when that scenario wasn't recorded). */
+export function scenarioTraceUrl(revision: RevisionDetail, scenarioId: string): string | undefined {
+  const key = revision.results.sim?.scenarios.find((s) => s.id === scenarioId)?.traceKey;
+  return key ? revision.artifactUrls[key] : undefined;
+}
+
+/**
+ * Replays one simulated scenario on the breadboard drawing by toggling `glow-<ID>` / `sound-<ID>` opacity. Shown inline
+ * under its row in Tests (issue #24 merged the separate Replay view into Tests).
+ */
+export function ScenarioReplay({ revision, traceUrl, title }: { revision: RevisionDetail; traceUrl: string; title: string }) {
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
-  const traced = (revision.results.sim?.scenarios ?? []).filter((s) => s.traceKey && revision.artifactUrls[s.traceKey]);
-  const [scenarioId, setScenarioId] = useState<string>("");
-  const selected = traced.find((s) => s.id === scenarioId) ?? traced[0];
-  const trace = useArtifactJson<Trace>(selected?.traceKey ? revision.artifactUrls[selected.traceKey] : undefined);
+  const trace = useArtifactJson<Trace>(traceUrl);
   const board = breadboardUrl(revision.artifactUrls);
   const svgRef = useRef<HTMLDivElement>(null);
   const [t, setT] = useState(0);
@@ -34,11 +36,6 @@ export function ReplayTab({ revision }: { revision: RevisionDetail }) {
   const endT = frames.length ? frames[frames.length - 1].t : 0;
   const frame = frames.length ? frames[frameIndexAt(frames, t)] : undefined;
   const passive = useMemo(() => new Set(revision.circuit.parts.filter((p) => p.module === "resistor").map((p) => p.id)), [revision.circuit]);
-
-  useEffect(() => {
-    setT(0);
-    setPlaying(false);
-  }, [selected?.id]);
 
   useEffect(() => {
     if (!playing) return;
@@ -65,22 +62,9 @@ export function ReplayTab({ revision }: { revision: RevisionDetail }) {
     if (svgRef.current && frame) applyFrame(svgRef.current, frame);
   });
 
-  if (traced.length === 0) {
-    return <Alert severity="info">Replays appear after the simulation tests run with recording on.</Alert>;
-  }
   return (
     <Stack sx={{ gap: 1.5 }}>
-      <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap" }}>
-        <FormControl size="small" sx={{ minWidth: 260, flex: 1 }}>
-          <InputLabel id="replay-scenario-label">Test to replay</InputLabel>
-          <Select labelId="replay-scenario-label" label="Test to replay" value={selected?.id ?? ""} onChange={(e) => setScenarioId(e.target.value)}>
-            {traced.map((s) => (
-              <MenuItem key={s.id} value={s.id}>
-                {s.ok ? "Passed" : "Failed"} · {s.title}
-              </MenuItem>
-            ))}
-          </Select>
-        </FormControl>
+      <Stack direction="row" sx={{ gap: 1, alignItems: "center" }}>
         <Button
           variant="contained"
           startIcon={playing ? <PauseIcon /> : t >= endT && endT > 0 ? <ReplayIcon /> : <PlayArrowIcon />}
@@ -101,7 +85,7 @@ export function ReplayTab({ revision }: { revision: RevisionDetail }) {
       )}
       <Paper variant="outlined" sx={{ p: 1, bgcolor: "canvas.main" }}>
         {board ? (
-          <SvgArtifact ref={svgRef} url={board} label="Breadboard replay" />
+          <SvgArtifact ref={svgRef} url={board} label={`Breadboard replay of the test: ${title}`} />
         ) : (
           <Alert severity="info">The breadboard drawing isn't ready yet; the part states below still replay.</Alert>
         )}

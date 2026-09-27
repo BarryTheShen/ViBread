@@ -93,7 +93,7 @@ describe("groupTimeline", () => {
       ev("bench.run", 5, { revision: 2, data: { runId: "r-2", kind: "selftest", verdict: "fail" } }),
       ev("phase.changed", 6, { revision: 2, data: { event: { type: "DESIGN_READY", revision: 2 } } }),
     ]).map(describeItem);
-    expect(views.map((v) => v.view)).toEqual(["schematic", "tests", "steps", "telemetry", "diagnosis", "checks"]);
+    expect(views.map((v) => v.view)).toEqual(["schematic", "tests", "steps", "results", "results", "checks"]);
     expect(views[0]).toMatchObject({ title: "Design r1 · Moon lamp", status: "by Claude" });
     expect(views[2]).toMatchObject({ title: "GO for build · design r2", status: "by you" });
     expect(views[3]).toMatchObject({ title: "Virtual board · self-test (practice)", status: "passed" });

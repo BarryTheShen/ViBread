@@ -10,17 +10,31 @@ import Tooltip from "@mui/material/Tooltip";
 import type { RevisionDetail } from "@vibread/core";
 import { useState } from "react";
 import { SINGLE_FILES, bundlePlan, buildZip, otherFiles, saveFile, sketchName, stepPictureCount, type BundleKind } from "./downloads.js";
+import { downloadProject } from "../project/projectFile.js";
 
 /** The panel's ⤓ menu for one design version: sketch and "Everything" first, then single files, then grouped zips. */
-export function DownloadMenu({ revision, missionTitle }: { revision: RevisionDetail; missionTitle: string }) {
+export function DownloadMenu({ missionId, revision, missionTitle }: { missionId: string; revision: RevisionDetail; missionTitle: string }) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [busy, setBusy] = useState<BundleKind | null>(null);
+  const [projectBusy, setProjectBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const name = sketchName(missionTitle);
   const keys = Object.keys(revision.artifactUrls);
   const steps = stepPictureCount(keys);
   const others = otherFiles(keys).length;
   const singles = SINGLE_FILES.filter((f) => revision.artifactUrls[f.key]);
+
+  const downloadProjectFile = async () => {
+    setProjectBusy(true);
+    try {
+      await downloadProject(missionId, missionTitle);
+      setAnchor(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setProjectBusy(false);
+    }
+  };
 
   const downloadZip = async (kind: BundleKind) => {
     setBusy(kind);
@@ -55,7 +69,11 @@ export function DownloadMenu({ revision, missionTitle }: { revision: RevisionDet
       </Tooltip>
       <Menu anchorEl={anchor} open={anchor !== null} onClose={() => setAnchor(null)} slotProps={{ list: { dense: true, sx: { minWidth: 300 } } }}>
         <ListSubheader>Get the code · design r{revision.n}</ListSubheader>
+        <MenuItem disabled={projectBusy || busy !== null} onClick={() => void downloadProjectFile()}>
+          <ListItemText primary={projectBusy ? "Preparing project file…" : "Project file (.vibread)"} secondary="Open it in ViBread on any computer" />
+        </MenuItem>
         <MenuItem
+          disabled={projectBusy || busy !== null}
           onClick={() => {
             saveFile(revision.circuit.sketch.source, `${name}.ino`, "text/x-arduino;charset=utf-8");
             setAnchor(null);

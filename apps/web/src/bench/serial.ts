@@ -1,6 +1,6 @@
 import type { BoardProfile, BoardProfileId } from "@vibread/core";
 import { BOARD_PROFILES } from "@vibread/core";
-import { BOARDS, STK500, STK500SyncError, WebSerialTransport, parseIntelHex } from "webserial-flasher";
+import { BOARDS, STK500, STK500SyncError, parseIntelHex } from "webserial-flasher";
 import type { Board, ISTKTransport, SerialSignals } from "webserial-flasher";
 import type { WebSerialPortFilter } from "webserial-flasher";
 import type { BenchLog } from "./benchLog.js";
@@ -10,19 +10,39 @@ export const WEB_SERIAL_BROWSERS = "Chrome or Edge" as const;
 /** Bench firmware's fixed NDJSON serial speed (core telemetry protocol). */
 export const TELEMETRY_BAUD = 115_200 as const;
 /**
- * Per-command bootloader timeout. Optiboot gives up and starts the sketch about a second after a reset, so the
- * library's 10 s default only delays the 57600 fallback; every command, including a 128-byte page, answers within
- * milliseconds when the baud is right.
+ * Per-command bootloader timeout. The longest command, a 128-byte PROG_PAGE (133 bytes out, 2 back) plus Optiboot's
+ * ~4.5 ms page write, takes about 30 ms at 57600, so 200 ms is ample, and the five sync attempts (50 ms apart) all land
+ * inside Optiboot's ~1 s window after a reset instead of one attempt per window with the library's 10 s default.
  */
-const STK_COMMAND_TIMEOUT_MS = 1_000;
+const STK_COMMAND_TIMEOUT_MS = 200;
+const SYNC_RETRY = { syncAttempts: 5, retryDelayMs: 50 } as const;
+/** Resets tried at one bootloader baud before the other baud (the board's own baud is by far the likelier one). */
+const RESET_ROUNDS = 3;
+/** avrdude's arduino programmer: DTR/RTS off to discharge the reset capacitor, a short on pulse resets, then settle. */
+const RESET_DISCHARGE_MS = 250;
+const RESET_SETTLE_MS = 100;
+/** esptool-js's active drain: stale bytes are discarded once the line has been quiet this long (or at the cap). */
+const DRAIN_QUIET_MS = 100;
+const DRAIN_MAX_MS = 400;
+/** Receive buffer for port.open(). The spec's default of 255 bytes is ~22 ms at 115200: a busy page overruns it. */
+const SERIAL_BUFFER_SIZE = 8_192;
 /** Waits before each retry of an open that follows our own close (see BufferedTransport.open). */
 const REOPEN_DELAYS_MS = [300, 600, 1_200] as const;
+/** Read errors after which Chrome hands out a fresh `port.readable`: the port is still usable (Web Serial spec). */
+const RECOVERABLE_READ_ERRORS = new Set(["BufferOverrunError", "FramingError", "ParityError", "BreakError", "UnknownError"]);
+const STK_GET_SYNC = new Uint8Array([0x30, 0x20]);
 
-/** The errors a Windows USB serial driver gives for an open issued while the previous handle is still closing. */
+/**
+ * The error a Windows USB serial driver gives for an open issued while the previous handle is still closing. An
+ * "already open" InvalidStateError is not one: a port this page still holds never becomes closed by waiting.
+ */
 function isReopenRace(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return error.name === "InvalidStateError" || (error.name === "NetworkError" && /failed to open serial port/i.test(error.message));
+  return error instanceof Error && error.name === "NetworkError" && /failed to open serial port/i.test(error.message);
 }
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+const toHex = (bytes: Uint8Array) => Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(" ");
+const describeError = (error: unknown) => (error instanceof Error ? `${error.name}: ${error.message}` : String(error));
 
 export class UnsupportedWebSerialError extends Error {
   constructor() {
@@ -31,7 +51,20 @@ export class UnsupportedWebSerialError extends Error {
   }
 }
 
-export type SignalSetter = (signals: SerialSignals) => Promise<void>;
+/** A port.close() that failed: Chrome leaves such a port "closing", and every later open() refuses it. */
+export class PortCloseError extends Error {
+  constructor(readonly detail: string) {
+    super("The USB port did not close.");
+    this.name = "PortCloseError";
+  }
+}
+
+/** The part of Web Serial's SerialPort the bench drives: Chrome's port, or a fake with the same semantics in tests. */
+export type SerialPortLike = Pick<SerialPort, "open" | "close" | "setSignals" | "readable" | "writable"> & {
+  /** Live USB presence (Chrome 124+); undefined in older browsers. */
+  readonly connected?: boolean;
+};
+
 type DataListener = (chunk: Uint8Array) => void;
 
 /** The bootloader's view of the port for one flash: its own listeners, and a queue until it subscribes. */
@@ -39,43 +72,109 @@ export interface FlashSession extends ISTKTransport {
   setSignals(opts: SerialSignals): Promise<void>;
 }
 
+interface Session {
+  listeners: Set<DataListener>;
+  queued: Uint8Array[];
+  queuedBytes: number;
+  lastChunkAt: number;
+  /** Log the next bytes the flasher receives (the first answer after a reset, for Diagnostics). */
+  logFirstReply: boolean;
+}
+
 /**
- * One board's serial port, shared by the bench runner and the flasher.
+ * One board's serial port, shared by the bench runner and the flasher. It drives the Web Serial port itself: opens it
+ * with an 8 KiB receive buffer, runs the spec's two-level read loop (a recoverable read error gets a fresh reader
+ * instead of a deaf port), and closes in the order Chrome requires (cancel the read → release the lock → close).
  *
  * Subscribers (the bench runner) stay attached across close/open, so the runner still hears the board after a flash
  * reopens the port. While a flash session is active, bytes go only to that session: the runner never sees STK500
  * traffic, and the flasher's listeners are dropped with the session, so none leak into later reads. The session
  * queues bytes until the flasher subscribes, because webserial-flasher 1.0.1 installs its response listener only
- * after awaiting write(), and a USB serial bridge can answer during the write.
+ * after awaiting write(), and a USB serial bridge can answer during the write. Every write first discards what is
+ * queued, so bytes from before a command (the old sketch's banner, noise at the wrong baud) never answer it.
  */
 export class BufferedTransport implements ISTKTransport {
   private readonly subscribers = new Set<DataListener>();
-  private session: { listeners: Set<DataListener>; queued: Uint8Array[] } | undefined;
+  private session: Session | undefined;
   private openBaud: number | undefined;
   private lostValue = false;
+  /** Set once this adapter has closed the port itself; only then can a failed open be the driver still letting go. */
+  private closedByUs = false;
+  private reading = false;
+  private reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  private readLoop: Promise<void> = Promise.resolve();
+  private writes: Promise<void> = Promise.resolve();
+
+  constructor(
+    private readonly port: SerialPortLike,
+    private readonly options: { log?: BenchLog; reopenDelaysMs?: readonly number[] } = {},
+  ) {}
+
   private readonly handleData = (chunk: Uint8Array): void => {
     const session = this.session;
     if (!session) {
       for (const listener of this.subscribers) listener(chunk);
       return;
     }
-    if (session.listeners.size === 0) session.queued.push(chunk.slice());
-    else for (const listener of session.listeners) listener(chunk);
+    session.lastChunkAt = Date.now();
+    if (session.listeners.size === 0) {
+      session.queued.push(chunk.slice());
+      session.queuedBytes += chunk.byteLength;
+    } else this.deliver(session, chunk);
   };
 
-  /** Set once this adapter has closed the port itself; only then can a failed open be the driver still letting go. */
-  private closedByUs = false;
+  private deliver(session: Session, chunk: Uint8Array): void {
+    if (session.logFirstReply) {
+      session.logFirstReply = false;
+      this.options.log?.("info", `flash: first reply ${toHex(chunk.subarray(0, 16))}`);
+    }
+    for (const listener of session.listeners) listener(chunk);
+  }
 
-  constructor(
-    private readonly inner: ISTKTransport,
-    private readonly signalSetter?: SignalSetter,
-    private readonly options: { log?: BenchLog; reopenDelaysMs?: readonly number[] } = {},
-  ) {
-    inner.on("data", this.handleData);
+  /** Drop the flash session's queued bytes; returns how many there were. */
+  private discardQueued(): number {
+    const session = this.session;
+    if (!session) return 0;
+    const count = session.queuedBytes;
+    session.queued.length = 0;
+    session.queuedBytes = 0;
+    return count;
+  }
+
+  /**
+   * Active drain (esptool-js): wait until nothing has arrived for `quietMs` (at most `maxMs`), then discard everything
+   * queued. Returns the number of stale bytes discarded.
+   */
+  async drain(quietMs = DRAIN_QUIET_MS, maxMs = DRAIN_MAX_MS): Promise<number> {
+    const session = this.session;
+    if (!session) return 0;
+    const started = Date.now();
+    for (;;) {
+      const now = Date.now();
+      const wait = Math.min(quietMs - (now - Math.max(session.lastChunkAt, started)), maxMs - (now - started));
+      if (wait <= 0) break;
+      await sleep(wait);
+    }
+    session.logFirstReply = true;
+    return this.discardQueued();
   }
 
   async write(data: Uint8Array): Promise<void> {
-    await this.inner.write(data);
+    this.discardQueued();
+    const run = this.writes.then(() => this.writeNow(data));
+    this.writes = run.catch(() => undefined);
+    await run;
+  }
+
+  private async writeNow(data: Uint8Array): Promise<void> {
+    const writable = this.openBaud === undefined ? null : this.port.writable;
+    if (!writable) throw new Error("Transport not open — call open() first");
+    const writer = writable.getWriter();
+    try {
+      await writer.write(data);
+    } finally {
+      writer.releaseLock();
+    }
   }
 
   /**
@@ -83,24 +182,55 @@ export class BufferedTransport implements ISTKTransport {
    * port itself, a failed open is retried: Windows CH340/FTDI drivers can refuse an open right after a close while the
    * handle is still being released. Flashing closes and reopens up to three times.
    */
-  async open(baudRate: number, options?: Record<string, unknown>): Promise<void> {
-    const opener = this.inner as ISTKTransport & { open?: (rate: number, opts?: Record<string, unknown>) => Promise<void> };
-    if (!opener.open) throw new Error("The selected serial transport cannot be opened.");
+  async open(baudRate: number): Promise<void> {
     const delays = this.closedByUs ? (this.options.reopenDelaysMs ?? REOPEN_DELAYS_MS) : [];
     for (let attempt = 0; ; attempt += 1) {
-      // WebSerialTransport.close() drops its listeners; re-attach before the read loop starts.
-      this.inner.on("data", this.handleData);
       try {
-        await opener.open(baudRate, options);
+        await this.port.open({ baudRate, bufferSize: SERIAL_BUFFER_SIZE, dataBits: 8, stopBits: 1, parity: "none", flowControl: "none" });
         break;
       } catch (error) {
         if (attempt >= delays.length || !isReopenRace(error)) throw error;
         const wait = delays[attempt];
-        this.options.log?.("warn", `serial: reopen retry ${attempt + 1}/${delays.length} after ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`, { baud: baudRate, waitMs: wait });
-        await new Promise((resolve) => setTimeout(resolve, wait));
+        this.options.log?.("warn", `serial: reopen retry ${attempt + 1}/${delays.length} after ${describeError(error)}`, { baud: baudRate, waitMs: wait });
+        await sleep(wait);
       }
     }
     this.openBaud = baudRate;
+    this.discardQueued();
+    this.reading = true;
+    this.readLoop = this.readPort();
+  }
+
+  /** The spec's read loop: a fresh reader after each recoverable error, until close() or the device is lost. */
+  private async readPort(): Promise<void> {
+    while (this.reading) {
+      const readable = this.port.readable;
+      if (!readable) {
+        this.options.log?.("error", "serial: the port stopped delivering data (no readable stream); reconnect the board");
+        return;
+      }
+      const reader = readable.getReader();
+      this.reader = reader;
+      try {
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) return; // close() cancelled the read
+          if (value && value.byteLength > 0) this.handleData(value);
+        }
+      } catch (error) {
+        if (!this.reading) return;
+        if (error instanceof Error && RECOVERABLE_READ_ERRORS.has(error.name)) {
+          this.options.log?.("warn", `serial: read error ${describeError(error)}; reading on with a fresh reader`);
+          continue;
+        }
+        if (error instanceof Error && error.name === "NetworkError") this.lostValue = true;
+        this.options.log?.("error", `serial: reading stopped after ${describeError(error)}`);
+        return;
+      } finally {
+        reader.releaseLock();
+        if (this.reader === reader) this.reader = undefined;
+      }
+    }
   }
 
   get isOpen(): boolean {
@@ -120,22 +250,23 @@ export class BufferedTransport implements ISTKTransport {
     if (event === "data") this.subscribers.delete(handler);
   }
 
+  /** The flasher's DTR/RTS, as Web Serial's names; both lines move together (boards wire either one to RESET). */
   async setSignals(opts: SerialSignals): Promise<void> {
-    if (this.signalSetter) await this.signalSetter(opts);
-    else if (this.inner.setSignals) await this.inner.setSignals(opts);
+    await this.port.setSignals(webSerialSignals(opts));
   }
 
   /** Route the port to a flasher until `endFlash()`; subscribers hear nothing meanwhile. */
   beginFlash(): FlashSession {
     if (this.session) throw new Error("A flash is already running on this port.");
-    const session = { listeners: new Set<DataListener>(), queued: [] as Uint8Array[] };
+    const session: Session = { listeners: new Set(), queued: [], queuedBytes: 0, lastChunkAt: 0, logFirstReply: false };
     this.session = session;
     return {
       write: (data) => this.write(data),
       on: (_event, handler) => {
         session.listeners.add(handler);
         const queued = session.queued.splice(0, session.queued.length);
-        for (const chunk of queued) handler(chunk);
+        session.queuedBytes = 0;
+        for (const chunk of queued) this.deliver(session, chunk);
       },
       off: (_event, handler) => {
         session.listeners.delete(handler);
@@ -156,14 +287,33 @@ export class BufferedTransport implements ISTKTransport {
     this.lostValue = true;
   }
 
-  get disconnected(): boolean {
-    return this.lostValue;
+  /** The USB device is back (the port's `connect` event). */
+  markReconnected(): void {
+    this.lostValue = false;
   }
 
+  /** Whether the board is gone right now: the port's live state where the browser has it, else the last USB event. */
+  get disconnected(): boolean {
+    const live = this.port.connected;
+    return typeof live === "boolean" ? !live : this.lostValue;
+  }
+
+  /** Cancel the pending read, let the read loop release its lock, finish any write, then close. Close errors surface. */
   async close(): Promise<void> {
+    this.reading = false;
+    const reader = this.reader;
+    if (reader) await reader.cancel().catch((error: unknown) => this.options.log?.("warn", `serial: cancelling the read failed: ${describeError(error)}`));
+    await this.readLoop;
+    await this.writes;
+    try {
+      await this.port.close();
+    } catch (error) {
+      this.options.log?.("error", `serial: close failed: ${describeError(error)}`);
+      throw new PortCloseError(describeError(error));
+    }
     this.openBaud = undefined;
     this.closedByUs = true;
-    await this.inner.close();
+    this.discardQueued();
   }
 }
 
@@ -230,17 +380,14 @@ export async function requestBoardPort(options: { onDisconnect?: () => void; log
     await port.close().catch(() => undefined);
     throw new Error("That USB device is not a supported Uno or Nano. Choose an Arduino Uno/Nano port.");
   }
-  const rawTransport = new WebSerialTransport(port);
-  const transport = new BufferedTransport(
-    rawTransport,
-    async (signals) => {
-      await port.setSignals(webSerialSignals(signals));
-    },
-    { log: options.log },
-  );
+  const transport = new BufferedTransport(port, { log: options.log });
   port.addEventListener("disconnect", () => {
     transport.markDisconnected();
     options.onDisconnect?.();
+  });
+  port.addEventListener("connect", () => {
+    transport.markReconnected();
+    options.log?.("info", "serial: port connected again");
   });
   return { transport, profile, port };
 }
@@ -260,12 +407,15 @@ export interface FlashInput {
    */
   onBoundary?: () => void;
   log?: BenchLog;
-  /** Bootloader command timeout (tests use a short one; see STK_COMMAND_TIMEOUT_MS). */
-  commandTimeoutMs?: number;
 }
 export interface FlashResult {
   baud: number;
   bytes: number;
+  /**
+   * Whether the port came back at the telemetry baud after the verified write. False means the firmware is on the board
+   * but the port has to be reconnected (unplug and replug) before the bench can hear it; it never means "re-flash".
+   */
+  reopened: boolean;
 }
 
 function flasherBoard(profile: BoardProfile, timeout: number): Board {
@@ -276,15 +426,21 @@ function flasherBoard(profile: BoardProfile, timeout: number): Board {
   };
   const board = BOARDS[key[profile.id]];
   if (!board) throw new Error(`No STK500 profile is available for ${profile.name}.`);
-  return { ...board, signature: new Uint8Array(profile.flash.signature), timeout };
+  // flashHex resets the board itself (resetIntoBootloader), so the library must not reset it again before its sync.
+  return { ...board, signature: new Uint8Array(profile.flash.signature), timeout, resetMethod: "none" };
 }
 
 export function isStkSyncFailure(error: unknown): boolean {
   return error instanceof STK500SyncError || (error instanceof Error && error.name === "STK500SyncError");
 }
 
+/** Chrome refusing DTR/RTS ("Failed to set control signals"), e.g. a Windows CH340 driver refusing the control transfer. */
+function isResetFailure(error: unknown): boolean {
+  return error instanceof Error && /setSignals|control signals/i.test(error.message);
+}
+
 export interface SerialFailure {
-  kind: "disconnect" | "busy" | "open-failed" | "sync-timeout" | "signature" | "verify" | "stalled" | "not-open" | "other";
+  kind: "disconnect" | "busy" | "open-failed" | "reset-failed" | "sync-timeout" | "signature" | "verify" | "stalled" | "not-open" | "other";
   message: string;
   technical: string;
 }
@@ -301,9 +457,11 @@ export function classifySerialError(error: unknown): SerialFailure {
   const technical = `${error instanceof Error ? `${name}: ${message}` : message}${detail ? ` (${detail})` : ""}`;
   if (name === "NetworkError" && /lost|disconnect/i.test(message)) return { kind: "disconnect", message: "The board connection was lost. Check the USB cable and power, then retry.", technical };
   // Chrome's "Failed to open serial port" covers another app holding the port, a port the OS hasn't released yet, and a
-  // board that went away; "already open" (InvalidStateError) is a port this page or tab still holds.
+  // board that went away. "Already open" (InvalidStateError) and a failed close are this page's own handle stuck open
+  // (another tab holding the port shows up as "Failed to open serial port" instead).
   if (/failed to open serial port/i.test(message)) return { kind: "open-failed", message: "The USB port would not open. Another app may be holding it (close the Arduino IDE serial monitor or another ViBread tab), or the board was unplugged — check the cable, then retry.", technical };
-  if (name === "InvalidStateError" || /already open/i.test(message)) return { kind: "busy", message: "This USB port is already open, maybe in another ViBread tab. Close that tab, then retry.", technical };
+  if (name === "InvalidStateError" || name === "PortCloseError" || /already open/i.test(message)) return { kind: "busy", message: "The USB port is stuck open in this page. Unplug the board, reload this page, then connect again.", technical };
+  if (isResetFailure(error)) return { kind: "reset-failed", message: "The board could not be reset over USB. Press and release the board's reset button, then click Retry flash within a second.", technical };
   if (isStkSyncFailure(error)) return { kind: "sync-timeout", message: "No answer from the bootloader at 115200 or 57600. Check the board type, press the board's reset button right after Retry flash, or try another USB cable.", technical };
   if (name === "STK500SignatureMismatchError") return { kind: "signature", message: "This chip is not the ATmega328P this board type expects, so nothing was written. Check the board type.", technical };
   if (name === "STK500VerifyError") return { kind: "verify", message: "The firmware was written but did not read back the same, so the board may not run it. Retry flash; if it repeats, try another USB cable.", technical };
@@ -326,19 +484,49 @@ function progressLogger(log: BenchLog | undefined): (stage: string, percent: num
 }
 
 /**
+ * avrdude's arduino-programmer reset, then its sync preamble: DTR+RTS off long enough to discharge the reset capacitor,
+ * a short on pulse (two back-to-back setSignals calls, a few ms in Web Serial) resets the chip into Optiboot, off again
+ * so a direct connection to RESET works, and a short settle. Then drain what the old sketch (or Chrome's own reset on
+ * open) left behind, and send two dummy GET_SYNCs, draining after each, so the real sync starts on a clean line.
+ */
+async function resetIntoBootloader(raw: BufferedTransport, session: FlashSession, baud: number, round: number, log: BenchLog | undefined): Promise<void> {
+  log?.("info", `flash: reset round ${round}/${RESET_ROUNDS} at ${baud} baud (DTR+RTS off ${RESET_DISCHARGE_MS} ms, pulse on, off, wait ${RESET_SETTLE_MS} ms)`);
+  await session.setSignals({ dtr: false });
+  await sleep(RESET_DISCHARGE_MS);
+  await session.setSignals({ dtr: true });
+  await session.setSignals({ dtr: false });
+  await sleep(RESET_SETTLE_MS);
+  log?.("info", `flash: drained ${await raw.drain()} stale bytes`);
+  let answered = 0;
+  for (let dummy = 0; dummy < 2; dummy += 1) {
+    await session.write(STK_GET_SYNC);
+    answered += await raw.drain();
+  }
+  log?.("info", `flash: 2 dummy GET_SYNC sent; drained ${answered} bytes after them`);
+}
+
+/**
  * Flash a server-built HEX over the board's bootloader (reset → sync → signature check → erase → upload → read-back
- * verify), trying the profile's bootloader baud and then the other common one (clone Unos often ship the old 57600
- * bootloader). The port ends open at the telemetry baud, where the new firmware says hello.
+ * verify). Each bootloader baud gets up to three reset rounds, the profile's baud first and then the other common one
+ * (clone Unos often ship the old 57600 bootloader). The port ends open at the telemetry baud, where the new firmware
+ * says hello; if only that reopen fails, the verified flash still counts (`reopened: false`).
  */
 export async function flashHex(input: FlashInput): Promise<FlashResult> {
   const { connection, hex, onProgress, log } = input;
-  const board = flasherBoard(connection.profile, input.commandTimeoutMs ?? STK_COMMAND_TIMEOUT_MS);
+  const board = flasherBoard(connection.profile, STK_COMMAND_TIMEOUT_MS);
   const bytes = parseIntelHex(hex).byteCount;
   const raw = connection.transport;
   const firstBaud = connection.profile.flash.baud;
   const bauds = [firstBaud, firstBaud === 115_200 ? 57_600 : 115_200];
   const session = raw.beginFlash();
   const logProgress = progressLogger(log);
+  const stk = new STK500(session, board, {
+    retry: SYNC_RETRY,
+    // The library's own sync/signature lines; its "<stage> (N%)" lines are logged throttled below instead.
+    logger: (level, message) => {
+      if (!/\(\d+%\)$/.test(message) && !/^resetDevice: skipped/.test(message)) log?.(level === "error" ? "error" : level === "warn" ? "warn" : "info", `flash: ${message}`);
+    },
+  });
   let flashedBaud: number | undefined;
   try {
     for (let index = 0; index < bauds.length && flashedBaud === undefined; index += 1) {
@@ -347,31 +535,39 @@ export async function flashHex(input: FlashInput): Promise<FlashResult> {
         if (raw.isOpen) await raw.close();
         log?.("info", `flash: open port at ${baud} baud`, { board: connection.profile.id, bytes });
         await raw.open(baud);
-        const stk = new STK500(session, board, {
-          // The library's own reset/sync/signature lines; its "<stage> (N%)" lines are logged throttled below instead.
-          logger: (level, message) => {
-            if (!/\(\d+%\)$/.test(message)) log?.(level === "error" ? "error" : level === "warn" ? "warn" : "info", `flash: ${message}`);
-          },
-        });
-        await stk.bootload(hex, (stage: string, percent: number) => {
-          const clamped = Math.max(0, Math.min(100, percent));
-          logProgress(stage, clamped);
-          onProgress?.({ stage: `${stage} at ${baud}`, percent: clamped });
-        });
-        flashedBaud = baud;
+        for (let round = 1; flashedBaud === undefined; round += 1) {
+          try {
+            await resetIntoBootloader(raw, session, baud, round, log);
+            await stk.bootload(hex, (stage: string, percent: number) => {
+              const clamped = Math.max(0, Math.min(100, percent));
+              logProgress(stage, clamped);
+              onProgress?.({ stage: `${stage} at ${baud}`, percent: clamped });
+            });
+            flashedBaud = baud;
+          } catch (error) {
+            if (round >= RESET_ROUNDS || !(isStkSyncFailure(error) || isResetFailure(error)) || raw.disconnected) throw error;
+            log?.("warn", `flash: no answer at ${baud} baud after reset round ${round}/${RESET_ROUNDS}; resetting again`, { error: classifySerialError(error).technical });
+          }
+        }
       } catch (error) {
-        const last = index === bauds.length - 1 || !isStkSyncFailure(error) || raw.disconnected;
+        const last = index === bauds.length - 1 || !(isStkSyncFailure(error) || isResetFailure(error)) || raw.disconnected;
         log?.(last ? "error" : "warn", `flash: failed at ${baud} baud${last ? "" : `, trying ${bauds[index + 1]}`}`, { error: classifySerialError(error).technical });
         if (last) throw error;
       }
     }
     const baud = flashedBaud ?? firstBaud;
     log?.("info", `flash: verified; reopen port at ${TELEMETRY_BAUD} baud for the bench firmware`, { flashedAt: baud });
-    await raw.close();
-    await raw.open(TELEMETRY_BAUD);
+    let reopened = true;
+    try {
+      await raw.close();
+      await raw.open(TELEMETRY_BAUD);
+    } catch (error) {
+      reopened = false;
+      log?.("error", `flash: firmware written and verified, but the port didn't reopen at ${TELEMETRY_BAUD} baud`, { error: classifySerialError(error).technical });
+    }
     input.onBoundary?.();
     raw.endFlash();
-    return { baud, bytes };
+    return { baud, bytes, reopened };
   } catch (error) {
     raw.endFlash();
     if (raw.disconnected) throw new PortDisconnectedError(classifySerialError(error).technical);

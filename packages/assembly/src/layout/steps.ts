@@ -237,10 +237,23 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
     holes: [],
     callouts: [],
   });
+  // Issue #24: the board itself is checked before anything goes on the breadboard, so a bad cable, a board that won't
+  // flash or a board without power shows up now, not after an hour of wiring. The bench flashes its safe firmware
+  // (every pin listening, nothing driven) before any test runs.
+  push({
+    kind: "checkpoint",
+    title: "Bare-board check — just the Arduino",
+    text: "Before anything goes on the breadboard, check the Arduino on its own. Plug in just the Arduino with the USB cable — no parts, no wires. On the bench: connect it, flash the safe firmware (every pin only listens, nothing is driven), then check the board has power. Unplug it again when the check passes.",
+    plug: "plugged",
+    adds: { parts: [], jumpers: [] },
+    holes: [],
+    callouts: ["Only the Arduino and its USB cable — nothing on the breadboard yet"],
+    checkpoint: { tests: ["rails.vcc"], text: "The bare Arduino connects, takes the safe firmware and is powered (USB VCC ≈ 5 V)." },
+  });
   push({
     kind: "unplug",
     title: "Unplug USB",
-    text: "USB must be unplugged before placing any part or jumper. Keep it unplugged until a checkpoint explicitly says plug in.",
+    text: "Unplug USB. It stays unplugged whenever you place a part or wire; a checkpoint tells you when to plug in again.",
     plug: "unplugged",
     adds: { parts: [], jumpers: [] },
     holes: [],
@@ -293,7 +306,7 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
   push({
     kind: "checkpoint",
     title: "Power checkpoint — plug in",
-    text: `Plug in the USB cable. ViBread checks that the board is powered and responding (USB VCC about 5 V) before anything else runs.${railTest} Unplug again before touching the build.`,
+    text: `Plug in the USB cable. With the rail wires in, ViBread checks that the board is still powered and responding (USB VCC about 5 V) before any part goes in.${railTest} Unplug again before touching the build.`,
     plug: "plugged",
     adds: { parts: [], jumpers: [] },
     holes: [],

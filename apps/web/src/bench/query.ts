@@ -2,6 +2,8 @@ import { TEST_IDS, type TestId } from "@vibread/core";
 
 export interface BenchQuery {
   tests: TestId[];
+  /** The build step whose checkpoint opened the bench; its runs are recorded against that step. */
+  step?: number;
   returnTo?: string;
 }
 
@@ -10,7 +12,8 @@ export function parseBenchQuery(search: string): BenchQuery {
   const tests = (params.get("tests") ?? "").split(",").filter((value): value is TestId => (TEST_IDS as readonly string[]).includes(value));
   const returnToValue = params.get("returnTo") ?? undefined;
   const returnTo = returnToValue?.startsWith("/m/") ? returnToValue : undefined;
-  return { tests: [...new Set(tests)], returnTo };
+  const step = Number(params.get("step"));
+  return { tests: [...new Set(tests)], ...(Number.isInteger(step) && step > 0 ? { step } : {}), returnTo };
 }
 
 export function testLabel(test: TestId): string {

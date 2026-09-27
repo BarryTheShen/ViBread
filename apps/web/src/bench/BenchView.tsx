@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
-import { Link, useParams, useSearchParams } from "react-router";
+import { Link, useSearchParams } from "react-router";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import type { SxProps, Theme } from "@mui/material/styles";
@@ -46,6 +46,8 @@ import { parseBenchQuery, testLabel } from "./query.js";
 
 const STEPS = ["Connect your board", "Make it safe", "Check power", "Test each part", "Find the problem", "Run your project", "Celebrate"];
 const BOARD_LOST_POWER = "The board lost power or stopped answering when you plugged in — unplug now and check for a short between the red + and blue − rails, or a part bridging them.";
+/** The power check's watchdog: past the runner's own worst case (3 hello requests 2 s apart, then 5 s for VCC). */
+const RAIL_WATCHDOG_MS = 13_000;
 
 interface FirmwareResponse {
   hex: string;
@@ -195,6 +197,8 @@ function cleanTelemetryLog(lines: string[]): string[] {
 }
 
 const actionButtonSx = { minHeight: 46, borderRadius: 2 } as const;
+/** Rows sit side by side only when the bench itself (the mission panel, a size container) is wide enough. */
+const WIDE_PANEL = "@container (min-width: 760px)";
 
 /** The breadboard drawing with the highlighted fault area and, on the virtual board, the parts' live state. */
 function DecoratedBoard({ svg, highlight, telemetry, sx }: { svg: string; highlight: SvgHighlight; telemetry: TelemetryStore; sx: SxProps<Theme> }): ReactElement {
@@ -203,8 +207,12 @@ function DecoratedBoard({ svg, highlight, telemetry, sx }: { svg: string; highli
   return <Box sx={sx} dangerouslySetInnerHTML={{ __html: html }} />;
 }
 
-export default function BenchPage(): ReactElement | null {
-  const { missionId = "" } = useParams<{ missionId: string }>();
+/**
+ * The bench as a view of the mission panel (`/m/:id?panel=bench`, issue #24): flash and self-test the build target on a
+ * USB board or the virtual board. `?tests=&returnTo=` (from a build step's checkpoint) scope it to those tests. Every
+ * physical action still waits for an explicit click here.
+ */
+export function BenchView({ missionId }: { missionId: string }): ReactElement | null {
   const [searchParams] = useSearchParams();
   const benchQuery = useMemo(() => parseBenchQuery(searchParams.toString()), [searchParams]);
   const subsetTests = benchQuery.tests;
@@ -242,7 +250,8 @@ export default function BenchPage(): ReactElement | null {
   const virtualRef = useRef<VirtualBenchTransport | undefined>(undefined);
   const connectionRef = useRef<BoardPortConnection | undefined>(undefined);
   const runnerRef = useRef<BenchRunner | undefined>(undefined);
-  const railRequestAt = useRef<number | undefined>(undefined);
+  /** When "Check board power" was clicked; the power watchdog runs only from a real request. */
+  const [railRequestAt, setRailRequestAt] = useState<number | undefined>(undefined);
   const currentAskIdForBridge = runnerState?.asks[0]?.id;
   const currentAskValue = currentAskIdForBridge === undefined ? undefined : runnerState?.answers[currentAskIdForBridge];
 
@@ -350,7 +359,7 @@ export default function BenchPage(): ReactElement | null {
   }, [currentAskIdForBridge, currentAskValue]);
 
   useEffect(() => {
-    if (activeStep !== 2 || !railRequestAt.current) return undefined;
+    if (activeStep !== 2 || railRequestAt === undefined) return undefined;
     const timer = window.setTimeout(() => {
       const current = runnerRef.current?.state;
       if (!current?.seenHello || !current.seenVcc) {
@@ -358,9 +367,9 @@ export default function BenchPage(): ReactElement | null {
         current && runnerRef.current?.fail(message);
         setError(message);
       }
-    }, 5000);
+    }, RAIL_WATCHDOG_MS);
     return () => window.clearTimeout(timer);
-  }, [activeStep]);
+  }, [activeStep, railRequestAt]);
 
   useEffect(() => {
     const candidate = run?.diagnosis.candidates[selectedCandidate];
@@ -483,11 +492,17 @@ export default function BenchPage(): ReactElement | null {
         if (!selected) throw new Error("Connect the board before flashing safe firmware.");
         log("info", `flash: safe firmware for design ${loaded.plan.design} on ${selected.profile.name}`);
         const flashed = await flashHex({ connection: selected, hex: firmware.hex, onProgress: setFlashProgress, onBoundary: () => runnerRef.current?.markFlashBoundary(), log });
-        log("info", `flash: done — ${flashed.bytes} bytes at ${flashed.baud} baud; waiting for the new firmware's hello`);
-        setFlashProgress({ stage: `Flashed and verified ✓ (${flashed.bytes.toLocaleString()} bytes at ${flashed.baud})`, percent: 100 });
+        log("info", `flash: done — ${flashed.bytes} bytes at ${flashed.baud} baud; ${flashed.reopened ? "waiting for the new firmware's hello" : "the port didn't reopen"}`);
+        setFlashProgress({
+          stage: flashed.reopened
+            ? `Flashed and verified ✓ (${flashed.bytes.toLocaleString()} bytes at ${flashed.baud})`
+            : "Firmware written and verified ✓; the USB port didn't reopen — unplug and replug the board, then Check board power",
+          percent: 100,
+        });
       } else {
         setFlashProgress({ stage: "Virtual flash skipped", percent: 100 });
       }
+      setRailRequestAt(undefined);
       setActiveStep(2);
     } catch (reason: unknown) {
       const failure = classifySerialError(reason);
@@ -508,6 +523,7 @@ export default function BenchPage(): ReactElement | null {
     setError(undefined);
     setTechnicalError(undefined);
     setFlashProgress({ stage: "Already running this design's safe firmware — flash skipped", percent: 100 });
+    setRailRequestAt(undefined);
     setActiveStep(2);
   }, [log]);
 
@@ -517,8 +533,14 @@ export default function BenchPage(): ReactElement | null {
     setError(undefined);
     setTechnicalError(undefined);
     setErrorFix(undefined);
-    railRequestAt.current = Date.now();
+    setRailRequestAt(Date.now());
     try {
+      // After a flash whose reopen failed (the child unplugged and replugged the board), open the port again here.
+      const selected = mode === "physical" ? connectionRef.current : undefined;
+      if (selected && !selected.transport.isOpen) {
+        log("info", `serial: opening the port at ${TELEMETRY_BAUD} baud for the power check`);
+        await selected.transport.open(TELEMETRY_BAUD);
+      }
       await runner.startRail();
     } catch (reason: unknown) {
       const presented = serialPresentation(reason);
@@ -526,8 +548,10 @@ export default function BenchPage(): ReactElement | null {
       runner.fail(presented.message);
       setError(presented.message);
       setTechnicalError(presented.technical);
-      setErrorFix(reason instanceof BoardCheckError ? "flash" : classifySerialError(reason).kind === "disconnect" ? "reconnect" : undefined);
+      const kind = classifySerialError(reason).kind;
+      setErrorFix(reason instanceof BoardCheckError ? "flash" : kind === "disconnect" || kind === "open-failed" || kind === "not-open" ? "reconnect" : undefined);
     } finally {
+      setRailRequestAt(undefined);
       setBusy(undefined);
     }
   }, [log, mode, runner]);
@@ -562,7 +586,7 @@ export default function BenchPage(): ReactElement | null {
         result = await readJson<BenchRunResponse>(`/api/missions/${encodeURIComponent(missionId)}/bench/runs`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ...request, runId: runner.runId }),
+          body: JSON.stringify({ ...request, runId: runner.runId, ...(benchQuery.step ? { step: benchQuery.step } : {}) }),
         });
       } catch (serverReason: unknown) {
         if (mode !== "virtual") throw serverReason;
@@ -576,6 +600,7 @@ export default function BenchPage(): ReactElement | null {
 
           runId: runner.runId,
         });
+        if (benchQuery.step) result.step = benchQuery.step;
       }
       setRun(result);
       setSelectedCandidate(0);
@@ -585,7 +610,7 @@ export default function BenchPage(): ReactElement | null {
     } finally {
       setBusy(undefined);
     }
-  }, [loaded, missionId, mode, runner]);
+  }, [loaded, missionId, mode, runner, benchQuery.step]);
   const downloadFirmware = useCallback(async (kind: "bench" | "app"): Promise<void> => {
     if (!missionId) return;
     setBusy(`download:${kind}`);
@@ -622,8 +647,13 @@ export default function BenchPage(): ReactElement | null {
         if (!selected) throw new Error("Connect the board before flashing app firmware.");
         log("info", `flash: your project's firmware on ${selected.profile.name}`);
         const flashed = await flashHex({ connection: selected, hex: firmware.hex, onProgress: setFlashProgress, onBoundary: () => runnerRef.current?.markFlashBoundary(), log });
-        log("info", `flash: done — ${flashed.bytes} bytes at ${flashed.baud} baud`);
-        setFlashProgress({ stage: `Flashed and verified ✓ (${flashed.bytes.toLocaleString()} bytes at ${flashed.baud})`, percent: 100 });
+        log("info", `flash: done — ${flashed.bytes} bytes at ${flashed.baud} baud${flashed.reopened ? "" : "; the port didn't reopen"}`);
+        setFlashProgress({
+          stage: flashed.reopened
+            ? `Flashed and verified ✓ (${flashed.bytes.toLocaleString()} bytes at ${flashed.baud})`
+            : "Your firmware is written and verified ✓; the USB port didn't reopen — unplug and replug the board to watch its serial output",
+          percent: 100,
+        });
       } else {
         if (!virtualRef.current) throw new Error("Connect the virtual board before running app firmware.");
         runnerRef.current?.dispose();
@@ -744,7 +774,7 @@ export default function BenchPage(): ReactElement | null {
       telemetry.set(undefined);
       setHighlight({ holes: [], parts: [], jumpers: [] });
       setError(undefined);
-      railRequestAt.current = undefined;
+      setRailRequestAt(undefined);
       setActiveStep(2);
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -767,15 +797,15 @@ export default function BenchPage(): ReactElement | null {
   if (authRequired) return null;
   if (!loaded) {
     return (
-      <Box sx={{ minHeight: "100vh", p: { xs: 2, md: 5 } }}>
-        <Button component={Link} to={`/m/${missionId}`} sx={actionButtonSx}>← Mission control</Button>
-        {loadError ? <Alert severity="error" sx={{ mt: 3 }}>{loadError}</Alert> : <Stack sx={{ mt: 10, alignItems: "center" }}><CircularProgress /><Typography sx={{ mt: 2 }}>Loading the released revision…</Typography></Stack>}
+      <Box>
+        {loadError ? <Alert severity="error">{loadError}</Alert> : <Stack sx={{ mt: 6, alignItems: "center" }}><CircularProgress /><Typography sx={{ mt: 2 }}>Loading the released revision…</Typography></Stack>}
       </Box>
     );
   }
 
   const railReady = Boolean(runnerState?.seenHello && runnerState.seenVcc);
   const pendingAsks = (runnerState?.asks ?? []).filter((ask) => runnerState?.answers[ask.id] === undefined);
+  const showPromptColumn = pendingAsks.length > 0 || remoteAnswer !== undefined || Boolean(runnerState?.done);
   const topCandidate = run?.verdict === "pass" ? undefined : run?.diagnosis.candidates[selectedCandidate];
   const indistinguishable = run !== undefined && /indistinguishable|equally likely|cannot distinguish/i.test(run.diagnosis.summary);
   const allLines = runnerState?.rawLines ?? [];
@@ -814,42 +844,39 @@ export default function BenchPage(): ReactElement | null {
   const alreadyFlashed = connectHello !== undefined && connectHello.design === loaded.plan.design && connectHello.board === loaded.plan.board;
 
   return (
-    <Box sx={{ minHeight: "100%", p: { xs: 2, md: 4 }, bgcolor: "background.default", color: "text.primary" }}>
-      <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mb: 3, alignItems: { sm: "center" }, justifyContent: "space-between" }}>
-        <Box>
-          <Button component={Link} to={`/m/${missionId}`} sx={{ ...actionButtonSx, mb: 1 }}>← Back to conversation</Button>
-          <Typography variant="h3" sx={{ fontWeight: 800, letterSpacing: "-.03em" }}>Bench / Verify</Typography>
-          <Typography color="text.secondary">Mission Control for your breadboard · {loaded.revision.circuit.title}</Typography>
+    // A size container: the bench sits in the resizable mission panel, so its rows follow the panel's width, not the window's.
+    <Box sx={{ containerType: "inline-size", color: "text.primary" }}>
+      <Stack direction="row" spacing={1} useFlexGap sx={{ mb: 2, alignItems: "center", flexWrap: "wrap" }}>
+        <Box sx={{ flex: "1 1 220px" }}>
+          <Typography variant="h6" component="h2">Bench</Typography>
+          <Typography variant="body2" color="text.secondary">Flash and self-test design r{loaded.revision.n} on your board, or practise on the virtual board.</Typography>
         </Box>
-        <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
-          <Chip label={`Revision ${loaded.revision.n}`} color="primary" variant="outlined" />
-          <Chip label={`Design ${loaded.revision.hash.slice(0, 10)}`} variant="outlined" />
-          <Chip label={mode === "virtual" ? "Virtual board" : currentProfile?.name ?? "No board"} color={mode === "virtual" ? "info" : currentProfile ? "success" : "default"} />
-        </Stack>
+        <Chip label={mode === "virtual" ? "Virtual board" : currentProfile?.name ?? "No board"} color={mode === "virtual" ? "info" : currentProfile ? "success" : "default"} />
       </Stack>
       {subsetTests.length > 0 && <Alert severity="info" action={benchQuery.returnTo ? <Button component={Link} to={benchQuery.returnTo} color="inherit" size="small">Back to step</Button> : undefined}>Checking this subsection: {subsetTests.map(testLabel).join(", ")}.</Alert>}
 
-      <Stepper activeStep={activeStep} alternativeLabel sx={{ mb: 4 }}>
-        {STEPS.map((label) => <Step key={label}><StepLabel>{label}</StepLabel></Step>)}
+      {/* Seven labels need room: under 640 px of panel only the current step keeps its label. */}
+      <Stepper activeStep={activeStep} alternativeLabel sx={{ mb: 3, "@container (max-width: 640px)": { "& .MuiStep-root:not(.Mui-active) .MuiStepLabel-label": { display: "none" } } }}>
+        {STEPS.map((label, index) => <Step key={label} className={index === activeStep ? "Mui-active" : undefined}><StepLabel>{label}</StepLabel></Step>)}
       </Stepper>
 
       <Stack spacing={2.5}>
         <Card>
           <CardContent>
-            <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ justifyContent: "space-between", alignItems: { md: "center" } }}>
+            <Stack spacing={2} useFlexGap sx={{ justifyContent: "space-between", flexDirection: "column", [WIDE_PANEL]: { flexDirection: "row", alignItems: "center" } }}>
               <Box>
                 <Typography variant="h5" sx={{ fontWeight: 700 }}>Choose your bench</Typography>
                 <Typography color="text.secondary" sx={{ mt: 0.5 }}>Physical actions stay behind an explicit click in this page. "Try without a board" runs the same self-test on a simulated Arduino, so you can practise before plugging anything in.</Typography>
               </Box>
-              <Stack direction="row" spacing={1}>
-                <Button variant={mode === "virtual" ? "contained" : "outlined"} onClick={() => setMode("virtual")} sx={actionButtonSx}>Try without a board</Button>
-                <Button variant={mode === "physical" ? "contained" : "outlined"} onClick={() => setMode("physical")} sx={actionButtonSx}>Use USB board</Button>
+              <Stack direction="row" spacing={1} useFlexGap sx={{ flexShrink: 0, flexWrap: "wrap" }}>
+                <Button variant={mode === "virtual" ? "contained" : "outlined"} onClick={() => setMode("virtual")} sx={{ ...actionButtonSx, whiteSpace: "nowrap" }}>Try without a board</Button>
+                <Button variant={mode === "physical" ? "contained" : "outlined"} onClick={() => setMode("physical")} sx={{ ...actionButtonSx, whiteSpace: "nowrap" }}>Use USB board</Button>
               </Stack>
             </Stack>
             {lastRun && <Alert severity={lastRun.verdict === "pass" ? "success" : "warning"} sx={{ mt: 2 }}>Last self-test: {lastRun.verdict.toUpperCase()} · {lastRun.diagnosis.summary}</Alert>}
             {mode === "virtual" && (
-              <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mt: 2, alignItems: { md: "flex-end" } }}>
-                <FormControl size="small" sx={{ minWidth: 290 }}>
+              <Stack spacing={2} useFlexGap sx={{ mt: 2, flexDirection: "column", [WIDE_PANEL]: { flexDirection: "row", alignItems: "flex-end" } }}>
+                <FormControl size="small" sx={{ minWidth: "min(290px, 100%)" }}>
                   <InputLabel id="virtual-fault-label">Inject a wiring fault</InputLabel>
                   <Select labelId="virtual-fault-label" value={fault} label="Inject a wiring fault" onChange={(event) => setFault(event.target.value as VirtualFault)}>
                     <MenuItem value="none">{faultLabel("none")}</MenuItem>
@@ -871,7 +898,7 @@ export default function BenchPage(): ReactElement | null {
                     <Typography color="text.secondary" variant="body2">Look for Arduino Uno/Nano or a CH340 / FTDI / CP2102 bridge. ViBread filters the chooser to these USB IDs; never choose a keyboard, mouse, or charge-only cable.</Typography>
                   </Box>
                 </Stack>
-                <FormControl size="small" sx={{ mt: 2, minWidth: 290 }}>
+                <FormControl size="small" sx={{ mt: 2, minWidth: "min(290px, 100%)" }}>
                   <InputLabel id="board-profile-label">Bootloader profile</InputLabel>
                   <Select labelId="board-profile-label" value={boardProfileChoice} label="Bootloader profile" onChange={(event) => setBoardProfileChoice(event.target.value as BoardProfileId | "auto")}>
                     <MenuItem value="auto">Auto-detect from USB ID</MenuItem>
@@ -947,15 +974,16 @@ export default function BenchPage(): ReactElement | null {
         {activeStep >= 3 && (
           <Card>
             <CardContent>
-              <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ justifyContent: "space-between" }}>
+              <Stack spacing={2} useFlexGap sx={{ justifyContent: "space-between", flexDirection: "column", [WIDE_PANEL]: { flexDirection: "row" } }}>
                 <Box>
                   <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 4 · Test each part</Typography>
                   <Typography color="text.secondary" sx={{ mt: 0.5 }}>We look first, then gently test each button, sensor, buzzer, and light.</Typography>
                 </Box>
                 <Chip label={`${runnerState?.lines.length ?? 0} telemetry lines`} color="info" variant="outlined" />
               </Stack>
-              <Stack direction={{ xs: "column", lg: "row" }} spacing={2} sx={{ mt: 2, alignItems: "flex-start" }}>
-                <Box sx={{ flex: 1, minWidth: 0 }}>
+              {/* The prompt sits beside the board only while there is one; otherwise the board gets the full width. */}
+              <Stack spacing={2} useFlexGap sx={{ mt: 2, flexDirection: "column", "@container (min-width: 900px)": { flexDirection: "row", alignItems: "flex-start" } }}>
+                {showPromptColumn && <Box sx={{ flex: 1, minWidth: 0, width: "100%" }}>
                   {pendingAsks.length > 0 && (
                     <Stack spacing={2}>
                       {pendingAsks.map((ask) => {
@@ -973,7 +1001,7 @@ export default function BenchPage(): ReactElement | null {
                   )}
                   {remoteAnswer && <Alert severity="info" sx={{ mt: 2 }}>Answered from iMessage by {remoteAnswer.by}: {remoteAnswer.value}</Alert>}
                   {runnerState?.done && <Alert severity="info" sx={{ mt: 2 }}>All device tests finished. Preparing the Houston diagnosis…</Alert>}
-                </Box>
+                </Box>}
                 {mode === "virtual" && (
                   <Paper variant="outlined" sx={{ flex: 1, minWidth: 0, width: "100%", p: 1.5 }}>
                     <Typography variant="subtitle2">Virtual board — watch the lights here</Typography>
@@ -990,7 +1018,7 @@ export default function BenchPage(): ReactElement | null {
         {activeStep >= 4 && run && (
           <Card>
             <CardContent>
-              <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ justifyContent: "space-between", alignItems: { md: "center" } }}>
+              <Stack spacing={2} useFlexGap sx={{ justifyContent: "space-between", flexDirection: "column", [WIDE_PANEL]: { flexDirection: "row", alignItems: "center" } }}>
                 <Box>
                   <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 5 · Find the problem</Typography>
                   <Typography variant="h6" sx={{ mt: 1, color: run.verdict === "pass" ? "success.main" : "warning.main" }}>{run.verdict === "pass" ? "Houston, we are GO." : run.diagnosis.summary}</Typography>
@@ -998,7 +1026,7 @@ export default function BenchPage(): ReactElement | null {
                 </Box>
                 <Chip label={run.verdict.toUpperCase()} color={run.verdict === "pass" ? "success" : "warning"} />
               </Stack>
-              <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ mt: 2 }}>
+              <Stack spacing={2} useFlexGap sx={{ mt: 2, flexDirection: "column", [WIDE_PANEL]: { flexDirection: "row" } }}>
                 <Box sx={{ flex: 1 }}>
                   {run.verdict === "pass" ? <Alert severity="success">No wiring fault found. The self-test agrees with the released design.</Alert> : run.verdict === "incomplete" ? <Alert severity="warning">We did not get an answer for {timedOutPrompt}. Nothing was blamed on your wiring. <Button color="inherit" size="small" onClick={restartSelfTest}>Run the self-test again</Button></Alert> : run.diagnosis.candidates.length === 0 ? <Alert severity="warning">No single wiring cause was identified. Check the highlighted area, then rerun the self-test.</Alert> : <Stack spacing={1}>{run.diagnosis.candidates.map((candidate, index) => <Button key={candidate.cause} variant={selectedCandidate === index ? "contained" : "outlined"} onClick={() => setSelectedCandidate(index)} sx={{ ...actionButtonSx, justifyContent: "space-between", textAlign: "left" }}><span>{index + 1}. {candidate.title}</span><span>{Math.round(candidate.likelihood * 100)}%</span></Button>)}</Stack>}
                   {run.verdict !== "pass" && run.verdict !== "incomplete" && (indistinguishable ? <Stack spacing={1} sx={{ mt: 2 }}>{run.diagnosis.candidates.slice(0, 2).map((candidate) => <Paper key={candidate.cause} variant="outlined" sx={{ p: 2 }}><Typography sx={{ fontWeight: 700 }}>{candidate.title}</Typography><Typography color="text.secondary">{candidate.fix}</Typography></Paper>)}</Stack> : topCandidate ? <Paper variant="outlined" sx={{ p: 2, mt: 2 }}><Typography sx={{ fontWeight: 700 }}>Recommended fix</Typography><Typography color="text.secondary">{topCandidate.fix}</Typography></Paper> : null)}
@@ -1021,7 +1049,6 @@ export default function BenchPage(): ReactElement | null {
             <Typography variant="h2" sx={{ fontWeight: 900 }}>Mission verified</Typography>
             <Typography variant="h6" color="text.secondary" sx={{ mt: 1 }}>The bench telemetry agrees with the design. ViBread is GO for launch.</Typography>
             {mode === "virtual" && <><Typography variant="body2" sx={{ mt: 2 }}>Your project firmware is running on the virtual board.</Typography><DecoratedBoard svg={loaded.boardSvg} highlight={highlight} telemetry={telemetry} sx={{ maxWidth: 720, mx: "auto", mt: 2, "& svg": { display: "block", width: "100%", height: "auto" } }} /></>}
-            <Button component={Link} to={`/m/${missionId}`} variant="contained" sx={{ ...actionButtonSx, mt: 3 }}>Return to mission control</Button>
           </Paper>
         )}
 
@@ -1033,7 +1060,7 @@ export default function BenchPage(): ReactElement | null {
               {benchArtifactUrl ? <Button component="a" href={benchArtifactUrl} download="bench.hex" variant="outlined" sx={actionButtonSx}>Download bench.hex</Button> : <Button onClick={() => void downloadFirmware("bench")} disabled={Boolean(busy)} variant="outlined" sx={actionButtonSx}>Download bench.hex</Button>}
               {appArtifactUrl ? <Button component="a" href={appArtifactUrl} download="app.hex" variant="outlined" sx={actionButtonSx}>Download app.hex</Button> : <Button onClick={() => void downloadFirmware("app")} disabled={Boolean(busy)} variant="outlined" sx={actionButtonSx}>Download app.hex</Button>}
             </Stack>
-            {fallbackUpload && <Stack direction={{ xs: "column", md: "row" }} spacing={1} sx={{ mt: 1, alignItems: { md: "center" } }}>
+            {fallbackUpload && <Stack spacing={1} useFlexGap sx={{ mt: 1, flexDirection: "column", [WIDE_PANEL]: { flexDirection: "row", alignItems: "center" } }}>
               <Box component="code" sx={{ display: "block", flex: 1, fontFamily: MONO_FONT, overflowX: "auto" }}>{fallbackCommand(fallbackUpload)}</Box>
               <Button variant="outlined" size="small" onClick={() => void navigator.clipboard?.writeText(fallbackCommand(fallbackUpload))}>Copy command</Button>
             </Stack>}
