@@ -199,6 +199,9 @@ export function MissionActions({ title, actions, onRename, extraItems, buttonLab
       <Snackbar open={Boolean(actions.exportError)} autoHideDuration={7000} onClose={actions.clearExportError}>
         <Alert severity="error" onClose={actions.clearExportError}>Couldn't export the project: {actions.exportError}</Alert>
       </Snackbar>
+      <Snackbar open={actions.duplicate.isError} autoHideDuration={7000} onClose={() => actions.duplicate.reset()}>
+        <Alert severity="error" onClose={() => actions.duplicate.reset()}>Couldn't duplicate the mission: {errorText(actions.duplicate.error)}</Alert>
+      </Snackbar>
     </>
   );
 }
