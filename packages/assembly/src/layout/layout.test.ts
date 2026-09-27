@@ -600,3 +600,119 @@ describe("rails step and power checkpoint (issue #18)", () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Issue #19: every jumper is drawn as a visible wire whatever its length, and its step label never hides it.
+
+type Pt2 = { x: number; y: number };
+
+/** Points along an SVG path made of M / Q / C commands (what renderJumper emits). */
+function samplePath(d: string): Pt2[] {
+  const numbers = (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number);
+  const commands = d.match(/[MQC]/g) ?? [];
+  const points: Pt2[] = [];
+  let index = 0;
+  let current: Pt2 = { x: 0, y: 0 };
+  const take = (): Pt2 => ({ x: numbers[index++]!, y: numbers[index++]! });
+  for (const command of commands) {
+    if (command === "M") {
+      current = take();
+      points.push(current);
+    } else if (command === "Q") {
+      const [c, end] = [take(), take()];
+      for (let t = 0.05; t <= 1.0001; t += 0.05) points.push({ x: (1 - t) ** 2 * current.x + 2 * (1 - t) * t * c.x + t * t * end.x, y: (1 - t) ** 2 * current.y + 2 * (1 - t) * t * c.y + t * t * end.y });
+      current = end;
+    } else {
+      const [c1, c2, end] = [take(), take(), take()];
+      for (let t = 0.05; t <= 1.0001; t += 0.05) {
+        const u = 1 - t;
+        points.push({ x: u ** 3 * current.x + 3 * u * u * t * c1.x + 3 * u * t * t * c2.x + t ** 3 * end.x, y: u ** 3 * current.y + 3 * u * u * t * c1.y + 3 * u * t * t * c2.y + t ** 3 * end.y });
+      }
+      current = end;
+    }
+  }
+  return points;
+}
+
+/** Checks every jumper drawn in `svg`: a real path, visibly long, not covered by its label. Returns the ids seen. */
+function assertJumpersVisible(svg: string, context: string): string[] {
+  const seen: string[] = [];
+  for (const match of svg.matchAll(/<g id="wire-(W\d+)"[^>]*>([\s\S]*?)<\/g>/g)) {
+    const [, id, body] = match;
+    const d = body!.match(/<path d="([^"]+)" stroke="[^"]+" class="wire-path"/)?.[1];
+    expect(d, `${context} ${id}: coloured wire path`).toBeDefined();
+    const points = samplePath(d!);
+    let length = 0;
+    for (let i = 1; i < points.length; i += 1) length += Math.hypot(points[i]!.x - points[i - 1]!.x, points[i]!.y - points[i - 1]!.y);
+    // At least ~2 hole pitches of drawn wire, and it rises clear of the hole markers (radius 5) somewhere.
+    expect(length, `${context} ${id}: drawn length`).toBeGreaterThan(30);
+    const [start, end] = [points[0]!, points.at(-1)!];
+    const farthest = Math.max(...points.map((point) => Math.min(Math.hypot(point.x - start.x, point.y - start.y), Math.hypot(point.x - end.x, point.y - end.y))));
+    expect(farthest, `${context} ${id}: wire leaves its holes`).toBeGreaterThan(12);
+    const tag = svg.match(new RegExp(`data-jumper-label="${id}"><rect x="([\\d.-]+)" y="([\\d.-]+)" width="([\\d.]+)" height="([\\d.]+)"`));
+    if (tag) {
+      const [x, y, w, h] = tag.slice(1).map(Number) as [number, number, number, number];
+      const inside = (point: Pt2, pad: number) => point.x > x - pad && point.x < x + w + pad && point.y > y - pad && point.y < y + h + pad;
+      expect(inside(start, 6) || inside(end, 6), `${context} ${id}: label covers an end`).toBe(false);
+      expect(points.filter((point) => inside(point, 0)).length / points.length, `${context} ${id}: label covers the wire`).toBeLessThan(0.2);
+    }
+    seen.push(id!);
+  }
+  return seen;
+}
+
+/** Five LEDs on D2–D6 with resistors, the design from issue #19. */
+function binaryCounter(): Circuit {
+  const bits = [1, 2, 3, 4, 5];
+  return circuitOf({
+    parts: [...bits.map((i) => ({ id: `LED${i}`, module: "led", params: { color: "red" } })), ...bits.map((i) => ({ id: `R${i}`, module: "resistor", params: { ohms: 220 } }))],
+    nets: [
+      { id: "GND", kind: "ground", pins: [board("GND"), ...bits.map((i) => pin(`LED${i}`, "K"))] },
+      ...bits.map((i) => ({ id: `D${i + 1}`, kind: "signal", pins: [board(`D${i + 1}`), pin(`R${i}`, "1")] })),
+      ...bits.map((i) => ({ id: `L${i}`, kind: "signal", pins: [pin(`R${i}`, "2"), pin(`LED${i}`, "A")] })),
+    ],
+    roles: bits.map((i) => ({ pin: `D${i + 1}`, mode: "OUTPUT", part: `LED${i}`, purpose: `bit ${i}` })),
+  });
+}
+
+describe("jumper drawings (issue #19)", () => {
+  const designs: [string, Circuit][] = [
+    ...GOLDEN.map((design) => [design.key, design.circuit] as [string, Circuit]),
+    ["piano-rev4", piano(false)],
+    ["piano-rev5", piano(true)],
+    ["whack-a-mole", whackAMole({ groups: true })],
+    ["binary-counter", binaryCounter()],
+  ];
+
+  it.each(designs)("%s: every step's new wires and the finished board draw every jumper visibly", (key, circuit) => {
+    const layout = layoutBoard(circuit);
+    const steps = buildSteps(circuit, layout);
+    expect(assertJumpersVisible(renderBreadboardSvg({ circuit, layout, steps }), `${key} board`).sort()).toEqual(layout.jumpers.map((jumper) => jumper.id).sort());
+    for (const step of steps.steps.filter((entry) => entry.adds.jumpers.length > 0)) {
+      for (const focus of [false, true]) {
+        const svg = renderBreadboardSvg({ circuit, layout, steps, upToStep: step.n, focus });
+        const seen = assertJumpersVisible(svg, `${key} step ${step.n}${focus ? " focus" : ""}`);
+        for (const id of step.adds.jumpers) {
+          expect(seen, `${key} step ${step.n}`).toContain(id);
+          expect(svg, `${key} step ${step.n}: ${id} labelled`).toContain(`data-jumper-label="${id}"`);
+          // The step's own wires are drawn after (on top of) the parts.
+          expect(svg.indexOf(`id="wire-${id}"`)).toBeGreaterThan(svg.lastIndexOf('<g id="part-'));
+        }
+      }
+    }
+  });
+
+  it("draws the issue's same-row two-hole jumper (a11 → a9) as a visible arc with its label beside it", () => {
+    const circuit = binaryCounter();
+    const base = layoutBoard(circuit);
+    const layout: Layout = { ...base, jumpers: [...base.jumpers, { id: "W99", from: { hole: "a11" }, to: { hole: "a9" }, color: "yellow", net: "L1" }] };
+    const steps = buildSteps(circuit, layout);
+    const step = steps.steps.find((entry) => entry.adds.jumpers.includes("W99"))!;
+    for (const focus of [false, true]) expect(assertJumpersVisible(renderBreadboardSvg({ circuit, layout, steps, upToStep: step.n, focus }), `a11→a9${focus ? " focus" : ""}`)).toContain("W99");
+    // Also a jumper whose two ends are in the same strip column (vertical hop) and a zero-length one.
+    const hop: Layout = { ...base, jumpers: [...base.jumpers, { id: "W98", from: { hole: "c40" }, to: { hole: "e40" }, color: "blue", net: "L2" }] };
+    const hopSteps = buildSteps(circuit, hop);
+    const hopStep = hopSteps.steps.find((entry) => entry.adds.jumpers.includes("W98"))!;
+    expect(assertJumpersVisible(renderBreadboardSvg({ circuit, layout: hop, steps: hopSteps, upToStep: hopStep.n }), "c40→e40")).toContain("W98");
+  });
+});

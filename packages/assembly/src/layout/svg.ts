@@ -187,7 +187,11 @@ function focusViewBox(input: RenderInput, state: ViewState, pins: Map<string, Po
   for (const jumperId of state.newJumpers) {
     const jumper = jumpers.get(jumperId);
     if (!jumper) continue;
-    points.push(endpointPoint(input.layout, jumper.from, pins), endpointPoint(input.layout, jumper.to, pins));
+    const from = endpointPoint(input.layout, jumper.from, pins);
+    const to = endpointPoint(input.layout, jumper.to, pins);
+    // Keep the wire's arc and its step label in the crop too.
+    const text = `${jumper.id} ${jumper.net}`;
+    points.push(from, to, jumperGeometry(from, to, Math.max(48, text.length * 7 + 14), 18).label);
   }
   if (points.length === 0) return undefined;
   const rowPitch = (BOARD_RIGHT - BOARD_LEFT) / Math.max(1, boardRows(input.layout) - 1);
@@ -416,18 +420,69 @@ function endpointLabel(endpoint: Jumper["from"]): string {
   return "board" in endpoint ? `Arduino ${endpoint.board}` : endpoint.hole;
 }
 
-function renderJumper(input: RenderInput, jumper: Jumper, pins: Map<string, Point>, state: ViewState): string {
-  if (state.visibleJumpers && !state.visibleJumpers.has(jumper.id)) return "";
+/** Shortest jumper drawn as a plain curve; shorter ones become an arc with a visible bow (issue #19). */
+const SHORT_JUMPER = 90;
+
+/**
+ * Wire path and the spot for its step label. Long wires keep the S-curve; short ones (a11 → a9) are a quadratic arc
+ * bowing away from the holes (upward, or leftward for a vertical hop) by at least 22 px so the wire is never a dot
+ * hidden under hole markers. The label sits beside the wire's middle, never on its ends.
+ */
+function jumperGeometry(from: Point, to: Point, labelWidth: number, labelHeight: number): { path: string; label: Point } {
+  // Half the label's extent along a unit normal, so it clears the wire whichever way the normal points.
+  const halfExtent = (nx: number, ny: number) => (Math.abs(nx) * labelWidth + Math.abs(ny) * labelHeight) / 2;
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy);
+  if (length < SHORT_JUMPER) {
+    // Unit normal pointing up (or left when the hop is vertical).
+    let nx = length === 0 ? 0 : -dy / length;
+    let ny = length === 0 ? -1 : dx / length;
+    if (ny > 0 || (ny === 0 && nx > 0)) {
+      nx = -nx;
+      ny = -ny;
+    }
+    const bow = Math.max(22, length * 0.45);
+    const mid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 };
+    const control = { x: mid.x + nx * bow * 2, y: mid.y + ny * bow * 2 };
+    const clearance = bow + halfExtent(nx, ny) + 6;
+    return { path: `M ${from.x} ${from.y} Q ${control.x} ${control.y} ${to.x} ${to.y}`, label: { x: mid.x + nx * clearance, y: mid.y + ny * clearance } };
+  }
+  const bend = Math.max(25, Math.abs(dx) * 0.25);
+  const direction = dx >= 0 ? 1 : -1;
+  const c1 = { x: from.x + bend * direction, y: from.y + 18 };
+  const c2 = { x: to.x - bend * direction, y: to.y - 18 };
+  // Midpoint and tangent of the cubic at t = 0.5; the label goes beside it.
+  const point = { x: (from.x + 3 * c1.x + 3 * c2.x + to.x) / 8, y: (from.y + 3 * c1.y + 3 * c2.y + to.y) / 8 };
+  const tangent = { x: to.x + c2.x - c1.x - from.x, y: to.y + c2.y - c1.y - from.y };
+  const tangentLength = Math.hypot(tangent.x, tangent.y) || 1;
+  let nx = -tangent.y / tangentLength;
+  let ny = tangent.x / tangentLength;
+  if (nx < 0) {
+    nx = -nx;
+    ny = -ny;
+  }
+  const offset = halfExtent(nx, ny) + 12;
+  return { path: `M ${from.x} ${from.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${to.x} ${to.y}`, label: { x: point.x + nx * offset, y: point.y + ny * offset } };
+}
+
+/** The wire itself, and (for the step that adds it) its label, drawn in a layer above everything else. */
+function renderJumper(input: RenderInput, jumper: Jumper, pins: Map<string, Point>, state: ViewState): { wire: string; label: string } {
+  if (state.visibleJumpers && !state.visibleJumpers.has(jumper.id)) return { wire: "", label: "" };
   const from = endpointPoint(input.layout, jumper.from, pins);
   const to = endpointPoint(input.layout, jumper.to, pins);
-  const bend = Math.max(25, Math.abs(to.x - from.x) * 0.25);
   const stroke = cssColor(input.wireColors?.[jumper.id] ?? String(jumper.color));
-  const direction = to.x >= from.x ? 1 : -1;
-  const path = `M ${from.x} ${from.y} C ${from.x + bend * direction} ${from.y + 18}, ${to.x - bend * direction} ${to.y - 18}, ${to.x} ${to.y}`;
+  const text = `${jumper.id} ${jumper.net}`;
+  const labelHeight = 18;
+  const labelWidth = Math.max(48, text.length * 7 + 14);
+  const { path, label: at } = jumperGeometry(from, to, labelWidth, labelHeight);
   const newItem = state.newJumpers.has(jumper.id);
   const highlighted = isHighlighted("jumper", jumper.id, input.highlight);
-  const label = newItem ? `<rect x="${(from.x + to.x) / 2 - 33}" y="${(from.y + to.y) / 2 - 11}" width="66" height="18" rx="5" class="wire-bg" stroke="${stroke}"/><text x="${(from.x + to.x) / 2}" y="${(from.y + to.y) / 2 + 2}" text-anchor="middle" class="wire-label">${escapeSvg(`${jumper.id} ${jumper.net}`)}</text>` : "";
-  return `<g id="wire-${escapeSvg(jumper.id)}" data-jumper="${escapeSvg(jumper.id)}" data-net="${escapeSvg(jumper.net)}" class="${classes("wire", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(jumper.id)} ${escapeSvg(jumper.net)}"><title>${escapeSvg(jumper.id)} — ${escapeSvg(jumper.net)}: ${escapeSvg(endpointLabel(jumper.from))} to ${escapeSvg(endpointLabel(jumper.to))}</title><path d="${path}" class="wire-casing"/><path d="${path}" stroke="${stroke}" class="wire-path"/>${label}</g>`;
+  const label = newItem
+    ? `<g class="wire-tag" data-jumper-label="${escapeSvg(jumper.id)}"><rect x="${at.x - labelWidth / 2}" y="${at.y - labelHeight / 2}" width="${labelWidth}" height="${labelHeight}" rx="5" class="wire-bg" stroke="${stroke}"/><text x="${at.x}" y="${at.y + 4}" text-anchor="middle" class="wire-label">${escapeSvg(text)}</text></g>`
+    : "";
+  const wire = `<g id="wire-${escapeSvg(jumper.id)}" data-jumper="${escapeSvg(jumper.id)}" data-net="${escapeSvg(jumper.net)}" class="${classes("wire", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(jumper.id)} ${escapeSvg(jumper.net)}"><title>${escapeSvg(jumper.id)} — ${escapeSvg(jumper.net)}: ${escapeSvg(endpointLabel(jumper.from))} to ${escapeSvg(endpointLabel(jumper.to))}</title><path d="${path}" class="wire-casing"/><path d="${path}" stroke="${stroke}" class="wire-path"/></g>`;
+  return { wire, label };
 }
 
 function renderRailLabels(layout: Layout): string {
@@ -520,14 +575,19 @@ export function renderBreadboardSvg(input: RenderInput): string {
     const placement = placements.get(part.id);
     return placement ? renderPart(input, part, placement, state) : "";
   }).join("");
-  const jumpers = [...input.layout.jumpers].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })).map((jumper) => renderJumper(input, jumper, pins, state)).join("");
+  const drawnJumpers = [...input.layout.jumpers].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })).map((jumper) => ({ jumper, ...renderJumper(input, jumper, pins, state) }));
+  // Earlier wires sit under the parts; the wires this step adds are drawn over them so they can't be hidden, and
+  // their labels over everything.
+  const jumpers = drawnJumpers.filter((entry) => !state.newJumpers.has(entry.jumper.id)).map((entry) => entry.wire).join("");
+  const newJumpers = drawnJumpers.filter((entry) => state.newJumpers.has(entry.jumper.id)).map((entry) => entry.wire).join("");
+  const jumperLabels = drawnJumpers.map((entry) => entry.label).join("");
   const columnLetters = "";
   const focusBox = focusViewBox(input, state, pins);
   const renderHeight = 700;
   const viewBox = focusBox ? `${focusBox.x} ${focusBox.y} ${focusBox.width} ${focusBox.height}` : `0 0 ${width} 700`;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${renderHeight}" viewBox="${viewBox}" data-vibread="breadboard" role="img" aria-label="ViBread landscape breadboard assembly"><title>${escapeSvg(input.circuit.title)} breadboard</title><desc>Rows run left to right. Columns a through e are above the horizontal channel; f through j are below it. New step items glow; labels are repeated in text instructions.</desc><style>
 svg{font-family:Arial,"DejaVu Sans",sans-serif;background:${CANVAS_FILL}}.board-surface{fill:${BOARD_FILL};stroke:#B8C0C9;stroke-width:2}.channel{fill:#D5DAE0}.hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.rail-hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.row-label,.column-label,.rail-label,.channel-label{fill:#3B4552;font-size:12px;font-weight:700}.column-label{font-size:15px}.column-guide{fill:#3B4552;font-size:13px;font-weight:700}.rail-label{font-size:12px}.rail-plus{stroke:#E03131;stroke-width:3}.rail-minus{stroke:#1C7ED6;stroke-width:3}.rail-tick{stroke:#C3CAD2;stroke-width:1}.lead{stroke:#6C7680;stroke-width:3}.leg{stroke:#8D99AE;stroke-width:3;stroke-linecap:round}.leg-foot{fill:#C9D0D8;stroke:#4A525C;stroke-width:1.5}.led-dome{stroke:#F8FAFC;stroke-width:2}.led-glow{filter:blur(3px)}.resistor-body{fill:#E2C89A;stroke:#7A5A3A;stroke-width:2}.button-body{fill:#2B2F36;stroke:#11151A;stroke-width:2}.button-cap{fill:#C92A2A;stroke:#3B0D0D;stroke-width:2}.sensor-body{fill:#9CA3AF;stroke:#111827;stroke-width:2}.sensor-mark{stroke:#17212B;stroke-width:2}.pot-body{fill:#4F6570;stroke:#EEF2F5;stroke-width:2}.pot-arrow{stroke:#F1C453;stroke-width:4}.pot-arrowhead{fill:#F1C453}.buzzer-body{fill:#212529;stroke:#0B0D10;stroke-width:2}.buzzer-hole{fill:#495057;stroke:#0B0D10;stroke-width:1}.sound-ring{fill:none;stroke:#E8590C;stroke-width:3;stroke-dasharray:6 5}.generic-body{fill:#5F7880;stroke:#E5F2F4;stroke-width:2}.mcu{fill:#1B3339;stroke:#90C5BD;stroke-width:3}.board-title{fill:#F3F7F8;font-weight:700;font-size:15px}.header-label{fill:#90C5BD;font-size:11px;font-weight:700}.header-pin{fill:#F2C94C;stroke:#12181D;stroke-width:2}.pin-label{fill:#F3F7F8;font-size:12px;font-weight:700}.pin-cue{fill:#1B1D2B;font-size:11px;font-weight:700}.part-label{fill:#1B1D2B;font-size:12px;font-weight:700}.label-bg{fill:#FFFFFF;stroke:#8D99AE;stroke-width:1}.leader{stroke:#5C6773;stroke-width:1.5}.wire-casing{fill:none;stroke:#1B1D2B;stroke-width:6.5;stroke-linecap:round;opacity:.55}.wire-path{fill:none;stroke-width:4;stroke-linecap:round}.wire-bg{fill:#1B1D2B}.wire-label{fill:#fff;font-size:11px;font-weight:700}.vb-old{opacity:.48}.part.vb-hl,.wire.vb-hl{filter:drop-shadow(0 0 5px #fff)}.vb-new{filter:drop-shadow(0 0 8px #f7d774)}.hole.vb-hl,.rail-hole.vb-hl{fill:#ffe166;stroke:#111;stroke-width:2}
-</style><rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/><rect x="${BOARD_LEFT - 36}" y="${RAIL_Y["T-"] - 22}" width="${BOARD_RIGHT - BOARD_LEFT + 72}" height="${RAIL_Y["B-"] - RAIL_Y["T-"] + 30}" rx="14" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout)}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}<g class="legend"><rect x="${BOARD_RIGHT - 160}" y="${BOARD_TOP + 5}" width="148" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 150}" y="${BOARD_TOP + 22}" class="part-label">Rows left → right</text><text x="${BOARD_RIGHT - 150}" y="${BOARD_TOP + 38}" class="part-label">a–e top · f–j bottom</text></g></svg>`;
+</style><rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/><rect x="${BOARD_LEFT - 36}" y="${RAIL_Y["T-"] - 22}" width="${BOARD_RIGHT - BOARD_LEFT + 72}" height="${RAIL_Y["B-"] - RAIL_Y["T-"] + 30}" rx="14" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout)}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}${newJumpers}${jumperLabels}<g class="legend"><rect x="${BOARD_RIGHT - 160}" y="${BOARD_TOP + 5}" width="148" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 150}" y="${BOARD_TOP + 22}" class="part-label">Rows left → right</text><text x="${BOARD_RIGHT - 150}" y="${BOARD_TOP + 38}" class="part-label">a–e top · f–j bottom</text></g></svg>`;
   const scopedSvg = scopeSvgStyles(svg);
   const backgroundSvg = focusBox ? scopedSvg.replace(`<rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/>`, `<rect x="0" y="0" width="${width}" height="700" fill="${BOARD_FILL}"/>`) : scopedSvg;
   if (!focusBox) return backgroundSvg;
