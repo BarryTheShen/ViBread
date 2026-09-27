@@ -25,7 +25,8 @@ import { ToolInputError, artifactUrl, errorMessage } from "@vibread/tools";
 import type { UIMessage } from "ai";
 import type { AgentDeps, MissionEvent } from "../agents/deps.js";
 import type { EventBus } from "../agents/events.js";
-import { AgentBusyError, type RunManager } from "../agents/runs.js";
+import { AGENT_ASK_ANSWERED, AgentBusyError, AskClosedError, type RunManager } from "../agents/runs.js";
+import { doneSteps } from "./build-progress.js";
 import { wireOverrides, withWireColors } from "./wire-colors.js";
 import { MISSION_HARDWARE_EVENT } from "./hardware.js";
 
@@ -75,15 +76,55 @@ function titleFrom(brief: string): string {
   return firstLine.length > 60 ? `${firstLine.slice(0, 57)}…` : firstLine;
 }
 
+/** MissionService plus the server-side answer path for Claude's questions (CAPCOM's poll picks and replies). */
+export interface ServerMissionService extends MissionService {
+  /**
+   * Answers the open ask_user question `askId` exactly like the web card (a chat message). The first answer wins: when
+   * the question is no longer open, nothing is sent and `by` says who answered it.
+   */
+  answerAsk(missionId: string, askId: string, text: string, actor: Actor): Promise<{ status: "answered"; result: AgentTurnResult } | { status: "closed"; by?: Actor }>;
+}
+
 /**
  * MissionService (packages/core services.ts) on store + broker + machine + the design-agent run manager. There are no
  * permission modes; the only approvals are physical bench requests (decide = a person's decision or iMessage pre-approval).
  */
 export function createMissionService(
   deps: AgentDeps & { bus: EventBus; runs: RunManager; sendMachine: (missionId: string, event: MissionEvent) => Promise<void> },
-): MissionService {
+): ServerMissionService {
   const { store, broker, runs } = deps;
 
+  /** One chat turn; with `answers`, only while that ask_user question is still open (AskClosedError otherwise). */
+  async function turn(missionId: string, text: string, actor: Actor, answers?: string): Promise<AgentTurnResult> {
+    await requireMission(missionId);
+    const message: UIMessage = { id: randomUUID(), role: "user", parts: [{ type: "text", text }], metadata: { vibread: { actor } } };
+    let run;
+    for (;;) {
+      // A run in progress already took the question (any message answers it): don't wait for it to say so.
+      if (answers !== undefined && (await runs.openAsk(missionId))?.askId !== answers) throw new AskClosedError();
+      const busy = runs.active(missionId);
+      if (busy) {
+        await busy.finished;
+        continue;
+      }
+      try {
+        run = await runs.start(missionId, { message, actor, ...(answers !== undefined ? { answers } : {}) });
+        break;
+      } catch (error) {
+        if (!(error instanceof AgentBusyError)) throw error;
+      }
+    }
+    const outcome = await run.finished;
+    const mission = await requireMission(missionId);
+    const pending = await broker.listPending(missionId);
+    const result: AgentTurnResult = {
+      text: outcome.error ? [outcome.text, outcome.error].filter(Boolean).join("\n\n") : outcome.text,
+      ...(outcome.question ? { question: outcome.question } : {}),
+      pendingApprovals: pending.map(view),
+      ...(mission.currentRevision !== undefined ? { revision: mission.currentRevision } : {}),
+    };
+    return result;
+  }
   function view(request: ApprovalRequest): ApprovalView {
     return {
       id: request.id,
@@ -108,7 +149,7 @@ export function createMissionService(
     return mission;
   }
 
-  const service: MissionService = {
+  const service: ServerMissionService = {
     async create(input) {
       // Explicit parts (older clients, MCP/A2A callers that send them) win; otherwise the owner's ready inventory entries
       // (all, or only inventoryEntryIds) are copied in through each part type's mapping (plan §5.4). This is the one
@@ -164,33 +205,17 @@ export function createMissionService(
       } satisfies MissionDetail;
     },
 
-    async say(missionId, text, actor) {
-      await requireMission(missionId);
-      const message: UIMessage = { id: randomUUID(), role: "user", parts: [{ type: "text", text }], metadata: { vibread: { actor } } };
-      let run;
-      for (;;) {
-        const busy = runs.active(missionId);
-        if (busy) {
-          await busy.finished;
-          continue;
-        }
-        try {
-          run = await runs.start(missionId, { message, actor });
-          break;
-        } catch (error) {
-          if (!(error instanceof AgentBusyError)) throw error;
-        }
+    say: (missionId, text, actor) => turn(missionId, text, actor),
+
+    async answerAsk(missionId, askId, text, actor) {
+      try {
+        return { status: "answered", result: await turn(missionId, text, actor, askId) };
+      } catch (error) {
+        if (!(error instanceof AskClosedError)) throw error;
+        const answered = (await store.listEvents(missionId)).findLast((e) => e.kind === AGENT_ASK_ANSWERED && (e.data as { askId?: unknown } | undefined)?.askId === askId);
+        const by = (answered?.data as { by?: Actor } | undefined)?.by;
+        return { status: "closed", ...(by ? { by } : {}) };
       }
-      const outcome = await run.finished;
-      const mission = await requireMission(missionId);
-      const pending = await broker.listPending(missionId);
-      const result: AgentTurnResult = {
-        text: outcome.error ? [outcome.text, outcome.error].filter(Boolean).join("\n\n") : outcome.text,
-        ...(outcome.question ? { question: outcome.question } : {}),
-        pendingApprovals: pending.map(view),
-        ...(mission.currentRevision !== undefined ? { revision: mission.currentRevision } : {}),
-      };
-      return result;
     },
 
     async decide(approvalId, decision: ApprovalDecision, actor) {
@@ -224,10 +249,7 @@ export function createMissionService(
       const revision = n !== undefined ? await store.getRevision(missionId, n) : null;
       const steps = revision?.results.steps?.steps ?? [];
       const events = await store.listEvents(missionId);
-      const done = events
-        .filter((e) => e.kind === "build.step" && (revision === null || e.revision === undefined || e.revision === revision.n))
-        .map((e) => Number((e.data as { n?: unknown } | undefined)?.n))
-        .filter((x) => Number.isInteger(x));
+      const done = doneSteps(events, revision?.n ?? null);
       const current = Math.min(Math.max(1, (done.length ? Math.max(...done) : 0) + 1), Math.max(steps.length, 1));
       const headlineEvent = events.findLast((e) => ["bench.run", "photo.checked", "build.step", "revision.released"].includes(e.kind));
       const baseSteps: BuildState["steps"] = steps.map((s) => ({

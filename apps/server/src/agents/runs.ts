@@ -26,6 +26,41 @@ export class AgentBusyError extends Error {
   }
 }
 
+/** Timeline event: a design-agent run ended in ask_user (data: OpenAsk). CAPCOM forwards it; the web chat hides it. */
+export const AGENT_ASKED = "agent.asked";
+/** Timeline event: the next human message answered the open ask_user question (data: { askId, by, answer }). */
+export const AGENT_ASK_ANSWERED = "agent.ask.answered";
+/** Timeline event: a design-agent run ended (data: RunFinishedData). CAPCOM's "done" notifications read it. */
+export const AGENT_RUN_FINISHED = "agent.run.finished";
+
+/** Claude's open clarifying question on a mission (the last ask_user no human message has answered yet). */
+export interface OpenAsk {
+  askId: string;
+  question: string;
+  choices: string[];
+}
+
+export interface RunFinishedData {
+  runId: string;
+  outcome: "done" | "asked" | "error" | "aborted";
+  ms: number;
+  /** Start of the run's final reply text. */
+  text: string;
+  error?: string;
+  /** The mission's current revision when the run started and when it ended (a new one = the run proposed a design). */
+  revisionBefore?: number;
+  revisionAfter?: number;
+}
+
+/** A message sent as the answer to an ask_user question that another message (web or iMessage) already answered. */
+export class AskClosedError extends ToolInputError {
+  override readonly code: string = "ask_closed";
+  constructor() {
+    super("That question was already answered.", 409);
+    this.name = "AskClosedError";
+  }
+}
+
 export interface RunOutcome {
   messages: UIMessage[];
   aborted: boolean;
@@ -53,7 +88,13 @@ export interface RunManager {
    * anyone watching it (e.g. a short iMessage-started run that completed before the browser connected).
    */
   replayable(missionId: string): ActiveRun | undefined;
-  start(missionId: string, input: { message: UIMessage; actor: Actor }): Promise<ActiveRun>;
+  /**
+   * `answers`: the askId this message answers; the start is refused with AskClosedError when that question is no longer
+   * open. Any message claims the open question (the first answer wins, whichever channel it came from).
+   */
+  start(missionId: string, input: { message: UIMessage; actor: Actor; answers?: string }): Promise<ActiveRun>;
+  /** The mission's open ask_user question, if any. */
+  openAsk(missionId: string): Promise<OpenAsk | undefined>;
   stop(missionId: string): boolean;
   /** Replay-from-start + live stream of a run's UI chunks. */
   stream(run: ActiveRun): ReadableStream<UIMessageChunk>;
@@ -102,6 +143,10 @@ interface TrackedRun extends ActiveRun {
   stats?: { steps: number; finish: string; usage: { input: number; output: number } };
   watched: boolean;
   finishedAt?: number;
+  /** The mission's current revision when the run started. */
+  revisionBefore?: number;
+  /** Channel of the message that started the run. */
+  channel: Actor["channel"];
 }
 
 /** How long a finished run nobody watched stays replayable on GET /chat/stream. */
@@ -119,15 +164,49 @@ export function createRunManager(
   const { store, broker, messages, log, debug } = deps;
   const runs = new Map<string, TrackedRun>();
   const unwatched = new Map<string, TrackedRun>();
+  /** Open ask_user question per mission (null = none), read from the timeline on first use. */
+  const asks = new Map<string, OpenAsk | null>();
 
-  async function setup(run: TrackedRun, input: { message: UIMessage; actor: Actor }): Promise<PreparedRun> {
+  async function openAsk(missionId: string): Promise<OpenAsk | undefined> {
+    if (!asks.has(missionId)) {
+      let open: OpenAsk | null = null;
+      for (const event of await store.listEvents(missionId)) {
+        const data = event.data as Partial<OpenAsk> | undefined;
+        if (event.kind === AGENT_ASKED && typeof data?.askId === "string" && typeof data.question === "string") {
+          open = { askId: data.askId, question: data.question, choices: Array.isArray(data.choices) ? data.choices : [] };
+        } else if (event.kind === AGENT_ASK_ANSWERED && open && data?.askId === open.askId) open = null;
+      }
+      // A run that started meanwhile claimed (or asked) first: its entry wins over this read.
+      if (!asks.has(missionId)) asks.set(missionId, open);
+    }
+    return asks.get(missionId) ?? undefined;
+  }
+
+  async function setup(run: TrackedRun, input: { message: UIMessage; actor: Actor; answers?: string }): Promise<PreparedRun> {
     const { missionId } = run;
     const mission = await store.getMission(missionId);
     if (!mission) throw new ToolInputError(`Mission ${missionId} does not exist.`, 404);
     const content = userContent(input.message);
     if (!content) throw new ToolInputError("Send a message with text or a photo.");
-    // Resolved per run: the owner may connect or disconnect their Claude account at any time.
+    run.revisionBefore = mission.currentRevision;
+    // Resolved per run, before the claim: a missing Claude credential must not consume the open question. The owner
+    // may connect or disconnect their Claude account at any time.
     const design = await deps.models.design(mission.ownerId, { missionId, purpose: "design" });
+    // The mission is reserved for this run, so the check and the claim can't interleave with another message.
+    const open = await openAsk(missionId);
+    if (input.answers !== undefined && open?.askId !== input.answers) throw new AskClosedError();
+    if (open) {
+      asks.set(missionId, null);
+      const answer = input.message.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n");
+      await store.appendEvent({
+        missionId,
+        channel: input.actor.channel,
+        actor: input.actor,
+        kind: AGENT_ASK_ANSWERED,
+        text: `Answered: ${answer.slice(0, 200)}`,
+        data: { askId: open.askId, by: input.actor, answer: answer.slice(0, 2000) },
+      });
+    }
 
     const prior = await messages.list(missionId);
     const history = [...prior, input.message];
@@ -240,11 +319,17 @@ export function createRunManager(
         const reply = lastAssistant(all);
         const text = reply?.parts.flatMap((p) => (p.type === "text" ? [p.text] : [])).join("\n").trim() ?? "";
         const asked = reply?.parts.find((p) => p.type === `tool-${ASK_USER}` && p.state === "output-available");
-        const question = asked && "output" in asked ? (asked.output as AskUserOutput | undefined)?.question : undefined;
+        const askOutput = asked && "output" in asked ? (asked.output as AskUserOutput | undefined) : undefined;
+        const question = askOutput?.question;
         outcome = { messages: all, aborted: isAborted, text, ...(question ? { question } : {}), ...(run.error ? { error: run.error } : {}) };
         if (question) await deps.sendMachine(missionId, { type: "NEEDS_CLARIFICATION" });
         if (text || question) {
           await store.appendEvent({ missionId, channel: input.actor.channel, actor: agentActor, kind: "message", text: (question ?? text).slice(0, 2000) });
+        }
+        if (question && asked && "toolCallId" in asked) {
+          const ask: OpenAsk = { askId: asked.toolCallId, question, choices: askOutput?.choices ?? [] };
+          asks.set(missionId, ask);
+          await store.appendEvent({ missionId, channel: input.actor.channel, actor: agentActor, kind: AGENT_ASKED, text: question.slice(0, 2000), data: ask });
         }
       },
     });
@@ -286,6 +371,28 @@ export function createRunManager(
       { runId: run.id, ms: Date.now() - run.startedAt, outcome: result, ...(run.stats ?? {}), toolCalls, ...(outcome.error ? { error: outcome.error } : {}), ...(outcome.question ? { question: outcome.question } : {}) },
       outcome.error ? "error" : "info",
     );
+    try {
+      const mission = await store.getMission(run.missionId);
+      const data: RunFinishedData = {
+        runId: run.id,
+        outcome: result,
+        ms: Date.now() - run.startedAt,
+        text: outcome.text.slice(0, 600),
+        ...(outcome.error ? { error: outcome.error } : {}),
+        ...(run.revisionBefore !== undefined ? { revisionBefore: run.revisionBefore } : {}),
+        ...(mission?.currentRevision !== undefined ? { revisionAfter: mission.currentRevision } : {}),
+      };
+      await store.appendEvent({
+        missionId: run.missionId,
+        channel: run.channel,
+        actor: { kind: "agent", id: "design-agent", name: "Design agent", channel: run.channel },
+        kind: AGENT_RUN_FINISHED,
+        text: `Design run ${result}`,
+        data,
+      });
+    } catch (error) {
+      log.warn({ missionId: run.missionId, err: errorMessage(error) }, "couldn't record the finished run");
+    }
     resolve(outcome);
   }
 
@@ -327,6 +434,7 @@ export function createRunManager(
         wake: new Set(),
         watched: false,
         startedAt: Date.now(),
+        channel: input.actor.channel,
       };
       runs.set(missionId, run); // reserved before the first await: two concurrent starts can't both run
       let prepared: PreparedRun;
@@ -342,6 +450,8 @@ export function createRunManager(
       void drive(run, prepared, resolveFinished);
       return run;
     },
+
+    openAsk,
 
     stop(missionId) {
       const run = runs.get(missionId);

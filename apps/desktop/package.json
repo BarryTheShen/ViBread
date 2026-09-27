@@ -1,6 +1,6 @@
 {
   "name": "@vibread/desktop",
-  "version": "0.1.0",
+  "version": "0.1.0-dev",
   "private": true,
   "description": "ViBread desktop app: AI-assisted Arduino prototyping with a built-in USB bench.",
   "author": {

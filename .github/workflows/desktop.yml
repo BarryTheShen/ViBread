@@ -106,6 +106,9 @@ jobs:
         run: npm ci --no-audit --no-fund
 
       - name: Build web app
+        env:
+          APP_VERSION: ${{ env.APP_VERSION }}
+          GITHUB_SHA: ${{ github.sha }}
         run: npm run build
 
       - name: Set app version
@@ -116,6 +119,9 @@ jobs:
       - name: Package
         working-directory: apps/desktop
         shell: bash
+        env:
+          APP_VERSION: ${{ env.APP_VERSION }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
           node ../../node_modules/electron/install.js
           node scripts/build.mjs

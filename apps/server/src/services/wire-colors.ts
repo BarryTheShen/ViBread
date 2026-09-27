@@ -77,7 +77,8 @@ export function withWireColors(
   if (!layout || steps.length === 0) return { steps };
   const jumpers = jumperColors(revision.circuit, layout, overrides);
   const customized = Object.keys(overrides).length > 0;
-  const version = hashJson({ revision: revision.hash, overrides }).slice(0, 12);
+  // Re-derived steps (updated code, same design) are new pictures: the derivation is part of the URL version.
+  const version = hashJson({ revision: revision.hash, derivation: revision.results.derivation ?? null, overrides }).slice(0, 12);
   // Text names each wire's colour, so recolouring rewrites it (same structure: steps are a pure function of the layout).
   const rebuilt = customized ? buildSteps(revision.circuit, layout, { wireColors: jumpers }).steps : undefined;
   return {

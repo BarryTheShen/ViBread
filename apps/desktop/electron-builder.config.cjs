@@ -20,6 +20,7 @@ module.exports = {
   nodeGypRebuild: false,
   electronLanguages: ["en-US"],
   artifactName: "${productName}-${version}-${os}-${arch}.${ext}",
+  extraMetadata: { version: process.env.APP_VERSION || "0.1.0-dev" },
   mac: {
     category: "public.app-category.developer-tools",
     target: [

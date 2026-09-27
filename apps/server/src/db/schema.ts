@@ -148,6 +148,26 @@ export const capcomSpaces = sqliteTable("capcom_spaces", {
   missionId: text("missionId"),
   updatedAt: timestamp("updatedAt").notNull(),
 });
+/** Per-user CAPCOM notification settings (CapcomPrefs JSON: categories, opt-in quiet hours and the browser's time zone). */
+export const capcomPrefs = sqliteTable("capcom_prefs", {
+  userId: text("userId").primaryKey(),
+  json: text("json").notNull(),
+  updatedAt: timestamp("updatedAt").notNull(),
+});
+/** Notifications held during a user's quiet hours; delivered as one digest when they end. */
+export const capcomQueue = sqliteTable("capcom_queue", {
+  id: text("id").primaryKey(),
+  userId: text("userId").notNull(),
+  missionId: text("missionId"),
+  text: text("text").notNull(),
+  createdAt: timestamp("createdAt").notNull(),
+});
+/** Photon credentials saved from Settings (one row, key "photon"); the secret never leaves the server. */
+export const capcomConfig = sqliteTable("capcom_config", {
+  key: text("key").primaryKey(),
+  json: text("json").notNull(),
+  updatedAt: timestamp("updatedAt").notNull(),
+});
 export const pairedDevices = sqliteTable("paired_devices", {
   idHash: text("idHash").primaryKey(),
   createdAt: timestamp("createdAt").notNull(),
@@ -408,6 +428,9 @@ export const dbSchema = {
   apiTokens,
   imessageLinks,
   capcomSpaces,
+  capcomPrefs,
+  capcomQueue,
+  capcomConfig,
   pairedDevices,
   user,
   session,

@@ -164,7 +164,7 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | Google sign-in (callback `${PUBLIC_URL}/api/auth/callback/google`) |
 | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | GitHub sign-in (callback `${PUBLIC_URL}/api/auth/callback/github`). With Google or GitHub configured, single-operator mode (no sign-in) is turned off |
 | `BETTER_AUTH_SECRET`, `VIBREAD_APPROVAL_SECRET` | Generated and stored in `DATA_DIR` when unset |
-| `CAPCOM_PROVIDER` | `off` (default), `terminal` (local test chat), or `cloud` (iMessage) with `PHOTON_PROJECT_ID`, `PHOTON_PROJECT_SECRET`, `CAPCOM_NUMBER`; `CAPCOM_ALLOW_OFF_HOURS=1` disables the quiet-hours guard |
+| `CAPCOM_PROVIDER` | `off` (default), `terminal` (local test chat), or `cloud` (iMessage) with `PHOTON_PROJECT_ID`, `PHOTON_PROJECT_SECRET`, `CAPCOM_NUMBER`. On the ViBread computer, Settings → iMessage can save the Photon project instead (it starts CAPCOM at once; the secret is never sent back to the browser) |
 | `VIBREAD_ARDUINO_CLI`, `VIBREAD_ARDUINO_CONFIG`, `VIBREAD_COMPILE_TIMEOUT_MS` | Override the toolchain location / compile timeout |
 | `VIBREAD_NO_STATIC=1` | Don't serve `apps/web/dist` |
 
@@ -210,8 +210,14 @@ ViBread tool (checks, compile, simulation, layout, diagnosis…) plus `vibread_l
 
 ### iMessage (Photon Spectrum)
 
-Settings → **Link iMessage** shows a one-time code; text it to your CAPCOM number. Then text a brief, `status`, answers
-to the agent, and GO / NO-GO to approval polls (text fallback for devices without iOS 26 polls).
+Settings → **iMessage (CAPCOM)** shows a one-time code; text it to your CAPCOM number (with `CAPCOM_PROVIDER=terminal`, type it
+in the server's terminal chat). Once linked, CAPCOM texts you about **all** your missions, wherever they were started:
+Claude's questions (text + a poll of its choices; pick one or reply with your own answer — the first answer, laptop or phone,
+wins), design ready / NO-GO / a ViBread limit / a failed run, bench self-test results and fault alerts. The mission a text is
+about becomes the one your replies go to (`mission` lists and switches). You can also text a brief, `status`, `GO` to start
+building, and GO / NO-GO to bench approval polls. Settings has a test message, a switch per kind of notification, and opt-in
+quiet hours in your own time zone: notifications are held, never dropped, and arrive as one digest when they end; replies to
+your texts always go through.
 
 ## Supported circuits
 

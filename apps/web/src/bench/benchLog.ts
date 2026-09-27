@@ -4,6 +4,8 @@
  * rate-limited, so one request carries every line logged within a short window.
  */
 
+import { WEB_VERSION } from "../version.js";
+
 export type BenchLogLevel = "info" | "warn" | "error";
 export type BenchLog = (level: BenchLogLevel, message: string, data?: Record<string, unknown>) => void;
 
@@ -36,6 +38,8 @@ export function benchRuntime(nav: Pick<Navigator, "userAgent" | "platform"> & { 
   const chrome = /\b(?:Chrome|Chromium)\/([\d.]+)/.exec(nav.userAgent)?.[1];
   return {
     app: electron ? "desktop" : "browser",
+    version: WEB_VERSION.version,
+    commit: WEB_VERSION.commit,
     os: nav.userAgentData?.platform || nav.platform || "unknown",
     ...(electron ? { electron } : {}),
     ...(chrome ? { chrome } : {}),

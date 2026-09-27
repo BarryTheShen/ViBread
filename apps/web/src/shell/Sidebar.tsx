@@ -23,8 +23,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Link as RouterLink, useLocation, useNavigate } from "react-router";
 import { useQuery } from "@tanstack/react-query";
 import { getJson } from "../api/client.js";
+import { WEB_VERSION } from "../version.js";
 import { useConnections, useMissions } from "../api/hooks.js";
-
 const COLLAPSED_KEY = "vibread.sidebar.collapsed";
 const SIDEBAR_WIDTH = 260;
 const COLLAPSED_WIDTH = 72;
@@ -259,7 +259,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
           </Tooltip>
         )}
         <SidebarButton collapsed={collapsed} label="Settings" icon={<SettingsOutlinedIcon />} to="/settings" active={location.pathname === "/settings"} />
-        {!collapsed && <Typography variant="caption" sx={{ px: 1, color: "text.secondary" }}>{newMissionShortcut} new mission</Typography>}
+        {!collapsed && <Typography variant="caption" sx={{ px: 1, color: "text.secondary" }}>{newMissionShortcut} new mission · v{WEB_VERSION.version}</Typography>}
       </Box>
     </Box>
   );

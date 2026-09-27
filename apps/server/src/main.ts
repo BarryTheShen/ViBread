@@ -175,10 +175,13 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
     const listener = app.listen(config.port, config.host, () => resolveServer(listener));
     listener.once("error", reject);
   });
+  // After listening, so re-deriving old results (and the version probe) never delays readiness.
+  void ctx.derived.run().catch((error: unknown) => log.warn({ err: error instanceof Error ? error.message : String(error) }, "refreshing derived results failed"));
   let closing: Promise<void> | undefined;
   const close = async (): Promise<void> => {
     if (closing) return closing;
     closing = (async () => {
+      await ctx.derived.stop();
       await capcom.stop();
       await new Promise<void>((resolveClose, rejectClose) => server.close((error) => (error ? rejectClose(error) : resolveClose())));
       context.close();

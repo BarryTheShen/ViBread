@@ -64,6 +64,11 @@ export interface RevisionResults {
   photos?: PhotoCheckResult[];
   /** Artifact keys → content hashes: "schematic.svg", "app.hex", "bench.hex", "step-3.svg", "step-3.png", "trace-T1.json". */
   artifacts: Record<string, string>;
+  /**
+   * Version of the code that derived these results (layout, steps, pictures, schematic, checks): when it differs from the
+   * running server's, the server re-derives them in the background. Absent = derived before versions were recorded.
+   */
+  derivation?: string;
 }
 
 export interface Revision {

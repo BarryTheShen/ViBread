@@ -105,6 +105,16 @@ function stageSources() {
     ["LICENSE", "LICENSE"],
   ];
   for (const [from, to] of copies) cpSync(join(ROOT, from), join(OUT, to), { recursive: true, filter: isRuntimeFile });
+  const webVersion = join(ROOT, "apps/web/dist/version.json");
+  const runtimeVersion = join(OUT, "apps/server/src/version.json");
+  const version = existsSync(webVersion)
+    ? readFileSync(webVersion, "utf8")
+    : `${JSON.stringify({
+        version: process.env.APP_VERSION?.trim() || "0.1.0-dev",
+        commit: process.env.GITHUB_SHA?.trim().slice(0, 7) || "unknown",
+        builtAt: process.env.VIBREAD_BUILT_AT?.trim() || new Date().toISOString(),
+      })}\n`;
+  writeFileSync(runtimeVersion, version);
   return copies.length;
 }
 

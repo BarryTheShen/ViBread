@@ -15,9 +15,10 @@ import type { Express } from "express";
 import { mountChat } from "./chat.js";
 import type { AgentDeps } from "./deps.js";
 import { anthropicModels, type AgentModels } from "./models.js";
+import { lazyDerivationVersion } from "./derivation.js";
 import { StructuredAnswerError } from "./pi-object.js";
 import { createRetroReviewer } from "./retro.js";
-import { createRunManager } from "./runs.js";
+import { createRunManager, type OpenAsk } from "./runs.js";
 import { createTestAuthor } from "./test-author.js";
 import { createPhotoChecker } from "./vision.js";
 import { createEventBus } from "./events.js";
@@ -25,7 +26,7 @@ import { createHumanRelease, type ReleaseInput } from "./release.js";
 import { cutCrop, identifyParts, type AnalyzedPhoto } from "./scan.js";
 import { identifyHardware } from "./hardware.js";
 import { toolTracer, tracedModels } from "./trace.js";
-import { createMissionService } from "../services/missions.js";
+import { createMissionService, type ServerMissionService } from "../services/missions.js";
 
 export type { AgentDeps, InventoryReader, MessageStore, MissionEvent, MissionMachine, ServerConfig } from "./deps.js";
 export type { AgentModels } from "./models.js";
@@ -36,8 +37,12 @@ export interface AgentRuntime {
   tools: ToolRegistry;
   /** Contract Pipeline plus `idle()`, which waits for background fault dictionaries (seed script, tests). */
   pipeline: BackgroundPipeline;
+  /** The running code's derivation version (agents/derivation.ts), computed on first use; undefined if the probe failed. */
+  derivation(): Promise<string | undefined>;
   /** /api/missions/:id/chat (GET history, POST turn), /chat/stream (resume), /chat/stop. Mount after express.json(). */
   mountChat(app: Express): void;
+  /** Claude's open ask_user question and the answer path CAPCOM uses (first answer wins across web and iMessage). */
+  asks: { open(missionId: string): Promise<OpenAsk | undefined>; answer: ServerMissionService["answerAsk"] };
   checkPhoto(input: { missionId: string; step: number; jpeg: Uint8Array }): Promise<PhotoCheckResult>;
   /** POST /api/missions/:id/release — the human "GO for build" (see release.ts). */
   release(input: ReleaseInput): Promise<MissionDetail>;
@@ -70,9 +75,10 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
   const models = tracedModels(direct, deps.debug);
   const bus = createEventBus(deps.store);
   const injected = deps.pipeline;
+  const derivation = lazyDerivationVersion((error) => deps.debug.event(null, "pipeline", `derivation version probe failed: ${errorMessage(error)}`.slice(0, 300), { error: errorMessage(error) }, "error"));
   const pipeline: BackgroundPipeline = injected
-    ? { evaluate: (missionId, n) => injected.evaluate(missionId, n), idle: async () => {} }
-    : createPipeline({ store: deps.store, log: deps.log });
+    ? { evaluate: (missionId, n, options) => injected.evaluate(missionId, n, options), idle: async () => {} }
+    : createPipeline({ store: deps.store, log: deps.log, derivation });
   const author = createTestAuthor({ models, store: deps.store });
   const reviewer = createRetroReviewer({ models, store: deps.store });
   const { debug } = deps;
@@ -147,7 +153,9 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
     missions,
     tools,
     pipeline,
+    derivation,
     mountChat: (app) => mountChat(app, { store: deps.store, messages: deps.messages, runs, log: deps.log }),
+    asks: { open: (missionId) => runs.openAsk(missionId), answer: (missionId, askId, text, actor) => missions.answerAsk(missionId, askId, text, actor) },
     async checkPhoto(input) {
       const started = Date.now();
       try {

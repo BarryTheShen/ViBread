@@ -29,6 +29,7 @@
     "drizzle-orm": "0.45.3",
     "express": "5.2.1",
     "express-rate-limit": "8.7.0",
+    "fflate": "^0.8.3",
     "heif2jpeg": "0.1.6",
     "multer": "2.4.0",
     "pino": "10.3.1",

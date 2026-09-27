@@ -33,16 +33,17 @@ import Typography from "@mui/material/Typography";
 import { useColorScheme } from "@mui/material/styles";
 import { useQuery } from "@tanstack/react-query";
 import type { TokenMintResponse } from "@vibread/core";
-import { QRCodeSVG } from "qrcode.react";
 import { useState } from "react";
 import { useLocation, useNavigate } from "react-router";
 import { getJson } from "../api/client.js";
 import { authClient } from "../api/auth.js";
 import { ClaudeAccountSection } from "./ClaudeAccountSection.js";
-import { useConnections, useImessageCode, useLanDevices, useMintToken, useMissions, useRevokeToken, useUnpairAllPhones } from "../api/hooks.js";
+import { ImessageSection } from "./ImessageSection.js";
+import { useConnections, useLanDevices, useMintToken, useMissions, useRevokeToken, useUnpairAllPhones } from "../api/hooks.js";
 import { ErrorOrSignIn, ProviderButtons, useProviders } from "../components/SignIn.js";
 import { agoLabel, expiryLabel, useNow } from "../lib/time.js";
 import { MONO_FONT } from "../theme.js";
+import { formatBuiltAt, WEB_VERSION, type VersionInfo } from "../version.js";
 
 const SCOPES = [
   { id: "circuits:read", label: "Read your missions and designs" },
@@ -275,75 +276,6 @@ function describeDevice(userAgent: string): string {
   return name ? `${device} · ${name}` : device;
 }
 
-function ImessageSection() {
-  const connections = useConnections();
-  const code = useImessageCode();
-  const now = useNow(10_000);
-  const imessage = connections.data?.imessage;
-  const number = code.data?.capcomNumber ?? imessage?.capcomNumber;
-  return (
-    <Section title="Link iMessage (CAPCOM)" id="imessage-heading">
-      <Typography sx={{ color: "text.secondary" }}>
-        Text your mission from your phone: get status, answer the agent's questions, and say "GO" ahead of a bench action. Anything
-        physical still waits for a click at the bench.
-      </Typography>
-      {connections.data && !imessage?.capcomNumber && !imessage?.linked ? (
-        // No CAPCOM number means the server has no iMessage provider: a link code would have nowhere to go.
-        <Typography sx={{ color: "text.disabled" }}>iMessage isn't set up on this server.</Typography>
-      ) : (
-      <>
-      {imessage?.linked ? (
-        <Alert severity="success">Linked to {imessage.handle ?? "your phone"}.</Alert>
-      ) : (
-        <Typography>
-          Not linked yet.{imessage?.capcomNumber && <> Your CAPCOM number is <strong>{imessage.capcomNumber}</strong>.</>}
-        </Typography>
-      )}
-      <Box>
-        <Button variant="contained" disabled={code.isPending} onClick={() => code.mutate()}>
-          {code.isPending ? "Getting a code…" : imessage?.linked ? "Link a different phone" : "Get a link code"}
-        </Button>
-      </Box>
-      {code.isError && <Alert severity="error">Couldn't create a code: {code.error.message}</Alert>}
-      {code.data && (
-        <Stack direction="row" sx={{ gap: 3, alignItems: "center", flexWrap: "wrap" }}>
-          {code.data.link && (
-            <Box sx={{ bgcolor: "qr.main", p: 1, borderRadius: 1, lineHeight: 0 }}>
-              <QRCodeSVG value={code.data.link} size={140} title="Scan to text the link code" />
-            </Box>
-          )}
-          <Box>
-            <Typography>
-              Text{" "}
-              <Box component="span" sx={{ fontFamily: MONO_FONT, fontWeight: 700, fontSize: "1.2rem", letterSpacing: "0.1em" }}>
-                {code.data.code}
-              </Box>{" "}
-              {number ? (
-                <>
-                  to <strong>{number}</strong>
-                </>
-              ) : (
-                "to your CAPCOM number"
-              )}
-              .
-            </Typography>
-            {code.data.link && (
-              <Link href={code.data.link} sx={{ display: "inline-block", mt: 0.5 }}>
-                Open in Messages
-              </Link>
-            )}
-            <Typography variant="body2" sx={{ color: "text.secondary", mt: 0.5 }}>
-              {expiryLabel(code.data.expiresAt, now)} · works once
-            </Typography>
-          </Box>
-        </Stack>
-      )}
-      </>
-      )}
-    </Section>
-  );
-}
-
 /** Who is signed in. Mode comes from GET /api/oauth/providers (works before sign-in, unlike /api/me which is 401). */
 function AccountSection() {
   const providers = useProviders();
@@ -451,10 +383,11 @@ function DiagnosticsSection() {
   const areas = [...new Set(entries.map((entry) => entry.area))].sort();
   const levels = [...new Set(entries.map((entry) => entry.level))].sort();
   const filtered = entries.filter((entry) => (area === "all" || entry.area === area) && (level === "all" || entry.level === level));
+  const versionLine = `ViBread ${WEB_VERSION.version} · commit ${WEB_VERSION.commit} · built ${formatBuiltAt(WEB_VERSION.builtAt)}`;
   const copyReport = () => {
     const clipboard = navigator.clipboard;
     if (!clipboard) return;
-    const report = filtered.map(diagnosticLine).join("\n");
+    const report = [versionLine, ...filtered.map(diagnosticLine)].join("\n");
     void clipboard.writeText(report).then(() => {
       setCopied(true);
       window.setTimeout(() => setCopied(false), 2_000);
@@ -488,7 +421,7 @@ function DiagnosticsSection() {
           </Select>
         </FormControl>
         <FormControlLabel control={<Checkbox checked={autoRefresh} onChange={(event) => setAutoRefresh(event.target.checked)} />} label="Auto-refresh" />
-        <Button variant="outlined" startIcon={<ContentCopyIcon />} onClick={copyReport} disabled={filtered.length === 0}>
+        <Button variant="outlined" startIcon={<ContentCopyIcon />} onClick={copyReport}>
           {copied ? "Copied" : "Copy for bug report"}
         </Button>
       </Stack>
@@ -498,7 +431,7 @@ function DiagnosticsSection() {
         </Alert>
       )}
       <Box component="pre" sx={{ m: 0, p: 1.5, maxHeight: 300, overflow: "auto", bgcolor: "code.main", color: "text.primary", borderRadius: 1, fontFamily: MONO_FONT, fontSize: 12, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-        {filtered.length > 0 ? filtered.map(diagnosticLine).join("\n") : "No diagnostic entries match these filters."}
+        {filtered.length > 0 ? [versionLine, ...filtered.map(diagnosticLine)].join("\n") : `${versionLine}\nNo diagnostic entries match these filters.`}
       </Box>
     </Section>
   );
@@ -521,6 +454,24 @@ function GeneralSection() {
           <MenuItem value="dark">Dark</MenuItem>
         </Select>
       </FormControl>
+    </Section>
+  );
+}
+
+function AboutSection() {
+  const serverVersion = useQuery<VersionInfo>({
+    queryKey: ["version", "server"],
+    queryFn: ({ signal }) => getJson<VersionInfo>("/api/version", signal),
+    staleTime: Number.POSITIVE_INFINITY,
+    retry: false,
+  });
+  const mismatch = serverVersion.data !== undefined && serverVersion.data.version !== WEB_VERSION.version;
+  const label = mismatch ? `app ${WEB_VERSION.version} · server ${serverVersion.data?.version}` : `ViBread ${WEB_VERSION.version}`;
+  return (
+    <Section title="About" id="about-heading">
+      <Typography>{label} · commit {WEB_VERSION.commit} · built {formatBuiltAt(WEB_VERSION.builtAt)}</Typography>
+      <Typography>ViBread helps you prototype Arduino circuits with an AI-assisted design and build workflow.</Typography>
+      <Typography color="text.secondary">Not affiliated with Anthropic.</Typography>
     </Section>
   );
 }
@@ -550,15 +501,14 @@ export default function SettingsPage() {
               <ClaudeAccountSection />
             </Section>
             <ClaudeCodeSection />
-            <ImessageSection />
+            <Section title="iMessage (CAPCOM)" id="imessage-heading">
+              <ImessageSection />
+            </Section>
             <PhonesSection />
           </>
         )}
         <DiagnosticsSection />
-        <Section title="About" id="about-heading">
-          <Typography>ViBread helps you prototype Arduino circuits with an AI-assisted design and build workflow.</Typography>
-          <Typography color="text.secondary">Not affiliated with Anthropic.</Typography>
-        </Section>
+        <AboutSection />
       </DialogContent>
     </Dialog>
   );

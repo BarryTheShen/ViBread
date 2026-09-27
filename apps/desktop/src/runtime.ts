@@ -31,7 +31,7 @@ export function desktopPaths(): DesktopPaths {
 }
 
 // Development-only variables that would change how the bundled Node or the server behave.
-const DROP_ENV = /^(ELECTRON_|NODE_OPTIONS$|NODE_PATH$|NODE_ENV$|npm_|INIT_CWD$|TSX_|PORT$|HOST$|PUBLIC_URL$|DATA_DIR$|VIBREAD_ARDUINO_)/;
+const DROP_ENV = /^(ELECTRON_|NODE_OPTIONS$|NODE_PATH$|NODE_ENV$|npm_|INIT_CWD$|TSX_|PORT$|HOST$|PUBLIC_URL$|DATA_DIR$|APP_VERSION$|GITHUB_SHA$|VIBREAD_BUILT_AT$|VIBREAD_ARDUINO_)/;
 
 /** Environment for every child that runs server code (the server itself and the golden-mission seeder). */
 export function childEnv(paths: DesktopPaths, extra: Record<string, string | undefined>): NodeJS.ProcessEnv {

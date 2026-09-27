@@ -8,6 +8,7 @@ import {
   type Finding,
   type MissionStore,
   type PinModeObservation,
+  type Layout,
   type Revision,
   type RevisionResults,
   type StepList,
@@ -16,9 +17,23 @@ import type * as AssemblyLib from "@vibread/assembly";
 import { SYSTEM_ACTOR, crashFinding, report, statusReport, withFindings } from "./common.js";
 import { createFaultQueue, type BackgroundLog } from "./faults.js";
 
+/**
+ * Hand-bumped part of the derivation version (RevisionResults.derivation): bump it when a change alters derived results
+ * in a way the server's golden probe (apps/server agents/derivation.ts: layout, steps, a step drawing, a schematic) can't
+ * see — PNG rendering, check rules, firmware, simulator. Existing revisions are then re-derived on the next start.
+ */
+export const DERIVATION_VERSION = 1;
+
+export interface EvaluateOptions {
+  /** Keep this breadboard placement instead of laying the circuit out again (a build in progress follows it). */
+  layout?: Layout;
+  /** No console.report timeline events (a background re-derivation; the caller says what changed). */
+  quiet?: boolean;
+}
+
 /** Runs every deterministic console for one revision and saves RevisionResults + artifacts (local://contracts.md). */
 export interface Pipeline {
-  evaluate(missionId: string, n: number): Promise<RevisionResults>;
+  evaluate(missionId: string, n: number, options?: EvaluateOptions): Promise<RevisionResults>;
 }
 
 /** createPipeline's result: the contract plus a barrier for background work (fault dictionaries). */
@@ -86,7 +101,13 @@ class Run {
  * Engines are imported inside their stage on purpose (not statically): a module-load failure — e.g. @tscircuit/core's
  * ESM directory-import crash outside tsx, a missing toolchain binding — must fail only that stage, never the server.
  */
-export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog; faults?: boolean }): BackgroundPipeline {
+export function createPipeline(deps: {
+  store: MissionStore;
+  log?: BackgroundLog;
+  faults?: boolean;
+  /** The running code's derivation version, stamped on every result (RevisionResults.derivation). */
+  derivation?: () => Promise<string | undefined>;
+}): BackgroundPipeline {
   const { store } = deps;
   const faultQueue = createFaultQueue({ store, ...(deps.log ? { log: deps.log } : {}) });
 
@@ -185,10 +206,10 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
     });
   }
 
-  async function layoutBranch(run: Run, lib: typeof AssemblyLib, circuit: Circuit): Promise<void> {
+  async function layoutBranch(run: Run, lib: typeof AssemblyLib, circuit: Circuit, kept?: Layout): Promise<void> {
     const { hash } = run;
     const laid = await run.stage("layout", () => {
-      const layout = lib.layoutBoard(circuit);
+      const layout = kept ?? lib.layoutBoard(circuit);
       return { layout, layoutHash: lib.layoutHash(layout), lvs: lib.lvs(circuit, layout) };
     });
     if (!laid.ok) {
@@ -219,7 +240,7 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
     run.reports.set("FAO", withFindings(faoBase, faoExtra, { stageMs: (fao.ms ?? 0) + laid.ms }));
   }
 
-  async function assemblyBranch(run: Run, circuit: Circuit): Promise<void> {
+  async function assemblyBranch(run: Run, circuit: Circuit, kept?: Layout): Promise<void> {
     const loaded = await run.stage("assemblyLoad", () => import("@vibread/assembly"));
     if (!loaded.ok) {
       run.reports.set("FAO", report("FAO", [crashFinding("FAO", "assembly", loaded.error)], "The assembly tools could not load.", run.hash));
@@ -227,7 +248,7 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
     }
     const lib = loaded.value;
     const [, schematic] = await Promise.all([
-      layoutBranch(run, lib, circuit),
+      layoutBranch(run, lib, circuit, kept),
       run.stage("schematic", async () => {
         const svg = await lib.renderSchematicSvg(circuit);
         await Promise.all([run.put("schematic.svg", svg, "image/svg+xml"), lib.svgToPng(svg, PNG_WIDTH).then((png) => run.put("schematic.png", png, "image/png"))]);
@@ -264,7 +285,7 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
 
   return {
     idle: () => faultQueue.idle(),
-    async evaluate(missionId, n) {
+    async evaluate(missionId, n, options = {}) {
       const revision = await store.getRevision(missionId, n);
       if (!revision) throw new Error(`Revision ${n} of mission ${missionId} does not exist.`);
       const run = new Run(store, revision);
@@ -292,7 +313,7 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
           title: i.message,
           ...(i.refs ? { refs: i.refs } : {}),
         }));
-        await Promise.all([eecomBranch(run, circuit, irWarnings), firmwareBranch(run, circuit), assemblyBranch(run, circuit), benchBranch(run, circuit)]);
+        await Promise.all([eecomBranch(run, circuit, irWarnings), firmwareBranch(run, circuit), assemblyBranch(run, circuit, options.layout), benchBranch(run, circuit)]);
       }
       run.timings.total = Math.round(performance.now() - started);
 
@@ -304,6 +325,8 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
         .map((r) => withFindings(r, run.extra[r.console]));
       run.patch.reports = retro ? [...ordered, retro] : ordered;
       run.patch.artifacts = { ...revision.results.artifacts, ...run.artifacts };
+      const derivation = await deps.derivation?.();
+      if (derivation) run.patch.derivation = derivation;
 
       const saved = await store.saveResults(missionId, n, run.patch);
       // PLAN item 14: single-fault mutants for diagnosis, built in the background so the consoles never wait for them.
@@ -311,7 +334,7 @@ export function createPipeline(deps: { store: MissionStore; log?: BackgroundLog;
       if (deps.faults !== false && parsed.ok && layout && selftest && run.benchHex) {
         faultQueue.enqueue({ missionId, n, circuit: parsed.circuit, layout, plan: selftest, benchHex: run.benchHex });
       }
-      for (const r of ordered) {
+      for (const r of options.quiet ? [] : ordered) {
         await store.appendEvent({
           missionId,
           channel: "system",
