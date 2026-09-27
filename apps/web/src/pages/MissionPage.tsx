@@ -29,12 +29,13 @@ const EMPTY_EVENTS: TimelineEvent[] = [];
 /**
  * Opens the panel by itself at the moments the plan names (§3.2): the first design (Schematic), GO for build (Build
  * steps) and a bench problem (Bench results). Only on changes seen while the page is open, never on first load, and
- * never away from an open bench (autoOpenedPanel).
+ * never away from an open bench (autoOpenedPanel). The baseline waits for the timeline too: taken before it lands, every
+ * earlier failed bench run would look new and open Bench results on a plain page load.
  */
-function useAutoPanel(detail: MissionDetail | undefined, events: TimelineEvent[], open: (view: PanelView) => void) {
+function useAutoPanel(detail: MissionDetail | undefined, timelineLoaded: boolean, events: TimelineEvent[], open: (view: PanelView) => void) {
   const seen = useRef<{ revision?: number; released?: number; failures: string[] } | null>(null);
   useEffect(() => {
-    if (!detail) return;
+    if (!detail || !timelineLoaded) return;
     const now = { revision: detail.mission.currentRevision, released: detail.mission.releasedRevision, failures: events.filter((e) => e.kind === "bench.run" && isRecord(e.data) && e.data.verdict === "fail").map((e) => e.id) };
     const before = seen.current;
     seen.current = now;
@@ -42,11 +43,17 @@ function useAutoPanel(detail: MissionDetail | undefined, events: TimelineEvent[]
     if (now.failures.some((id) => !before.failures.includes(id))) open("results");
     else if (now.released !== undefined && now.released !== before.released) open("steps");
     else if (before.revision === undefined && now.revision !== undefined) open("schematic");
-  }, [detail, events, open]);
+  }, [detail, timelineLoaded, events, open]);
 }
 
+/** One mission's workspace. Keyed by mission (below): switching missions starts fresh instead of comparing the new
+ * mission with the old one (which auto-opened panels) or carrying over panel state, dialogs and the chat box. */
 export default function MissionPage() {
   const { missionId = "" } = useParams<{ missionId: string }>();
+  return <MissionWorkspace key={missionId} missionId={missionId} />;
+}
+
+function MissionWorkspace({ missionId }: { missionId: string }) {
   const mission = useMission(missionId);
   const detail = mission.data;
   const busy = detail?.agentBusy ?? false;
@@ -83,7 +90,7 @@ export default function MissionPage() {
   );
   const closePanel = useCallback(() => setPanel((p) => ({ ...p, open: false })), [setPanel]);
   const autoOpen = useCallback((view: PanelView) => setPanel((current) => autoOpenedPanel(current, view)), [setPanel]);
-  useAutoPanel(detail, events, autoOpen);
+  useAutoPanel(detail, timeline.data !== undefined, events, autoOpen);
   // Old links (`?panel=replay`, `telemetry`, `diagnosis`) open the merged view; show its current id in the address bar.
   useEffect(() => {
     const canonical = canonicalPanelParams(searchParams);

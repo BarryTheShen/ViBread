@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 import { Link, useSearchParams } from "react-router";
+import { useQueryClient } from "@tanstack/react-query";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import type { SxProps, Theme } from "@mui/material/styles";
@@ -43,6 +44,7 @@ import { MONO_FONT } from "../theme.js";
 import { SerialMonitor } from "../components/SerialMonitor.js";
 import { parseBenchQuery, testLabel } from "./query.js";
 import { nativeFlash, useBenchPorts } from "./nativeFlash.js";
+import { queryKeys } from "../api/hooks.js";
 
 const STEPS = ["Connect your board", "Make it safe", "Check power", "Test each part", "Find the problem", "Run your project", "Celebrate"];
 const BOARD_LOST_POWER = "The board lost power or stopped answering when you plugged in — unplug now and check for a short between the red + and blue − rails, or a part bridging them.";
@@ -235,6 +237,13 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
   // Telemetry lives outside React state: only the board drawings subscribe, so readings never re-render the page.
   const [telemetry] = useState(createTelemetryStore);
   const [run, setRun] = useState<BenchRunResult>();
+  const queryClient = useQueryClient();
+  // A saved run (or an accepted override) changes the revision's results, the timeline, the completion card and the
+  // sidebar status: refetch them now instead of on their next poll (up to 8 s later).
+  const refreshMission = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.mission(missionId) });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.missions });
+  }, [queryClient, missionId]);
   const [selectedCandidate, setSelectedCandidate] = useState(0);
   const [highlight, setHighlight] = useState<SvgHighlight>({ holes: [], parts: [], jumpers: [] });
   const [busy, setBusy] = useState<string>();
@@ -681,6 +690,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...request, runId: runner.runId, ...(benchQuery.step ? { step: benchQuery.step } : {}) }),
         });
+        refreshMission();
       } catch (serverReason: unknown) {
         if (mode !== "virtual") throw serverReason;
         result = await evaluateRun({
@@ -703,7 +713,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
     } finally {
       setBusy(undefined);
     }
-  }, [loaded, missionId, mode, runner, benchQuery.step]);
+  }, [loaded, missionId, mode, runner, benchQuery.step, refreshMission]);
 
   const acceptSelfTestOverride = useCallback(async (): Promise<void> => {
     if (!missionId || mode !== "physical" || !run || isPracticeRun(run) || run.overriddenBy !== undefined) return;
@@ -717,12 +727,13 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
         body: JSON.stringify({ bypass: "self-test", runId: run.runId }),
       });
       setRun(accepted);
+      refreshMission();
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(undefined);
     }
-  }, [missionId, mode, run]);
+  }, [missionId, mode, run, refreshMission]);
   const downloadFirmware = useCallback(async (kind: "bench" | "app"): Promise<void> => {
     if (!missionId) return;
     setBusy(`download:${kind}`);

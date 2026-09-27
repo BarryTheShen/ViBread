@@ -23,6 +23,7 @@ import InputAdornment from "@mui/material/InputAdornment";
 import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import OutlinedInput from "@mui/material/OutlinedInput";
+import Snackbar from "@mui/material/Snackbar";
 import Stack from "@mui/material/Stack";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
@@ -38,6 +39,7 @@ import {
   usePatchInventoryItem,
   useUpsertInventory,
 } from "../api/inventory.js";
+import { ErrorOrSignIn } from "../components/SignIn.js";
 import { AddPartDialog } from "./AddPartDialog.js";
 import { PartTypeEditor } from "./PartTypeEditor.js";
 import { QuantityStepper } from "./FieldValuesForm.js";
@@ -204,7 +206,13 @@ export default function InventoryPage() {
   }
   if (inventory.error || catalog.error) {
     const error = inventory.error ?? catalog.error;
-    return <Container maxWidth="lg" sx={{ py: 4 }}><Alert severity="error">{error instanceof Error ? error.message : "Could not load your inventory."}</Alert></Container>;
+    return (
+      <Container maxWidth="lg" sx={{ py: 4 }}>
+        <ErrorOrSignIn error={error} message="Sign in to see your parts.">
+          <Alert severity="error">{error instanceof Error ? error.message : "Could not load your inventory."}</Alert>
+        </ErrorOrSignIn>
+      </Container>
+    );
   }
 
   return (
@@ -281,20 +289,27 @@ export default function InventoryPage() {
       <Menu open={Boolean(menu)} anchorEl={menu?.anchor} onClose={() => setMenu(null)}>
         <MenuItem onClick={() => { if (menu) setEditing(menu.entry); setMenu(null); setAddOpen(true); }}><EditOutlinedIcon fontSize="small" sx={{ mr: 1 }} />Edit fields</MenuItem>
         <MenuItem onClick={() => { if (menu) setEditing(menu.entry); setMenu(null); setAddOpen(true); }}>Change type</MenuItem>
-        <MenuItem onClick={() => { if (menu) setPendingDelete(menu.entry); setMenu(null); }} sx={{ color: "error.main" }}><DeleteOutlineOutlinedIcon fontSize="small" sx={{ mr: 1 }} />Delete</MenuItem>
+        <MenuItem onClick={() => { if (menu) { remove.reset(); setPendingDelete(menu.entry); } setMenu(null); }} sx={{ color: "error.main" }}><DeleteOutlineOutlinedIcon fontSize="small" sx={{ mr: 1 }} />Delete</MenuItem>
       </Menu>
       <Dialog open={Boolean(pendingDelete)} onClose={() => setPendingDelete(null)} aria-labelledby="delete-inventory-title">
         <DialogTitle id="delete-inventory-title">Delete this inventory entry?</DialogTitle>
-        <DialogContent><Typography color="text.secondary">This removes {pendingDelete ? formatEntryLabel(typeById.get(pendingDelete.typeId), pendingDelete.values) : "this part"} from your shared inventory.</Typography></DialogContent>
+        <DialogContent>
+          <Typography color="text.secondary">This removes {pendingDelete ? formatEntryLabel(typeById.get(pendingDelete.typeId), pendingDelete.values) : "this part"} from your shared inventory.</Typography>
+          {remove.error ? <Alert severity="error" sx={{ mt: 1.5 }}>Couldn't delete: {remove.error.message}</Alert> : null}
+        </DialogContent>
         <DialogActions>
           <Button onClick={() => setPendingDelete(null)}>Cancel</Button>
-          <Button color="error" variant="contained" onClick={() => { if (pendingDelete) remove.mutate(pendingDelete.id, { onSuccess: () => setPendingDelete(null) }); }}>Delete</Button>
+          <Button color="error" variant="contained" disabled={remove.isPending} onClick={() => { if (pendingDelete) remove.mutate(pendingDelete.id, { onSuccess: () => setPendingDelete(null) }); }}>{remove.isPending ? "Deleting…" : "Delete"}</Button>
         </DialogActions>
       </Dialog>
       <AddPartDialog open={addOpen} catalog={catalog.data} entry={editing} onClose={() => { setAddOpen(false); setEditing(undefined); }} onSave={savePart} />
       <TypePartsDialog open={typePartsOpen} catalog={catalog.data} onClose={() => setTypePartsOpen(false)} onSaved={() => setTypePartsOpen(false)} />
       <PartTypeEditor open={typeEditorOpen} catalog={catalog.data} source={sourceType} onClose={() => { setTypeEditorOpen(false); setSourceType(undefined); }} onSaved={() => { setTypeEditorOpen(false); setSourceType(undefined); }} />
       <ScanDialog open={scanOpen} catalog={catalog.data} onClose={() => setScanOpen(false)} onTypeParts={() => { setScanOpen(false); setTypePartsOpen(true); }} onCreateType={openEditorFromScan} />
+      {/* Above any open dialog: the Add/Edit dialog stays open on a failed save, and a quantity change fails silently otherwise. */}
+      <Snackbar open={patch.isError || add.isError} autoHideDuration={8000} onClose={() => { patch.reset(); add.reset(); }}>
+        <Alert severity="error" onClose={() => { patch.reset(); add.reset(); }}>Couldn't save that part: {(patch.error ?? add.error)?.message}</Alert>
+      </Snackbar>
     </Container>
   );
 }

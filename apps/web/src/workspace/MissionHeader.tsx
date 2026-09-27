@@ -268,6 +268,11 @@ export function MissionHeader(props: MissionHeaderProps) {
           Couldn't rename the mission: {actions.rename.error.message}
         </Alert>
       )}
+      {stop.isError && (
+        <Alert severity="error" sx={{ mx: 2, mb: 1 }} onClose={() => stop.reset()}>
+          Couldn't stop Claude: {stop.error.message}
+        </Alert>
+      )}
       {detail.recording && (
         <Alert severity="info" icon={<HistoryIcon />} sx={{ mx: 2, mb: 1, py: 0 }}>
           <Tooltip title={detail.recording.provenance} describeChild>

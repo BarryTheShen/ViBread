@@ -133,6 +133,7 @@ export function SchematicTab({ missionId, revision, released }: { missionId: str
           </Paper>
           {/* Under the canvas, not on it: the canvas is dark in both themes and the legend uses the theme's text colours. */}
           <WireLegend wires={wires} />
+          {setWireColor.isError && <Typography sx={{ color: "error.main", mt: 0.5 }}>Colour not saved: {setWireColor.error.message}</Typography>}
         </Box>
       ) : (
         <Alert severity="info">The schematic drawing isn't ready for this design yet.</Alert>

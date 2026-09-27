@@ -1002,10 +1002,12 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
     refetchIntervalInBackground: true,
     retry: false,
   });
+  // Released builds. Also fetched for a direct /b/<id> link: a mission without GO for build isn't in it, and its steps
+  // (the latest, unreviewed design) get a warning instead of looking like the build target.
   const phoneMissionsQuery = useQuery({
     queryKey: ["phone-builds"],
-    queryFn: () => fetchPhoneMissions(),
-    enabled: missionId.length === 0,
+    queryFn: ({ signal }) => fetchPhoneMissions(signal),
+    refetchInterval: missionId ? 10_000 : false,
     retry: 1,
   });
 
@@ -1047,6 +1049,7 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
   }
 
   const build = query.data;
+  const notReleased = Boolean(build && phoneMissionsQuery.data && !phoneMissionsQuery.data.some((mission) => mission.id === missionId));
   const stale = Boolean(build && query.dataUpdatedAt > 0 && now - query.dataUpdatedAt > STALE_AFTER_MS);
   const headline = build?.headline?.trim() || (build && build.steps.length > 0 ? "Build checklist ready" : undefined);
 
@@ -1119,6 +1122,13 @@ export default function BuildModePage({ missionId: missionIdProp }: BuildModePag
             <Alert severity="warning" icon={<CloudOffOutlined />}>
               <AlertTitle>Waiting for Mission Control</AlertTitle>
               {errorMessage(query.error)}
+            </Alert>
+          )}
+
+          {notReleased && (
+            <Alert severity="warning" icon={<FactCheckOutlined />}>
+              <AlertTitle>Not released for building yet</AlertTitle>
+              These steps are for the latest design, which can still change. Press GO for build on the laptop before you build.
             </Alert>
           )}
 

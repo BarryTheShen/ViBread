@@ -27,6 +27,7 @@ import { getJson } from "../api/client.js";
 import { ProjectImportButton } from "../project/ProjectImportButton.js";
 import { WEB_VERSION } from "../version.js";
 import { useConnections, useMissions } from "../api/hooks.js";
+import { isSignInRequired } from "../components/SignIn.js";
 import { MissionActions, normalizeMissionTitle, useMissionActions, validateMissionTitle } from "../workspace/MissionActions.js";
 const COLLAPSED_KEY = "vibread.sidebar.collapsed";
 const SIDEBAR_WIDTH = 260;
@@ -329,6 +330,16 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             <MissionGroup title="Today" missions={grouped.today} collapsed={collapsed} />
             <MissionGroup title="Earlier" missions={grouped.earlier} collapsed={collapsed} />
           </>
+        ) : missions.isError ? (
+          // Not "No missions yet": a failed load (server down, signed out) must not look like an empty account.
+          !collapsed && (
+            <Stack sx={{ px: 0.5, py: 1, gap: 0.5, alignItems: "flex-start" }} role="alert">
+              <Typography variant="body2" sx={{ color: "error.main" }}>
+                {isSignInRequired(missions.error) ? "Sign in to see your missions." : `Couldn't load missions: ${missions.error.message}`}
+              </Typography>
+              <Button size="small" onClick={() => void missions.refetch()}>Retry</Button>
+            </Stack>
+          )
         ) : (
           !collapsed && <Typography variant="body2" sx={{ px: 0.5, py: 1, color: "text.secondary" }}>No missions yet.</Typography>
         )}

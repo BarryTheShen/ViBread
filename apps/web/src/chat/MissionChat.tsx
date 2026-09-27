@@ -570,10 +570,15 @@ export function MissionThread({ chat: instance, history, reloadHistory, detail, 
 
 /** The mission conversation: assistant-ui thread over the AI SDK chat, with timeline rows merged in and our MUI chat box. */
 export function MissionChat(props: MissionChatProps) {
+  // The live Chat keeps the conversation while it is mounted and never writes it back here, so a cached copy goes stale
+  // with the first message sent. Drop it on unmount: coming back to a mission loads the saved history again rather than
+  // opening on the first-visit snapshot (missing tonight's replies, and on a fresh mission re-sending the brief). Not
+  // under ["mission", id]: invalidating the mission after a release or build step must not refetch the whole chat.
   const history = useQuery({
-    queryKey: ["mission", props.missionId, "chat"],
+    queryKey: ["mission-chat", props.missionId],
     queryFn: ({ signal }) => fetchChatHistory(props.missionId, signal),
     staleTime: Number.POSITIVE_INFINITY,
+    gcTime: 0,
     refetchOnWindowFocus: false,
   });
   if (history.isPending) {
