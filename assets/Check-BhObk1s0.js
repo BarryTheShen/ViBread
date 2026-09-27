@@ -1,0 +1,1 @@
+import{g as e,xt as t}from"./Stack-Btad24oW.js";var n=t(),r=e((0,n.jsx)(`path`,{d:`M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z`}),`Check`);export{r as t};
