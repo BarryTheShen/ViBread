@@ -74,6 +74,8 @@ class FakeUno {
   /** Bytes the chip received while Optiboot was deaf, or the unread tail of an earlier frame. */
   private uart: number[] = [];
   private deaf = false;
+  /** Each reset restarts Optiboot's start-up: a wake-up scheduled by an earlier reset no longer applies. */
+  private resets = 0;
   private missedResets: number;
   private overrunPending: boolean;
   private flashed = false;
@@ -220,7 +222,10 @@ class FakeUno {
     const deafMs = this.options.deafAfterResetMs ?? 0;
     if (deafMs > 0) {
       this.deaf = true;
-      this.later(deafMs, () => this.wake());
+      const reset = ++this.resets;
+      this.later(deafMs, () => {
+        if (reset === this.resets) this.wake();
+      });
     }
     this.startAppSoon(this.options.bootWindowMs ?? 1_000);
     const stale = this.options.staleAfterReset;
