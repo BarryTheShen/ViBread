@@ -21,7 +21,11 @@ import { runs } from "./db/schema.js";
 import { parseMyHardware } from "./services/hardware.js";
 import { SqlApprovalBroker } from "./services/approvals.js";
 import { SqlMissionStore } from "./store/missions.js";
+import { BUILD_STEP_EVENT, doneSteps } from "./services/build-progress.js";
 import { WIRE_COLOR_EVENT, wireColorChange, wireOverrides } from "./services/wire-colors.js";
+import type { PhotonSettings } from "./capcom/index.js";
+import { mergeCapcomPrefs } from "./capcom/prefs.js";
+import { BUILD_VERSION } from "./version.js";
 import type { AppContext } from "./context.js";
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
 const fieldValueSchema = z.union([z.string(), z.number(), z.boolean()]);
@@ -82,6 +86,9 @@ export function approvalOwnerMiddleware(ctx: AppContext): RequestHandler {
 
 export function mountApi(app: Express, ctx: AppContext): void {
   const router = Router();
+  router.get("/version", (_req, res) => {
+    res.json({ ...BUILD_VERSION, runtime: process.env.VIBREAD_RUNTIME === "desktop" ? "desktop" : "server" });
+  });
   router.get("/me", async (req, res) => {
     const user = actorUser(res, ctx);
     res.json({ user, auth: ctx.config.singleOperator ? "single-operator" : "google" });
@@ -479,8 +486,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
     if (!mission || mission.releasedRevision === undefined) throw httpError(409, "not_released", "Press GO for build first.");
     const n = parsePositiveInt((req.body as { n?: unknown }).n);
     const before = await ctx.missions.build(missionId);
-    const events = await ctx.store.listEvents(missionId);
-    const alreadyDone = events.some((event) => event.kind === "build.step" && event.revision === before.revision && eventStepNumber(event.data) === n);
+    const alreadyDone = before.revision !== undefined && doneSteps(await ctx.store.listEvents(missionId), before.revision).includes(n);
     if (alreadyDone) {
       res.json(before);
       return;
@@ -489,7 +495,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
       missionId,
       channel: "web",
       actor: actorFor(res, ctx),
-      kind: "build.step",
+      kind: BUILD_STEP_EVENT,
       text: `Step ${n} done`,
       revision: before.revision,
       data: { n },
@@ -713,7 +719,7 @@ export function mountApi(app: Express, ctx: AppContext): void {
   router.get("/connections", async (req, res) => {
     const user = actorUser(res, ctx);
     res.json({
-      imessage: { linked: Boolean(await ctx.links.handleForUser(user.id)), handle: await ctx.links.handleForUser(user.id), capcomNumber: ctx.config.capcom.number },
+      imessage: { linked: Boolean(await ctx.links.handleForUser(user.id)), handle: await ctx.links.handleForUser(user.id), capcomNumber: ctx.capcom.number() },
       claudeCode: { tokens: await ctx.tokens.list(user.id) },
       mcpUrl: `${ctx.config.publicUrl}/mcp`,
       phoneUrl: ctx.config.phoneUrl,
@@ -740,8 +746,34 @@ export function mountApi(app: Express, ctx: AppContext): void {
   router.post("/connections/imessage/code", async (_req, res) => {
     const user = actorUser(res, ctx);
     const code = await ctx.links.createCode(user.id);
-    const link = ctx.config.capcom.number ? `sms:${ctx.config.capcom.number}?body=${encodeURIComponent(code.code)}` : undefined;
-    res.status(201).json({ ...code, capcomNumber: ctx.config.capcom.number, link });
+    const number = ctx.capcom.number();
+    const link = number ? `sms:${number}?body=${encodeURIComponent(code.code)}` : undefined;
+    res.status(201).json({ ...code, capcomNumber: number, link });
+  });
+  // CAPCOM settings: linked handle, provider state (and what to set when it's off), notification prefs, test message.
+  const imessageSettings = async (req: Request, userId: string) => {
+    const handle = await ctx.links.handleForUser(userId);
+    return { ...ctx.capcom.status(), linked: Boolean(handle), ...(handle ? { handle } : {}), prefs: ctx.capcom.prefs.get(userId), canEditPhoton: ctx.lanGuard.isLoopback(req) };
+  };
+  router.get("/connections/imessage/settings", async (req, res) => {
+    res.json(await imessageSettings(req, actorUser(res, ctx).id));
+  });
+  router.patch("/connections/imessage/settings", async (req, res) => {
+    const user = actorUser(res, ctx);
+    ctx.capcom.prefs.save(user.id, mergeCapcomPrefs(ctx.capcom.prefs.get(user.id), req.body));
+    res.json(await imessageSettings(req, user.id));
+  });
+  router.post("/connections/imessage/test", async (_req, res) => {
+    await ctx.capcom.sendTest(actorUser(res, ctx).id);
+    res.json({ ok: true });
+  });
+  // Photon credentials are server configuration: only from the ViBread computer itself; the secret is never returned.
+  router.patch("/connections/imessage/photon", async (req, res) => {
+    const user = actorUser(res, ctx);
+    if (!ctx.lanGuard.isLoopback(req)) throw httpError(403, "lan_loopback_required", "Photon settings can only be changed on the ViBread computer");
+    const body = (req.body ?? {}) as PhotonSettings;
+    await ctx.capcom.savePhoton({ projectId: body.projectId, projectSecret: body.projectSecret, number: body.number });
+    res.json(await imessageSettings(req, user.id));
   });
   // PLAN item 16 — connect your Claude account (pi-ai's Anthropic sign-in or an API key; see src/claude/accounts.ts).
   router.post("/connections/claude/start", async (_req, res) => {
@@ -825,11 +857,6 @@ function toSummary(mission: Mission): unknown {
   };
 }
 
-function eventStepNumber(data: unknown): number | undefined {
-  if (typeof data !== "object" || data === null || Array.isArray(data) || !("n" in data)) return undefined;
-  const n = data.n;
-  return typeof n === "number" && Number.isInteger(n) ? n : undefined;
-}
 
 function parsePositiveInt(value: unknown): number {
   const n = typeof value === "number" ? value : Number(value);

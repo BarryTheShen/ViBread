@@ -112,12 +112,17 @@ async function openMainWindow(info: ServerInfo): Promise<void> {
     minWidth: 900,
     minHeight: 600,
     show: false,
-    title: "ViBread",
+    title: `ViBread ${app.getVersion()}`,
     backgroundColor: "#0b1118",
     icon: join(STATIC, "icon.png"),
     webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
   });
   mainWindow = window;
+  // The page's <title> replaces the window title on load; keep the version visible next to it.
+  window.on("page-title-updated", (event, title) => {
+    event.preventDefault();
+    window.setTitle(`${title} — ${app.getVersion()}`);
+  });
   window.on("closed", () => {
     mainWindow = undefined;
   });

@@ -46,6 +46,10 @@ const HIDDEN_KINDS: Record<string, true> = {
   "bench.ask.opened": true,
   "bench.ask.closed": true,
   "bench.ask.answered": true,
+  // Claude's question and its answer are already the chat's question card and the next message; a finished run is the reply.
+  "agent.asked": true,
+  "agent.ask.answered": true,
+  "agent.run.finished": true,
 };
 
 /** Machine phase events worth a row; the rest duplicate another row (RELEASED ↔ revision.released, BUILD_STEP ↔ build.step …). */

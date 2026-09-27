@@ -1,4 +1,4 @@
-export { createPipeline, type BackgroundPipeline, type Pipeline } from "./pipeline.js";
+export { DERIVATION_VERSION, createPipeline, type BackgroundPipeline, type EvaluateOptions, type Pipeline } from "./pipeline.js";
 export { FAULTS_ARTIFACT, loadFaultDictionary, type BackgroundLog } from "./faults.js";
 export { createToolRegistry, type RegistryHooks } from "./registry.js";
 export { createUserTools, inventoryOverview, type InventoryOverview, type InventorySource, type UserToolDef } from "./inventory.js";
@@ -15,6 +15,8 @@ export {
   deterministicGo,
   errorMessage,
   isClaudeNotConnected,
+  SYSTEM_ACTOR,
+  statusReport,
   traceTools,
   type CircuitInterface,
   type ToolTraceEvent,

@@ -3,6 +3,7 @@ import type { Logger } from "pino";
 import type { MissionService, MissionStore, ApprovalBroker, ToolRegistry } from "@vibread/core";
 import type { ServerAuth } from "./auth.js";
 import { createAgentRuntime } from "./agents/index.js";
+import { createDerivedRefresher, type DerivedRefresher } from "./agents/rederive.js";
 import { createServerAuth } from "./auth.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { createClaudeAccountService, type ClaudeAccountService } from "./claude/accounts.js";
@@ -12,6 +13,7 @@ import { createApprovalBroker } from "./services/approvals.js";
 import { createLinkService, type LinkService } from "./services/links.js";
 import { createTokenService, type TokenService } from "./services/tokens.js";
 import { createCapcomSpaceStore, type CapcomSpaceStore } from "./services/capcom-spaces.js";
+import { createCapcomHandle, type CapcomHandle } from "./capcom/index.js";
 import { createBenchAskStore, type BenchAskStore } from "./services/bench-asks.js";
 import { createLanGuard, type LanGuard } from "./services/lan-guard.js";
 import { createDebugLog, type DebugLog } from "./services/debug-log.js";
@@ -33,6 +35,8 @@ export interface AppContext {
   tokens: TokenService;
   links: LinkService;
   capcomSpaces: CapcomSpaceStore;
+  /** CAPCOM (iMessage) lifecycle, Photon settings, per-user notification prefs and the test message. */
+  capcom: CapcomHandle;
   benchAsks: BenchAskStore;
   lanGuard: LanGuard;
   debug: DebugLog;
@@ -43,6 +47,8 @@ export interface AppContext {
   missions: MissionService;
   tools: ToolRegistry;
   runtime: AgentRuntime;
+  /** Re-derives results made by older code in the background (agents/rederive.ts); started once the server listens. */
+  derived: DerivedRefresher;
   messages: MessageStore;
   claudeAccounts: ClaudeAccountService;
   operator(): Promise<{ id: string; name: string }>;
@@ -74,6 +80,14 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
   const messages = createMessageStore({ db: opened.db, sqlite: opened.sqlite });
   const claudeAccounts = createClaudeAccountService({ config, db: opened.db, log });
   const runtime = createAgentRuntime({ config, log, store, broker, machine, messages, claudeAccounts, inventory, hardware, debug });
+  const derived = createDerivedRefresher({
+    store,
+    pipeline: runtime.pipeline,
+    debug,
+    log,
+    version: () => runtime.derivation(),
+    missionIds: async () => (opened.sqlite.prepare('SELECT "id" FROM "missions" ORDER BY "updatedAt" DESC').all() as { id: string }[]).map((row) => row.id),
+  });
   const ctx: AppContext = {
     config,
     log,
@@ -84,6 +98,7 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
     tokens,
     links,
     capcomSpaces,
+    capcom: createCapcomHandle({ sqlite: opened.sqlite, config, log }),
     benchAsks,
     lanGuard,
     debug,
@@ -94,6 +109,7 @@ export function createAppContext(input: { config?: ServerConfig; log?: Logger } 
     missions: runtime.missions,
     tools: runtime.tools,
     runtime,
+    derived,
     messages,
     claudeAccounts,
     async operator() {
