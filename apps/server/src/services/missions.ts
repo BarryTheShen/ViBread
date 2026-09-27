@@ -265,6 +265,7 @@ export function createMissionService(
         steps: colored.steps,
         ...(colored.wires ? { wires: colored.wires } : {}),
         current,
+        released: revision !== null && revision.n === mission.releasedRevision,
         plug: steps[current - 1]?.plug ?? "unplugged",
         ...(headlineEvent ? { headline: headlineEvent.text } : {}),
         updatedAt: headlineEvent?.at ?? mission.updatedAt,

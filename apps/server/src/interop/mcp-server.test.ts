@@ -107,6 +107,20 @@ describe("MCP on the real server", () => {
     await client.close();
   }, 180_000);
 
+  it("without Claude, an electrically failing design is not described as having passed the other checks", async () => {
+    const client = await connect(token);
+    const missionId = (JSON.parse(text(await client.callTool({ name: "vibread_create_mission", arguments: { brief: golden.brief, inventory: golden.inventory } }))) as { id: string }).id;
+    // 10 Ω in front of every LED: EECOM's LED-CURRENT says NO-GO.
+    const circuit = { ...golden.circuit, parts: golden.circuit.parts.map((part) => (part.module === "resistor" ? { ...part, params: { ...part.params, ohms: 10 } } : part)) };
+    const proposed = await client.callTool({ name: "propose_design", arguments: { missionId, circuit } }, undefined, { timeout: 120_000 });
+    const outcome = JSON.parse(text(proposed)) as { verdicts: Record<string, string>; findings: { ruleId: string; fix?: string }[] };
+    expect(outcome.verdicts).toMatchObject({ EECOM: "NO-GO", FIDO: "NO-GO" });
+    const notWritten = outcome.findings.find((finding) => finding.ruleId === "TESTS-NOT-WRITTEN");
+    expect(notWritten?.fix).not.toContain("passed the other checks");
+    expect(notWritten?.fix).toContain("Fix the other consoles' findings first");
+    await client.close();
+  }, 180_000);
+
   it("another user's mission reads exactly like a missing one", async () => {
     const own = await connect(token);
     const missionId = (JSON.parse(text(await own.callTool({ name: "vibread_create_mission", arguments: { brief: "A night light" } }))) as { id: string }).id;
