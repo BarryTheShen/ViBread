@@ -64,7 +64,8 @@ function answerForAsk(session: SimSession, plan: SelfTestPlan, ask: Extract<Devi
   answered.add(ask.id);
 }
 
-function runVirtual(circuit: Circuit, plan: SelfTestPlan, hex: string): VirtualRun {
+/** Run `run all`, or each listed test on its own to its `end` line (a Build Steps checkpoint), answering every prompt at once. */
+function runVirtual(circuit: Circuit, plan: SelfTestPlan, hex: string, tests: readonly string[] = ["all"]): VirtualRun {
   const session = new SimSession({ circuit, hex, light: { LDR1: 0.8 } });
   const decoder = new LineDecoder();
   const lines: DeviceLine[] = [];
@@ -72,6 +73,7 @@ function runVirtual(circuit: Circuit, plan: SelfTestPlan, hex: string): VirtualR
   const answered = new Set<string>();
   const answers: Record<string, string> = {};
   const pendingAsks: Array<Extract<DeviceLine, { t: "ask" }>> = [];
+  let finished: (line: DeviceLine) => boolean = () => false;
   let done = false;
   session.onSerial((chunk) => {
     for (const decoded of decoder.push(chunk)) {
@@ -79,7 +81,7 @@ function runVirtual(circuit: Circuit, plan: SelfTestPlan, hex: string): VirtualR
       else {
         lines.push(decoded);
         if (decoded.t === "ask") pendingAsks.push(decoded);
-        if (decoded.t === "done") done = true;
+        if (finished(decoded)) done = true;
       }
     }
   });
@@ -90,12 +92,16 @@ function runVirtual(circuit: Circuit, plan: SelfTestPlan, hex: string): VirtualR
     }
   };
   session.run(100);
-  session.serialWrite('{"c":"run","test":"all"}\n');
-  for (let slice = 0; slice < 200 && !done; slice += 1) {
-    session.run(50);
-    answerPending();
+  for (const test of tests) {
+    done = false;
+    finished = (line) => (test === "all" ? line.t === "done" : line.t === "end" && line.test === test);
+    session.serialWrite(`${JSON.stringify({ c: "run", test })}\n`);
+    for (let slice = 0; slice < 200 && !done; slice += 1) {
+      session.run(50);
+      answerPending();
+    }
+    if (!done) throw new Error(`virtual bench did not finish ${test} within its bounded run window`);
   }
-  if (!done) throw new Error("virtual bench did not finish within its bounded run window");
   return { lines, invalid, answers };
 }
 
@@ -165,5 +171,18 @@ describe("virtual bench protocol", () => {
     const result = await evaluateRun({ circuit: launch.circuit, layout, plan, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: "virtual-launch" });
     expect(result.verdict, JSON.stringify(result.results)).toBe("pass");
     expect(result.results.find((entry) => entry.test === "buzzer.confirm")?.status).toBe("pass");
+  }, 120_000);
+  it("passes Launch Control's checkpoint subset, buttons included, when each prompt is answered at once", async () => {
+    const plan = planSelfTest(launch.circuit, revisionHash(launch.circuit));
+    const compiled = await compileBenchFirmware(plan);
+    if (!compiled.ok || compiled.hex === undefined) throw new Error(`launch bench firmware did not compile: ${compiled.log}`);
+    // The Build Steps deep link runs these one at a time (?tests=net.continuity,button.interactive,led.sequence).
+    const tests = ["net.continuity", "button.interactive", "led.sequence"] as const;
+    const run = runVirtual(launch.circuit, plan, compiled.hex, tests);
+    expect(run.invalid, JSON.stringify(run.invalid)).toHaveLength(0);
+    const ends = Object.fromEntries(run.lines.flatMap((line) => (line.t === "end" ? [[line.test, line.status]] : [])));
+    expect(ends).toMatchObject({ "button.interactive": "pass", "led.sequence": "pass" });
+    const result = await evaluateRun({ circuit: launch.circuit, layout: layoutBoard(launch.circuit), plan: { ...plan, tests: [...tests] }, lines: run.lines, answers: run.answers, kind: "selftest", revision: 1, runId: "virtual-launch-subset" });
+    expect(result.results.find((entry) => entry.test === "button.interactive")?.status, JSON.stringify(result.results)).toBe("pass");
   }, 120_000);
 });

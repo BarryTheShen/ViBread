@@ -51,7 +51,13 @@ class FakeUno implements ISTKTransport {
   readonly opens: number[] = [];
   appText = "";
 
-  constructor(private firmware: Firmware, private readonly options: { bootloaderBaud: number; flashedFirmware: Firmware; bootWindowMs?: number }) {}
+  constructor(
+    private firmware: Firmware,
+    private readonly options: { bootloaderBaud: number; flashedFirmware: Firmware; bootWindowMs?: number; opensRefusedAfterClose?: number; busyAtConnect?: boolean },
+  ) {}
+  /** Opens still to refuse after the latest close (a Windows CH340/FTDI driver releasing the handle). */
+  private refusals = 0;
+  refusedOpens = 0;
 
   on(_event: "data", listener: (chunk: Uint8Array) => void): void {
     this.listeners.add(listener);
@@ -63,6 +69,11 @@ class FakeUno implements ISTKTransport {
 
   async open(baud: number): Promise<void> {
     if (this.baud !== undefined) throw Object.assign(new Error("Failed to execute 'open' on 'SerialPort': The port is already open."), { name: "InvalidStateError" });
+    if (this.refusals > 0 || (this.options.busyAtConnect && this.opens.length === 0)) {
+      this.refusals = Math.max(0, this.refusals - 1);
+      this.refusedOpens += 1;
+      throw Object.assign(new Error("Failed to execute 'open' on 'SerialPort': Failed to open serial port."), { name: "NetworkError" });
+    }
     this.baud = baud;
     this.opens.push(baud);
     this.dtr = true;
@@ -73,6 +84,7 @@ class FakeUno implements ISTKTransport {
     // WebSerialTransport.close() drops every listener, including the adapter's.
     this.listeners.clear();
     this.baud = undefined;
+    this.refusals = this.options.opensRefusedAfterClose ?? 0;
   }
 
   /** SerialPort.setSignals as Web Serial takes it (the adapter translates the flasher's DTR/RTS). */
@@ -206,13 +218,13 @@ async function until(check: () => boolean): Promise<void> {
 }
 
 /** Connect as BenchPage does: runner attached to the port, port opened at the telemetry baud. */
-async function connect(firmware: Firmware, options: { bootloaderBaud: number; flashedFirmware: Firmware }) {
+async function connect(firmware: Firmware, options: { bootloaderBaud: number; flashedFirmware: Firmware; opensRefusedAfterClose?: number; busyAtConnect?: boolean }) {
   board = new FakeUno(firmware, options);
   const fake = board;
-  const transport = new BufferedTransport(fake, async (signals) => fake.setPortSignals(webSerialSignals(signals)));
-  const connection = { transport, profile: BOARD_PROFILES[BOARD], port: {} as SerialPort } satisfies BoardPortConnection;
   const logged: BenchLogEntry[] = [];
   const log = (level: BenchLogLevel, message: string, data?: Record<string, unknown>) => void logged.push({ at: "", level, message, ...(data ? { data } : {}) });
+  const transport = new BufferedTransport(fake, async (signals) => fake.setPortSignals(webSerialSignals(signals)), { log });
+  const connection = { transport, profile: BOARD_PROFILES[BOARD], port: {} as SerialPort } satisfies BoardPortConnection;
   const runner = new BenchRunner({ plan, circuit, revision: 2, transport, log, timeouts: { helloMs: 300, vccMs: 1_000 } });
   await transport.open(TELEMETRY_BAUD);
   const flash = () => settle(flashHex({ connection, hex: HEX, onBoundary: () => runner.markFlashBoundary(), log, commandTimeoutMs: 100 }));
@@ -276,5 +288,42 @@ describe("flash safe firmware, then check board power (issue #20)", () => {
     expect(classifySerialError(failure)).toMatchObject({ kind: "sync-timeout", technical: expect.stringContaining("STK500SyncError") });
     // The port is left open at the telemetry baud so the board's own sketch can still be heard.
     expect(bench.board.opens.at(-1)).toBe(TELEMETRY_BAUD);
+  });
+
+  it("waits out a Windows driver that refuses to reopen the port right after we closed it", async () => {
+    // Every reopen after our own close fails twice before the driver lets go (CH340/FTDI on Windows).
+    const bench = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: { design: DESIGN, board: BOARD }, opensRefusedAfterClose: 2 });
+    await expect(bench.flash()).resolves.toEqual({ baud: 115_200, bytes: 16 });
+    await bench.startRail();
+    expect(bench.runner.state.seenVcc?.mv).toBe(5001);
+    // Both reopens (before the flash and at 115200 after it) were refused twice, then worked.
+    expect(bench.board.refusedOpens).toBe(4);
+    expect(bench.board.opens).toEqual([115_200, 115_200, 115_200]);
+    const retries = bench.logged.filter((entry) => /^serial: reopen retry/.test(entry.message)).map((entry) => entry.message);
+    expect(retries).toEqual([
+      "serial: reopen retry 1/3 after NetworkError: Failed to execute 'open' on 'SerialPort': Failed to open serial port.",
+      "serial: reopen retry 2/3 after NetworkError: Failed to execute 'open' on 'SerialPort': Failed to open serial port.",
+      "serial: reopen retry 1/3 after NetworkError: Failed to execute 'open' on 'SerialPort': Failed to open serial port.",
+      "serial: reopen retry 2/3 after NetworkError: Failed to execute 'open' on 'SerialPort': Failed to open serial port.",
+    ]);
+  });
+
+  it("gives up after three retries, and never retries the first open at Connect (a busy port is another app)", async () => {
+    const stuck = await connect(undefined, { bootloaderBaud: 115_200, flashedFirmware: undefined, opensRefusedAfterClose: 9 });
+    const failure = await stuck.flash().then(() => undefined, (error: unknown) => error);
+    expect(classifySerialError(failure).kind).toBe("busy");
+    // Three retries for the flash's own open, then three more when it tries to leave the port open at 115200.
+    expect(stuck.logged.filter((entry) => /^serial: reopen retry/.test(entry.message)).map((entry) => entry.message.slice(0, 24))).toEqual(
+      ["1/3", "2/3", "3/3", "1/3", "2/3", "3/3"].map((n) => `serial: reopen retry ${n}`),
+    );
+
+    board?.stop();
+    board = new FakeUno(undefined, { bootloaderBaud: 115_200, flashedFirmware: undefined, busyAtConnect: true });
+    const fake = board;
+    const logged: string[] = [];
+    const transport = new BufferedTransport(fake, undefined, { log: (_level, message) => void logged.push(message) });
+    await expect(transport.open(TELEMETRY_BAUD)).rejects.toThrow("Failed to open serial port");
+    expect(fake.refusedOpens).toBe(1);
+    expect(logged).toEqual([]);
   });
 });

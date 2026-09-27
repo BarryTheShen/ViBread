@@ -26,6 +26,24 @@ function lineOf(entry: BenchLogEntry): string {
   return `${entry.at.slice(11, 23)} ${entry.level.toUpperCase()} ${entry.message}${data}`;
 }
 
+/**
+ * Where the bench runs, for triaging a report: the desktop app is Electron (its main window loads the web app, and
+ * Electron's user agent names itself), a browser is Chrome or Edge. The OS comes from Chromium's User-Agent Client
+ * Hints when available, otherwise from the legacy platform string.
+ */
+export function benchRuntime(nav: Pick<Navigator, "userAgent" | "platform"> & { userAgentData?: { platform?: string; mobile?: boolean } } = navigator): Record<string, unknown> {
+  const electron = /\bElectron\/([\d.]+)/.exec(nav.userAgent)?.[1];
+  const chrome = /\b(?:Chrome|Chromium)\/([\d.]+)/.exec(nav.userAgent)?.[1];
+  return {
+    app: electron ? "desktop" : "browser",
+    os: nav.userAgentData?.platform || nav.platform || "unknown",
+    ...(electron ? { electron } : {}),
+    ...(chrome ? { chrome } : {}),
+    webSerial: "serial" in nav,
+    userAgent: nav.userAgent,
+  };
+}
+
 export function createBenchLog(missionId: string, send: typeof fetch = (...args) => fetch(...args)): { log: BenchLog; flush(): Promise<void> } {
   let queue: BenchLogEntry[] = [];
   let idle: ReturnType<typeof setTimeout> | undefined;

@@ -174,4 +174,74 @@ describe("BenchRunner", () => {
     expect(runner.state.phase).toBe("complete");
     expect(runner.runRequest().plan.tests).toEqual(["button.interactive", "led.sequence"]);
   });
+
+  describe("a checkpoint test that takes as long as the person does (issue 21)", () => {
+    const ask = (id: string, kind: string) => JSON.stringify({ t: "ask", id, test: "button.interactive", kind, part: id.startsWith("btn0") ? "BTN1" : "BTN2", choices: ["done"], timeoutMs: 20_000 });
+
+    it("waits out four 20 s button prompts answered at human speed, then starts the next test", async () => {
+      vi.useFakeTimers();
+      try {
+        const transport = new FakeTransport();
+        const runner = new BenchRunner({ circuit, plan, revision: 2, transport });
+        const run = runner.startSelfTest(["button.interactive", "led.sequence"]);
+        let settled: unknown = "pending";
+        run.then(() => (settled = "done"), (error: unknown) => (settled = error));
+        await vi.advanceTimersByTimeAsync(0);
+        transport.receive(JSON.stringify({ t: "begin", test: "button.interactive" }));
+        // Each prompt waits 14 s for the person (60 s in all), the board answering each click with an observation.
+        for (const [id, kind] of [["btn0-press", "press-hold"], ["btn0-release", "release"], ["btn1-press", "press-hold"], ["btn1-release", "release"]]) {
+          transport.receive(ask(id, kind));
+          await vi.advanceTimersByTimeAsync(14_000);
+          await runner.answer(id, "done");
+          await vi.advanceTimersByTimeAsync(500);
+          transport.receive(JSON.stringify({ t: "obs", test: "button.interactive", part: "BTN1", key: kind === "release" ? "released" : "pressed", v: kind === "release" ? 1 : 0 }));
+        }
+        expect(settled).toBe("pending");
+        expect(transport.writes).not.toContain(encodeHostCommand({ c: "run", test: "led.sequence" }));
+        transport.receive(JSON.stringify({ t: "end", test: "button.interactive", status: "pass" }));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(transport.writes).toContain(encodeHostCommand({ c: "run", test: "led.sequence" }));
+        transport.receive(JSON.stringify({ t: "end", test: "led.sequence", status: "pass" }));
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settled).toBe("done");
+        expect(runner.state.error).toBeUndefined();
+        runner.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("still says the board stopped answering when it goes silent", async () => {
+      vi.useFakeTimers();
+      try {
+        const transport = new FakeTransport();
+        const runner = new BenchRunner({ circuit, plan, revision: 2, transport });
+        const failure = runner.startSelfTest(["led.sequence"]).then(() => undefined, (error: unknown) => error);
+        transport.receive(JSON.stringify({ t: "begin", test: "led.sequence" }));
+        // Past both the 10 s silence limit and the old fixed 30 s wait.
+        await vi.advanceTimersByTimeAsync(40_000);
+        expect(await failure).toEqual(new Error("The board stopped answering during the self-test. Check the cable and power, then retry."));
+        runner.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it("says so too when the board dies while a prompt is open", async () => {
+      vi.useFakeTimers();
+      try {
+        const transport = new FakeTransport();
+        const runner = new BenchRunner({ circuit, plan, revision: 2, transport });
+        const failure = runner.startSelfTest(["button.interactive"]).then(() => undefined, (error: unknown) => error);
+        transport.receive(ask("btn0-press", "press-hold"));
+        // Nobody answers: at 20 s the page answers "timeout"; the board never replies.
+        await vi.advanceTimersByTimeAsync(25_000);
+        expect(await failure).toEqual(new Error("The board stopped answering during the self-test. Check the cable and power, then retry."));
+        expect(transport.writes).toContain(encodeHostCommand({ c: "answer", id: "btn0-press", v: "timeout" }));
+        runner.dispose();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+  });
 });

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactElement } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
+import type { SxProps, Theme } from "@mui/material/styles";
 import Button from "@mui/material/Button";
 import Card from "@mui/material/Card";
 import CardContent from "@mui/material/CardContent";
@@ -23,7 +24,7 @@ import type { BenchRunResult, BoardProfileId, BuildState, Circuit, DeviceLine, L
 import { BOARD_PROFILES, revisionHash } from "@vibread/core";
 import { FAULTS, evaluateRun, planSelfTest, promptFor } from "@vibread/bench";
 import { BenchRunner, BoardCheckError, type BenchRunnerState } from "./runner.js";
-import { createBenchLog } from "./benchLog.js";
+import { benchRuntime, createBenchLog } from "./benchLog.js";
 import { applyBrowserFault, circuitWithFault } from "./faults.js";
 import { decorateBreadboardSvg, fallbackBreadboardSvg, candidateHighlight, type SvgHighlight } from "./svg.js";
 import {
@@ -36,7 +37,7 @@ import {
   type BoardPortConnection,
   type FlashProgress,
 } from "./serial.js";
-import { faultLabel, VirtualBenchTransport, type VirtualFault, type VirtualPartTelemetry } from "./virtual.js";
+import { createTelemetryStore, faultLabel, VirtualBenchTransport, type TelemetryStore, type VirtualFault } from "./virtual.js";
 import { BenchAskBridge, type RemoteAskStatus } from "./askBridge.js";
 import { approvalGate } from "./approval.js";
 import { MONO_FONT } from "../theme.js";
@@ -195,6 +196,13 @@ function cleanTelemetryLog(lines: string[]): string[] {
 
 const actionButtonSx = { minHeight: 46, borderRadius: 2 } as const;
 
+/** The breadboard drawing with the highlighted fault area and, on the virtual board, the parts' live state. */
+function DecoratedBoard({ svg, highlight, telemetry, sx }: { svg: string; highlight: SvgHighlight; telemetry: TelemetryStore; sx: SxProps<Theme> }): ReactElement {
+  const parts = useSyncExternalStore(telemetry.subscribe, telemetry.get)?.parts;
+  const html = useMemo(() => decorateBreadboardSvg(svg, highlight, parts), [svg, highlight, parts]);
+  return <Box sx={sx} dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
 export default function BenchPage(): ReactElement | null {
   const { missionId = "" } = useParams<{ missionId: string }>();
   const [searchParams] = useSearchParams();
@@ -213,7 +221,8 @@ export default function BenchPage(): ReactElement | null {
   const [benchHex, setBenchHex] = useState<string>();
   const [fallbackUpload, setFallbackUpload] = useState<{ command: string; args: string[] }>();
   const [flashProgress, setFlashProgress] = useState<FlashProgress>();
-  const [telemetry, setTelemetry] = useState<VirtualPartTelemetry>();
+  // Telemetry lives outside React state: only the board drawings subscribe, so readings never re-render the page.
+  const [telemetry] = useState(createTelemetryStore);
   const [run, setRun] = useState<BenchRunResult>();
   const [selectedCandidate, setSelectedCandidate] = useState(0);
   const [highlight, setHighlight] = useState<SvgHighlight>({ holes: [], parts: [], jumpers: [] });
@@ -358,11 +367,6 @@ export default function BenchPage(): ReactElement | null {
     setHighlight(candidateHighlight(candidate));
   }, [run, selectedCandidate]);
 
-  const decoratedSvg = useMemo(() => {
-    if (!loaded) return "";
-    return decorateBreadboardSvg(loaded.boardSvg, highlight, telemetry?.parts);
-  }, [loaded, highlight, telemetry]);
-
   const attachRunner = useCallback((nextTransport: BoardPortConnection["transport"] | VirtualBenchTransport, plan: SelfTestPlan, circuit: Circuit, revision: number): BenchRunner => {
     runnerRef.current?.dispose();
     const virtual = nextTransport instanceof VirtualBenchTransport;
@@ -396,7 +400,10 @@ export default function BenchPage(): ReactElement | null {
     setError(undefined);
     setTechnicalError(undefined);
     try {
+      // Logged before the port picker, so a report shows where the bench ran even when choosing a port fails.
+      log("info", "connect: bench runtime", benchRuntime());
       const picked = await requestBoardPort({
+        log,
         onDisconnect: () => {
           log("error", "serial: port disconnected (USB unplugged or the board reset its USB bridge)");
           runnerRef.current?.fail("The board connection was lost.");
@@ -438,7 +445,7 @@ export default function BenchPage(): ReactElement | null {
       setBenchHex(firmware.hex);
       setFallbackUpload(firmware.fallbackUpload);
       const virtual = new VirtualBenchTransport({
-        onTelemetry: setTelemetry,
+        onTelemetry: telemetry.set,
         onError: (message) => {
           setError(message);
           runnerRef.current?.fail(message);
@@ -561,7 +568,7 @@ export default function BenchPage(): ReactElement | null {
         if (mode !== "virtual") throw serverReason;
         result = await evaluateRun({
           circuit: loaded.revision.circuit,
-          plan: loaded.plan,
+          plan: request.plan,
           lines: request.lines,
           answers: request.answers,
           kind: request.kind,
@@ -623,7 +630,7 @@ export default function BenchPage(): ReactElement | null {
         virtualRef.current.start({ circuit: loaded.revision.circuit, hex: firmware.hex, fault: "none" });
         setRunner(undefined);
         setRunnerState(undefined);
-        setTelemetry(undefined);
+        telemetry.set(undefined);
         setFlashProgress({ stage: "Virtual app firmware running", percent: 100 });
       }
       setActiveStep(6);
@@ -684,15 +691,18 @@ export default function BenchPage(): ReactElement | null {
     }
   }, [missionId]);
 
+  // Answering is separate from `busy`: a checkpoint run stays busy until its last test ends, and its prompts must
+  // stay answerable meanwhile (clearing `busy` after an answer would also re-enable the earlier steps' buttons).
+  const [answering, setAnswering] = useState<string>();
   const answerAsk = useCallback(async (askId: string, value: string): Promise<void> => {
     if (!runner) return;
-    setBusy(`answer:${askId}`);
+    setAnswering(askId);
     try {
       await runner.answer(askId, value);
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
-      setBusy(undefined);
+      setAnswering(undefined);
     }
   }, [runner]);
 
@@ -731,7 +741,7 @@ export default function BenchPage(): ReactElement | null {
       setRunnerState(nextRunner.state);
       setRun(undefined);
       setSelectedCandidate(0);
-      setTelemetry(undefined);
+      telemetry.set(undefined);
       setHighlight({ holes: [], parts: [], jumpers: [] });
       setError(undefined);
       railRequestAt.current = undefined;
@@ -955,7 +965,7 @@ export default function BenchPage(): ReactElement | null {
                           <Typography variant="h6" sx={{ fontWeight: 700 }}>{promptTitle(ask, loaded.plan, prompt.title)}</Typography>
                           <Typography color="text.secondary" sx={{ mb: 2 }}>{ask.kind === "which-led" ? "Watch the labeled lights on the virtual board and choose which one blinked." : hint ? `${hint} Tap Done to continue.` : prompt.body}</Typography>
                           <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
-                            {prompt.choices.map((choice) => <Button key={choice.value} variant="contained" onClick={() => void answerAsk(ask.id, choice.value)} disabled={Boolean(busy)} sx={actionButtonSx}>{choice.label}</Button>)}
+                            {prompt.choices.map((choice) => <Button key={choice.value} variant="contained" onClick={() => void answerAsk(ask.id, choice.value)} disabled={answering !== undefined || (busy !== undefined && busy !== "selftest")} sx={actionButtonSx}>{choice.label}</Button>)}
                           </Stack>
                         </Paper>;
                       })}
@@ -967,7 +977,7 @@ export default function BenchPage(): ReactElement | null {
                 {mode === "virtual" && (
                   <Paper variant="outlined" sx={{ flex: 1, minWidth: 0, width: "100%", p: 1.5 }}>
                     <Typography variant="subtitle2">Virtual board — watch the lights here</Typography>
-                    <Box sx={{ mt: 1, p: 1, bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3 } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
+                    <DecoratedBoard svg={loaded.boardSvg} highlight={highlight} telemetry={telemetry} sx={{ mt: 1, p: 1, bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3 } } }} />
                   </Paper>
                 )}
               </Stack>
@@ -995,7 +1005,7 @@ export default function BenchPage(): ReactElement | null {
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
                   <Typography variant="subtitle2" sx={{ mb: 1 }}>Where to look on your board</Typography>
-                  <Box sx={{ "@keyframes vb-wire-pulse": { to: { strokeDashoffset: -32 } }, "& svg": { display: "block", width: "100%", height: "auto", bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3, filter: "drop-shadow(0 0 5px rgba(255,107,107,.8))" }, "& .vb-hl path, & .vb-hl .wire-path": { stroke: "#ff6b6b !important", strokeWidth: 6, strokeDasharray: "14 8", animation: reducedMotion ? "none" : "vb-wire-pulse 1s linear infinite" } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
+                  <DecoratedBoard svg={loaded.boardSvg} highlight={highlight} telemetry={telemetry} sx={{ "@keyframes vb-wire-pulse": { to: { strokeDashoffset: -32 } }, "& svg": { display: "block", width: "100%", height: "auto", bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3, filter: "drop-shadow(0 0 5px rgba(255,107,107,.8))" }, "& .vb-hl path, & .vb-hl .wire-path": { stroke: "#ff6b6b !important", strokeWidth: 6, strokeDasharray: "14 8", animation: reducedMotion ? "none" : "vb-wire-pulse 1s linear infinite" } } }} />
                 </Box>
               </Stack>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
@@ -1010,7 +1020,7 @@ export default function BenchPage(): ReactElement | null {
           <Paper sx={{ p: { xs: 3, md: 6 }, textAlign: "center", overflow: "hidden", position: "relative", "@keyframes vb-liftoff": { from: { transform: "translateY(20px)", opacity: 0 }, to: { transform: "translateY(0)", opacity: 1 } }, animation: reducedMotion ? "none" : "vb-liftoff .8s ease-out" }}>
             <Typography variant="h2" sx={{ fontWeight: 900 }}>Mission verified</Typography>
             <Typography variant="h6" color="text.secondary" sx={{ mt: 1 }}>The bench telemetry agrees with the design. ViBread is GO for launch.</Typography>
-            {mode === "virtual" && <><Typography variant="body2" sx={{ mt: 2 }}>Your project firmware is running on the virtual board.</Typography><Box sx={{ maxWidth: 720, mx: "auto", mt: 2, "& svg": { display: "block", width: "100%", height: "auto" } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} /></>}
+            {mode === "virtual" && <><Typography variant="body2" sx={{ mt: 2 }}>Your project firmware is running on the virtual board.</Typography><DecoratedBoard svg={loaded.boardSvg} highlight={highlight} telemetry={telemetry} sx={{ maxWidth: 720, mx: "auto", mt: 2, "& svg": { display: "block", width: "100%", height: "auto" } }} /></>}
             <Button component={Link} to={`/m/${missionId}`} variant="contained" sx={{ ...actionButtonSx, mt: 3 }}>Return to mission control</Button>
           </Paper>
         )}
