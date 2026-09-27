@@ -1,0 +1,128 @@
+name: Windows upgrade check
+
+# Upgrades an installed ViBread to a newer release the way users do: the old version is installed and has run (first-run
+# setup, server started), then the new installer runs while the old app is still open, after it was closed normally,
+# or after it crashed (its server left running). The new version must then pass the app's self-check.
+on:
+  workflow_dispatch:
+    inputs:
+      old_tag:
+        description: "Installed release (e.g. desktop-v0.1.103)"
+        required: true
+      new_tag:
+        description: "Release to upgrade to (empty: the latest desktop release)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  upgrade:
+    name: upgrade (${{ matrix.scenario }})
+    runs-on: windows-latest
+    timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [app-open, app-closed, app-crashed]
+    steps:
+      - name: Download both installers
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OLD_TAG: ${{ inputs.old_tag }}
+          NEW_TAG: ${{ inputs.new_tag }}
+        run: |
+          new="${NEW_TAG:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)}"
+          echo "upgrade: $OLD_TAG -> $new"
+          gh release download "$OLD_TAG" -R "$GITHUB_REPOSITORY" -p "*win-x64.exe" -D old
+          gh release download "$new" -R "$GITHUB_REPOSITORY" -p "*win-x64.exe" -D new
+          ls -la old new
+
+      - name: Install the old version, run it, then upgrade
+        shell: pwsh
+        env:
+          SCENARIO: ${{ matrix.scenario }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $old = (Get-ChildItem old\*.exe | Select-Object -First 1).FullName
+          $new = (Get-ChildItem new\*.exe | Select-Object -First 1).FullName
+          $installDir = Join-Path $env:LOCALAPPDATA "Programs\ViBread"
+          $exe = Join-Path $installDir "ViBread.exe"
+          function Show-InstallProcesses($label) {
+            $procs = @(Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($installDir, [StringComparison]::OrdinalIgnoreCase) })
+            Write-Host "$label — processes running from the install folder: $($procs.Count)"
+            $procs | ForEach-Object { Write-Host "  $($_.ProcessId) $($_.Name) $($_.ExecutablePath)" }
+          }
+
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          $p = Start-Process -FilePath $old -ArgumentList "/S" -Wait -PassThru
+          Write-Host "old installer exited $($p.ExitCode) after $([int]$clock.Elapsed.TotalSeconds) s; version $((Get-Item $exe).VersionInfo.ProductVersion)"
+
+          # Run the old version like a user: first-run setup, then the server answers.
+          $app = Start-Process -FilePath $exe -PassThru
+          $null = $app.Handle
+          $deadline = (Get-Date).AddMinutes(20)
+          $ready = $false
+          while (-not $ready -and (Get-Date) -lt $deadline) {
+            Start-Sleep 5
+            try { $ready = (Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:8787/api/missions" -TimeoutSec 5).StatusCode -eq 200 } catch { }
+          }
+          if (-not $ready) { throw "the old version's server never answered" }
+          Start-Sleep 20
+          Write-Host "old version up after $([int]$clock.Elapsed.TotalSeconds) s"
+          Show-InstallProcesses "old version running"
+
+          switch ($env:SCENARIO) {
+            "app-open" { }
+            "app-closed" {
+              $null = $app.CloseMainWindow()
+              if (-not $app.WaitForExit(60000)) { Write-Host "the app didn't close within 60 s" }
+              Start-Sleep 10
+            }
+            "app-crashed" {
+              Stop-Process -Id $app.Id -Force
+              Start-Sleep 5
+            }
+          }
+          Show-InstallProcesses "before the upgrade ($env:SCENARIO)"
+
+          $clock.Restart()
+          $p = Start-Process -FilePath $new -ArgumentList "/S" -Wait -PassThru
+          Write-Host "NEW INSTALLER EXITED $($p.ExitCode) after $([int]$clock.Elapsed.TotalSeconds) s"
+          Show-InstallProcesses "after the upgrade"
+          if (Test-Path -LiteralPath $exe) { Write-Host "installed version now: $((Get-Item $exe).VersionInfo.ProductVersion)" } else { Write-Host "ViBread.exe is missing after the upgrade" }
+          if ($p.ExitCode -ne 0) { throw "the upgrade failed (installer exit code $($p.ExitCode))" }
+
+          # The upgraded app must still work: self-check with the user's existing data folder.
+          Get-Process -Name ViBread -ErrorAction SilentlyContinue | Stop-Process -Force
+          Start-Sleep 3
+          $smoke = Join-Path $env:RUNNER_TEMP "smoke"
+          New-Item -ItemType Directory -Force -Path $smoke | Out-Null
+          $env:VIBREAD_SMOKE = "1"
+          $env:VIBREAD_SMOKE_DIR = $smoke
+          $check = Start-Process -FilePath $exe -PassThru
+          $null = $check.Handle
+          if (-not $check.WaitForExit(25 * 60 * 1000)) { Stop-Process -Id $check.Id -Force; throw "self-check timed out" }
+          $report = Join-Path $smoke "smoke.json"
+          if (-not (Test-Path -LiteralPath $report)) { throw "smoke.json was not written" }
+          Get-Content -LiteralPath $report
+          if (-not (Get-Content -LiteralPath $report -Raw | ConvertFrom-Json).ok) { throw "self-check failed after the upgrade" }
+
+      - name: Upload logs
+        if: always()
+        shell: pwsh
+        run: |
+          $dest = Join-Path $env:RUNNER_TEMP "upgrade-logs"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+          $logs = Join-Path $env:APPDATA "ViBread\logs"
+          if (Test-Path $logs) { Copy-Item -Path (Join-Path $logs "*") -Destination $dest -Recurse -Force }
+          $smoke = Join-Path $env:RUNNER_TEMP "smoke"
+          if (Test-Path $smoke) { Copy-Item -Path $smoke -Destination $dest -Recurse -Force }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: upgrade-${{ matrix.scenario }}
+          path: ${{ runner.temp }}/upgrade-logs
+          if-no-files-found: warn
