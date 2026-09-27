@@ -1069,8 +1069,10 @@ export function uploadCommand(input: { hexPath: string; port: string; board: Boa
   if (!profile) throw new Error(`Unknown board profile: ${String(input.board)}`);
   if (!input.hexPath || !input.port) throw new Error("hexPath and port are required");
   const toolchain = defaultToolchain();
+  // --verify drops the platform's -V: avrdude reads the flash back, as the Web Serial flasher does, so a write the
+  // bootloader garbled fails here instead of showing up later as a wiring fault on the bench.
   return {
     command: toolchain.cli,
-    args: ["--config-file", toolchain.config, "upload", "--fqbn", profile.fqbn, "--port", input.port, "--input-file", input.hexPath],
+    args: ["--config-file", toolchain.config, "upload", "--fqbn", profile.fqbn, "--port", input.port, "--input-file", input.hexPath, "--verify"],
   };
 }

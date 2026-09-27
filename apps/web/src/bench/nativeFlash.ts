@@ -22,7 +22,7 @@ export interface NativeFlashFailure {
 }
 
 export type NativeFlashOutcome =
-  | { ok: true; output: string; fqbn: string; durationMs: number; calibration?: "measured" | "default" }
+  | { ok: true; output: string; fqbn: string; durationMs: number; calibration?: "measured" | "default"; /** The bootloader speed that answered (the server tries the other one when the first gets no answer). */ baud?: number }
   | { ok: false; error: NativeFlashFailure; output: string };
 
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
@@ -50,11 +50,18 @@ export async function nativeFlash(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
-  const body = (await response.json().catch(() => undefined)) as { ok?: boolean; output?: unknown; fqbn?: unknown; durationMs?: unknown; calibration?: unknown; error?: Partial<NativeFlashFailure> } | undefined;
+  const body = (await response.json().catch(() => undefined)) as { ok?: boolean; output?: unknown; fqbn?: unknown; durationMs?: unknown; calibration?: unknown; baud?: unknown; error?: Partial<NativeFlashFailure> } | undefined;
   const output = typeof body?.output === "string" ? body.output : "";
   if (response.ok && body?.ok === true) {
     const calibration = body.calibration === "measured" || body.calibration === "default" ? body.calibration : undefined;
-    return { ok: true, output, fqbn: typeof body.fqbn === "string" ? body.fqbn : "", durationMs: typeof body.durationMs === "number" ? body.durationMs : 0, ...(calibration ? { calibration } : {}) };
+    return {
+      ok: true,
+      output,
+      fqbn: typeof body.fqbn === "string" ? body.fqbn : "",
+      durationMs: typeof body.durationMs === "number" ? body.durationMs : 0,
+      ...(calibration ? { calibration } : {}),
+      ...(typeof body.baud === "number" ? { baud: body.baud } : {}),
+    };
   }
   const error = body?.error;
   return {

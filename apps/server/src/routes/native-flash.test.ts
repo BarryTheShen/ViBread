@@ -15,7 +15,8 @@ const OPERATOR: Actor = { kind: "human", id: "operator", name: "Operator", chann
 const HEX = ":00000001FF\n";
 
 // Stands in for the bundled arduino-cli at the process boundary: prints a board list with one CH340 and one mouse,
-// records its argv, and answers `upload` like avrdude does for FAKE_CLI_UPLOAD = ok | busy | sync.
+// records its argv, and answers `upload` like avrdude does for FAKE_CLI_UPLOAD = ok | busy | sync | old-bootloader (a
+// board whose bootloader only answers at 57600: the old-bootloader FQBN).
 const FAKE_CLI = `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
@@ -31,7 +32,7 @@ const hex = fs.readFileSync(args[args.indexOf("--input-file") + 1], "utf8");
 const mode = process.env.FAKE_CLI_UPLOAD;
 console.log("Using port            : " + args[args.indexOf("--port") + 1]);
 if (mode === "busy") { console.error("OS error: cannot open port \\\\\\\\.\\\\COM3: Access is denied."); process.exit(1); }
-if (mode === "sync") { console.error("Error: stk500_getsync() attempt 10 of 10: not in sync: resp=0x00"); process.exit(1); }
+if (mode === "sync" || (mode === "old-bootloader" && !args[args.indexOf("--fqbn") + 1].endsWith("atmega328old"))) { console.error("Error: stk500_getsync() attempt 10 of 10: not in sync: resp=0x00"); process.exit(1); }
 console.log("Device signature = 1E 95 0F (ATmega328P)");
 console.log(hex.length + " bytes of flash written");
 process.exit(0);
@@ -163,5 +164,28 @@ describe.skipIf(process.platform === "win32")("native flash routes", () => {
     const body = await response.json() as { ok: boolean; error: { code: string; message: string }; output: string };
     expect(body).toMatchObject({ ok: false, error: { code } });
     expect(body.output).toContain("Using port");
+  });
+
+  it("tries the old 57600-baud bootloader when the board's own bootloader doesn't answer, as the Web Serial flash does", async () => {
+    process.env.FAKE_CLI_UPLOAD = "old-bootloader";
+    const response = await flash({ port: "COM3", which: "bench" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ ok: true, board: "nano-atmega328p-old-5v", baud: 57_600, fqbn: "arduino:avr:nano:cpu=atmega328old", output: expect.stringContaining("not in sync") });
+    const fqbns = argvLog().filter((args) => args.includes("upload")).map((args) => args[args.indexOf("--fqbn") + 1]);
+    expect(fqbns).toEqual([BOARD_PROFILES[golden.circuit.board.profile].fqbn, "arduino:avr:nano:cpu=atmega328old"]);
+    expect(running.context.ctx.debug.tail(missionId, 50).join("\n")).toContain("trying the 57600-baud bootloader");
+  });
+
+  it("keeps to the bootloader profile the person chose, and reports a board that answers at neither speed", async () => {
+    process.env.FAKE_CLI_UPLOAD = "sync";
+    const chosen = await flash({ port: "COM3", which: "bench", board: "nano-atmega328p-5v" });
+    expect(chosen.status).toBe(502);
+    expect(argvLog().filter((args) => args.includes("upload"))).toHaveLength(1);
+
+    writeFileSync(process.env.FAKE_CLI_ARGV!, "");
+    const auto = await flash({ port: "COM3", which: "bench" });
+    expect(auto.status).toBe(502);
+    expect(await auto.json()).toMatchObject({ ok: false, error: { code: "not_in_sync" } });
+    expect(argvLog().filter((args) => args.includes("upload"))).toHaveLength(2);
   });
 });

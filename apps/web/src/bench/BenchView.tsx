@@ -836,6 +836,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
         await reopenWebSerial(selected);
         return;
       }
+      log("info", `native flash: done — ${result.fqbn}${result.baud === undefined ? "" : ` (bootloader ${result.baud} baud)`} in ${result.durationMs} ms`);
       if (which === "app") setAppCalibration(result.calibration ?? "default");
       runnerRef.current?.markFlashBoundary();
       setFlashProgress({ stage: "Flashed ✓ (avrdude)", percent: 100 });
