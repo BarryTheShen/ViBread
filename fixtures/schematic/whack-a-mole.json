@@ -1,0 +1,301 @@
+{
+  "schema": "vibread.circuit/0.1",
+  "title": "Whack-a-mole",
+  "summary": "Whack-a-mole.",
+  "board": {
+    "profile": "uno-r3-atmega328p-5v"
+  },
+  "breadboard": {
+    "profile": "bb-830"
+  },
+  "parts": [
+    {
+      "id": "BTN1",
+      "module": "button",
+      "params": {}
+    },
+    {
+      "id": "BTN2",
+      "module": "button",
+      "params": {}
+    },
+    {
+      "id": "BTN3",
+      "module": "button",
+      "params": {}
+    },
+    {
+      "id": "R1",
+      "module": "resistor",
+      "params": {
+        "ohms": 1000
+      }
+    },
+    {
+      "id": "R2",
+      "module": "resistor",
+      "params": {
+        "ohms": 1000
+      }
+    },
+    {
+      "id": "R3",
+      "module": "resistor",
+      "params": {
+        "ohms": 1000
+      }
+    },
+    {
+      "id": "LED1",
+      "module": "led",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "LED2",
+      "module": "led",
+      "params": {
+        "color": "yellow"
+      }
+    },
+    {
+      "id": "LED3",
+      "module": "led",
+      "params": {
+        "color": "green"
+      }
+    }
+  ],
+  "nets": [
+    {
+      "id": "GND",
+      "kind": "ground",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "GND"
+        },
+        {
+          "part": "BTN1",
+          "pin": "3"
+        },
+        {
+          "part": "BTN2",
+          "pin": "3"
+        },
+        {
+          "part": "BTN3",
+          "pin": "3"
+        },
+        {
+          "part": "LED1",
+          "pin": "K"
+        },
+        {
+          "part": "LED2",
+          "pin": "K"
+        },
+        {
+          "part": "LED3",
+          "pin": "K"
+        }
+      ]
+    },
+    {
+      "id": "D2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D2"
+        },
+        {
+          "part": "BTN1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D3",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D3"
+        },
+        {
+          "part": "BTN2",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D4",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D4"
+        },
+        {
+          "part": "BTN3",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D8",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D8"
+        },
+        {
+          "part": "R1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D9",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D9"
+        },
+        {
+          "part": "R2",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D10",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D10"
+        },
+        {
+          "part": "R3",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L1",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R1",
+          "pin": "2"
+        },
+        {
+          "part": "LED1",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "L2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R2",
+          "pin": "2"
+        },
+        {
+          "part": "LED2",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "L3",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R3",
+          "pin": "2"
+        },
+        {
+          "part": "LED3",
+          "pin": "A"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "pin": "D2",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN1",
+      "purpose": "button"
+    },
+    {
+      "pin": "D3",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN2",
+      "purpose": "button"
+    },
+    {
+      "pin": "D4",
+      "mode": "INPUT_PULLUP",
+      "part": "BTN3",
+      "purpose": "button"
+    },
+    {
+      "pin": "D8",
+      "mode": "OUTPUT",
+      "part": "LED1",
+      "purpose": "mole"
+    },
+    {
+      "pin": "D9",
+      "mode": "OUTPUT",
+      "part": "LED2",
+      "purpose": "mole"
+    },
+    {
+      "pin": "D10",
+      "mode": "OUTPUT",
+      "part": "LED3",
+      "purpose": "mole"
+    }
+  ],
+  "sketch": {
+    "source": "void setup() {}\nvoid loop() {}\n"
+  },
+  "intent": [
+    {
+      "id": "C1",
+      "text": "Whack-a-mole."
+    }
+  ],
+  "assumptions": [
+    "Schematic regression fixture."
+  ],
+  "placement": {
+    "groups": [
+      [
+        "BTN1",
+        "LED1",
+        "R1"
+      ],
+      [
+        "BTN2",
+        "LED2",
+        "R2"
+      ],
+      [
+        "BTN3",
+        "LED3",
+        "R3"
+      ]
+    ]
+  }
+}

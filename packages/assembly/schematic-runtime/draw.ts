@@ -902,7 +902,6 @@ export async function drawSchematic(circuit: Circuit, colors: Record<string, str
     for (const point of junctionPoints(segments, pins)) {
       out.push(`<circle class="junction" cx="${fmt(point.x)}" cy="${fmt(point.y)}" r="4" fill="${stroke}"/>`);
     }
-    for (const point of pins) out.push(`<circle class="pin-end" cx="${fmt(point.x)}" cy="${fmt(point.y)}" r="2.5" fill="${stroke}"/>`);
     out.push(`</g>`);
   }
   for (const { node, x, y } of layout.placed) {

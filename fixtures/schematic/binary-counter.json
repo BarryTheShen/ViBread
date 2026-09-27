@@ -1,0 +1,299 @@
+{
+  "schema": "vibread.circuit/0.1",
+  "title": "5-LED binary counter",
+  "summary": "5-LED binary counter.",
+  "board": {
+    "profile": "uno-r3-atmega328p-5v"
+  },
+  "breadboard": {
+    "profile": "bb-830"
+  },
+  "parts": [
+    {
+      "id": "LED1",
+      "module": "led",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "LED2",
+      "module": "led",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "LED3",
+      "module": "led",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "LED4",
+      "module": "led",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "LED5",
+      "module": "led",
+      "params": {
+        "color": "red"
+      }
+    },
+    {
+      "id": "R1",
+      "module": "resistor",
+      "params": {
+        "ohms": 220
+      }
+    },
+    {
+      "id": "R2",
+      "module": "resistor",
+      "params": {
+        "ohms": 220
+      }
+    },
+    {
+      "id": "R3",
+      "module": "resistor",
+      "params": {
+        "ohms": 220
+      }
+    },
+    {
+      "id": "R4",
+      "module": "resistor",
+      "params": {
+        "ohms": 220
+      }
+    },
+    {
+      "id": "R5",
+      "module": "resistor",
+      "params": {
+        "ohms": 220
+      }
+    }
+  ],
+  "nets": [
+    {
+      "id": "GND",
+      "kind": "ground",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "GND"
+        },
+        {
+          "part": "LED1",
+          "pin": "K"
+        },
+        {
+          "part": "LED2",
+          "pin": "K"
+        },
+        {
+          "part": "LED3",
+          "pin": "K"
+        },
+        {
+          "part": "LED4",
+          "pin": "K"
+        },
+        {
+          "part": "LED5",
+          "pin": "K"
+        }
+      ]
+    },
+    {
+      "id": "D2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D2"
+        },
+        {
+          "part": "R1",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D3",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D3"
+        },
+        {
+          "part": "R2",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D4",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D4"
+        },
+        {
+          "part": "R3",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D5",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D5"
+        },
+        {
+          "part": "R4",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "D6",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "board",
+          "pin": "D6"
+        },
+        {
+          "part": "R5",
+          "pin": "1"
+        }
+      ]
+    },
+    {
+      "id": "L1",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R1",
+          "pin": "2"
+        },
+        {
+          "part": "LED1",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "L2",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R2",
+          "pin": "2"
+        },
+        {
+          "part": "LED2",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "L3",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R3",
+          "pin": "2"
+        },
+        {
+          "part": "LED3",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "L4",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R4",
+          "pin": "2"
+        },
+        {
+          "part": "LED4",
+          "pin": "A"
+        }
+      ]
+    },
+    {
+      "id": "L5",
+      "kind": "signal",
+      "pins": [
+        {
+          "part": "R5",
+          "pin": "2"
+        },
+        {
+          "part": "LED5",
+          "pin": "A"
+        }
+      ]
+    }
+  ],
+  "roles": [
+    {
+      "pin": "D2",
+      "mode": "OUTPUT",
+      "part": "LED1",
+      "purpose": "bit 1"
+    },
+    {
+      "pin": "D3",
+      "mode": "OUTPUT",
+      "part": "LED2",
+      "purpose": "bit 2"
+    },
+    {
+      "pin": "D4",
+      "mode": "OUTPUT",
+      "part": "LED3",
+      "purpose": "bit 3"
+    },
+    {
+      "pin": "D5",
+      "mode": "OUTPUT",
+      "part": "LED4",
+      "purpose": "bit 4"
+    },
+    {
+      "pin": "D6",
+      "mode": "OUTPUT",
+      "part": "LED5",
+      "purpose": "bit 5"
+    }
+  ],
+  "sketch": {
+    "source": "void setup() {}\nvoid loop() {}\n"
+  },
+  "intent": [
+    {
+      "id": "C1",
+      "text": "5-LED binary counter."
+    }
+  ],
+  "assumptions": [
+    "Schematic regression fixture."
+  ]
+}
