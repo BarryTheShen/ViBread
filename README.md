@@ -13,6 +13,10 @@ demo of one recorded project (Moon-Phase Lamp): the design chat, schematic, test
 running the real sketch in your browser. No Arduino or sign-in needed. It is built with `npm run build:demo -w
 @vibread/web` from recorded server responses (`scripts/capture-demo.mjs` → `apps/web/public/demo-data/`).
 
+**Screenshots:** every main screen, from the brief to phone Build Mode, is in [docs/screenshots](docs/screenshots/README.md).
+
+![Try it: the real sketch running on a simulated Arduino; the room is dark, so the lamp shows a full moon](docs/screenshots/07-try-it.png)
+
 Built for the HackWashU Fall Build Challenge (Sep 25–27, 2026; theme "Fly Me to the Moon"). The full plan is in
 [PLAN.md](PLAN.md); research and hands-on library audits are in [research/](research/).
 
