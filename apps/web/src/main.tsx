@@ -23,6 +23,7 @@ import { HttpError } from "./api/client.js";
 import { createMissionTheme } from "./theme.js";
 import AppShell from "./shell/AppShell.js";
 import { BenchRedirect } from "./workspace/BenchRedirect.js";
+import { installStaleChunkReload } from "./staleChunks.js";
 
 const NewMissionPage = lazy(() => import("./pages/NewMissionPage.js"));
 const MissionPage = lazy(() => import("./pages/MissionPage.js"));
@@ -121,6 +122,7 @@ function App() {
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html is missing #root");
 installBrowserErrorReporter();
+installStaleChunkReload();
 createRoot(root).render(
   <StrictMode>
     <App />

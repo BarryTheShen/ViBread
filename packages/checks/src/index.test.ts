@@ -171,6 +171,23 @@ describe("EECOM on adversarial beginner circuits", () => {
     expect(fixOf(report, "CUR-PIN-DESIGN")).toBe("Change R1 (100 Ω) to 150 Ω or more for LED1.");
   });
 
+  it("summarises by naming the first problem instead of repeating the chip's counts", async () => {
+    const warned = await reportFor(ledCircuit("blue", 100));
+    expect(warned.summary).toBe(`1 warning: ${warned.findings[0]!.title}.`);
+    const blocked = await reportFor(ledCircuit("red", 100));
+    const firstError = blocked.findings.find((finding) => finding.severity === "error")!;
+    expect(blocked.summary).toMatch(/^\d+ errors?( \(and \d+ warnings?\))?: /);
+    expect(blocked.summary).toContain(firstError.title);
+    expect((await reportFor(ledCircuit("red", 220))).summary).toBe("All electrical checks pass.");
+  });
+
+  it("describes a buzzer's worst case by its coil and resistor, not an LED's Vf", async () => {
+    const report = await reportFor(buzzerCircuit("buzzer-passive", "D8", 100));
+    const detail = report.findings.find((finding) => finding.ruleId === "CUR-PIN-ABS")?.detail ?? "";
+    expect(detail).toContain("Ω coil, series resistor at the low end of its tolerance");
+    expect(detail).not.toContain("Vf");
+  });
+
   it("accepts a bare button to GND when the sketch uses INPUT_PULLUP, but not on the Nano's pull-up-less A6", async () => {
     expect((await reportFor(buttonCircuit("D2", "INPUT_PULLUP"))).verdict).toBe("GO");
     const floating = await reportFor(buttonCircuit("D2", "INPUT"));

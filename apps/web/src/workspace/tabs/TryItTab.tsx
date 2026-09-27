@@ -72,6 +72,8 @@ function HoldButton({ part, pressed, onChange }: { part: Part; pressed: boolean;
 }
 
 const SOUND_HINT_KEY = "vibread:tryit-sound-hint-shown";
+/** The unmute hint hides once the buzzer has been silent this long. */
+const SOUND_HINT_QUIET_MS = 2_000;
 
 /** PLAN item 12: the revision's app.hex running live in the browser, driving the breadboard drawing. */
 export function TryItTab({ missionId, revision, released }: { missionId: string; revision: RevisionDetail; released: boolean }) {
@@ -104,6 +106,8 @@ export function TryItTab({ missionId, revision, released }: { missionId: string;
   const [runId, setRunId] = useState(0);
   const [muted, setMuted] = useState(true);
   const [soundHint, setSoundHint] = useState(false);
+  /** When the buzzer last made sound: the unmute hint steps aside after a quiet spell (it shows once per session). */
+  const lastSoundAt = useRef(0);
   const mutedRef = useRef(muted);
   mutedRef.current = muted;
 
@@ -152,9 +156,12 @@ export function TryItTab({ missionId, revision, released }: { missionId: string;
       if (message.type === "state") {
         latest.current = message.parts;
         audio.current?.update(message.tones);
-        if (mutedRef.current && isSounding(message.tones) && !sessionStorage.getItem(SOUND_HINT_KEY)) {
-          sessionStorage.setItem(SOUND_HINT_KEY, "1");
-          setSoundHint(true);
+        if (isSounding(message.tones)) {
+          lastSoundAt.current = performance.now();
+          if (mutedRef.current && !sessionStorage.getItem(SOUND_HINT_KEY)) {
+            sessionStorage.setItem(SOUND_HINT_KEY, "1");
+            setSoundHint(true);
+          }
         }
         if (!reducedMotion && svgRef.current) applyFrame(svgRef.current, message);
         const now = performance.now();
@@ -179,6 +186,15 @@ export function TryItTab({ missionId, revision, released }: { missionId: string;
     };
     // Restart on a new revision, new hex, or Reset (runId); sensor/knob lists derive from the circuit.
   }, [hex.data, circuit, runId, reducedMotion]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The worker may stop posting frames once the board is idle, so poll the quiet time instead of waiting for a frame.
+  useEffect(() => {
+    if (!soundHint) return;
+    const timer = window.setInterval(() => {
+      if (performance.now() - lastSoundAt.current >= SOUND_HINT_QUIET_MS) setSoundHint(false);
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [soundHint]);
 
   // Show presses on the drawing's own buttons too.
   useEffect(() => {
