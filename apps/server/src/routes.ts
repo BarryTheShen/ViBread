@@ -609,12 +609,16 @@ export function mountApi(app: Express, ctx: AppContext): void {
     if (!revision) throw httpError(404, "REVISION_NOT_FOUND", "revision not found");
     const serverPlan = revision.results.selftest;
     if (!serverPlan) throw httpError(409, "SELFTEST_PLAN_REQUIRED", "This revision has no server-generated self-test plan.");
+    // A Build Steps checkpoint runs a few of the plan's tests (issue 21); judge only those, and only ones the server's
+    // own plan has. Everything else about the plan stays the server's.
+    const requested = Array.isArray(body.plan?.tests) ? serverPlan.tests.filter((test) => body.plan.tests.includes(test)) : [];
+    const plan = requested.length > 0 && requested.length < serverPlan.tests.length ? { ...serverPlan, tests: requested } : serverPlan;
     // PLAN item 14: rank single-fault mutants when the background fault dictionary (faults.json) is ready.
     const faultDictionary = await loadFaultDictionary(ctx.store, revision.results.artifacts);
     const result = await evaluateRun({
       circuit: revision.circuit,
       layout: revision.results.layout,
-      plan: serverPlan,
+      plan,
       lines: body.lines,
       answers: body.answers,
       kind: body.kind,

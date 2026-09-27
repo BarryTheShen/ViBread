@@ -15,6 +15,14 @@ export const TELEMETRY_BAUD = 115_200 as const;
  * milliseconds when the baud is right.
  */
 const STK_COMMAND_TIMEOUT_MS = 1_000;
+/** Waits before each retry of an open that follows our own close (see BufferedTransport.open). */
+const REOPEN_DELAYS_MS = [300, 600, 1_200] as const;
+
+/** The errors a Windows USB serial driver gives for an open issued while the previous handle is still closing. */
+function isReopenRace(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return error.name === "InvalidStateError" || (error.name === "NetworkError" && /failed to open serial port/i.test(error.message));
+}
 
 export class UnsupportedWebSerialError extends Error {
   constructor() {
@@ -55,7 +63,14 @@ export class BufferedTransport implements ISTKTransport {
     else for (const listener of session.listeners) listener(chunk);
   };
 
-  constructor(private readonly inner: ISTKTransport, private readonly signalSetter?: SignalSetter) {
+  /** Set once this adapter has closed the port itself; only then can a failed open be the driver still letting go. */
+  private closedByUs = false;
+
+  constructor(
+    private readonly inner: ISTKTransport,
+    private readonly signalSetter?: SignalSetter,
+    private readonly options: { log?: BenchLog; reopenDelaysMs?: readonly number[] } = {},
+  ) {
     inner.on("data", this.handleData);
   }
 
@@ -63,12 +78,28 @@ export class BufferedTransport implements ISTKTransport {
     await this.inner.write(data);
   }
 
+  /**
+   * Open at `baudRate`. The first open is strict (a busy port is another app holding it). After this adapter closed the
+   * port itself, a failed open is retried: Windows CH340/FTDI drivers can refuse an open right after a close while the
+   * handle is still being released. Flashing closes and reopens up to three times.
+   */
   async open(baudRate: number, options?: Record<string, unknown>): Promise<void> {
     const opener = this.inner as ISTKTransport & { open?: (rate: number, opts?: Record<string, unknown>) => Promise<void> };
     if (!opener.open) throw new Error("The selected serial transport cannot be opened.");
-    // WebSerialTransport.close() drops its listeners; re-attach before the read loop starts.
-    this.inner.on("data", this.handleData);
-    await opener.open(baudRate, options);
+    const delays = this.closedByUs ? (this.options.reopenDelaysMs ?? REOPEN_DELAYS_MS) : [];
+    for (let attempt = 0; ; attempt += 1) {
+      // WebSerialTransport.close() drops its listeners; re-attach before the read loop starts.
+      this.inner.on("data", this.handleData);
+      try {
+        await opener.open(baudRate, options);
+        break;
+      } catch (error) {
+        if (attempt >= delays.length || !isReopenRace(error)) throw error;
+        const wait = delays[attempt];
+        this.options.log?.("warn", `serial: reopen retry ${attempt + 1}/${delays.length} after ${error instanceof Error ? `${error.name}: ${error.message}` : String(error)}`, { baud: baudRate, waitMs: wait });
+        await new Promise((resolve) => setTimeout(resolve, wait));
+      }
+    }
     this.openBaud = baudRate;
   }
 
@@ -131,6 +162,7 @@ export class BufferedTransport implements ISTKTransport {
 
   async close(): Promise<void> {
     this.openBaud = undefined;
+    this.closedByUs = true;
     await this.inner.close();
   }
 }
@@ -190,7 +222,7 @@ function requireSerial(): Serial {
  * Opens the filtered native picker. This function must be called directly from
  * a user gesture; browsers intentionally reject permission prompts from effects.
  */
-export async function requestBoardPort(options: { onDisconnect?: () => void } = {}): Promise<BoardPortConnection> {
+export async function requestBoardPort(options: { onDisconnect?: () => void; log?: BenchLog } = {}): Promise<BoardPortConnection> {
   const serial = requireSerial();
   const port = await serial.requestPort({ filters: boardUsbFilters() });
   const profile = boardProfileForUsb(port.getInfo());
@@ -199,9 +231,13 @@ export async function requestBoardPort(options: { onDisconnect?: () => void } = 
     throw new Error("That USB device is not a supported Uno or Nano. Choose an Arduino Uno/Nano port.");
   }
   const rawTransport = new WebSerialTransport(port);
-  const transport = new BufferedTransport(rawTransport, async (signals) => {
-    await port.setSignals(webSerialSignals(signals));
-  });
+  const transport = new BufferedTransport(
+    rawTransport,
+    async (signals) => {
+      await port.setSignals(webSerialSignals(signals));
+    },
+    { log: options.log },
+  );
   port.addEventListener("disconnect", () => {
     transport.markDisconnected();
     options.onDisconnect?.();

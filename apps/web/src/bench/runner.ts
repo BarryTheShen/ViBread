@@ -119,8 +119,16 @@ export interface BenchRunnerOptions {
   /** Serial events for the laptop debug log (hello, VCC, timeouts with bytes heard). */
   log?: BenchLog;
   /** Waits for the board (tests shorten them). */
-  timeouts?: { helloMs?: number; vccMs?: number };
+  timeouts?: { helloMs?: number; vccMs?: number; testIdleMs?: number };
 }
+
+/**
+ * How long a checkpoint test may go without a device line while nobody is being asked anything. A test has no fixed
+ * length (two buttons are four prompts of up to 20 s each), so only silence counts; while a prompt waits for the person,
+ * the prompt's own watchdog (its timeout + 5 s) covers a board that dies.
+ */
+const TEST_IDLE_MS = 10_000;
+const STOPPED_ANSWERING = "The board stopped answering during the self-test. Check the cable and power, then retry.";
 
 /** A board-check failure worded for the person, with the serial facts behind it for "Technical details". */
 export class BoardCheckError extends Error {
@@ -145,6 +153,7 @@ export class BenchRunner {
   private readonly log?: BenchLog;
   private readonly helloMs: number;
   private readonly vccMs: number;
+  private readonly testIdleMs: number;
   private readonly handleData = (data: Uint8Array): void => {
     this.bytesSinceFlashValue += data.byteLength;
     for (const line of this.decoder.push(new TextDecoder().decode(data))) this.dispatch({ type: "line", line: recoverLine(line) });
@@ -152,7 +161,8 @@ export class BenchRunner {
   private stateValue = initialRunnerState();
   private readonly helloWaiters: PendingLine<Extract<DeviceLine, { t: "hello" }>>[] = [];
   private readonly vccWaiters: PendingLine<Extract<DeviceLine, { t: "vcc" }>>[] = [];
-  private readonly endWaiters: PendingLine<Extract<DeviceLine, { t: "end" }>>[] = [];
+  /** The one checkpoint test the runner is waiting to see end (subset runs), with its inactivity timer. */
+  private testWatch: { test: TestId; resolve: () => void; reject: (reason: Error) => void; timer?: TimerHandle } | undefined;
   private subsetTests: TestId[] | undefined;
   private readonly askTimeouts = new Map<string, TimerHandle>();
   private readonly askWatchdogs = new Map<string, TimerHandle>();
@@ -165,6 +175,7 @@ export class BenchRunner {
     this.log = options.log;
     this.helloMs = options.timeouts?.helloMs ?? 2_000;
     this.vccMs = options.timeouts?.vccMs ?? 5_000;
+    this.testIdleMs = options.timeouts?.testIdleMs ?? TEST_IDLE_MS;
     options.transport.on("data", this.handleData);
     this.transport = options.transport;
     this.dispatch({ type: "connected" });
@@ -209,7 +220,7 @@ export class BenchRunner {
         this.log?.("info", `serial: VCC ${line.mv} mV`);
         this.resolveWaiters(this.vccWaiters, line);
       }
-      if (line.t === "end") this.resolveWaiters(this.endWaiters, line);
+      if (line.t === "end" && this.testWatch?.test === line.test) this.endTestWatch()?.resolve();
       this.clearAskWatchdogs();
       if (line.t === "ask") {
         this.clearAskTimeouts();
@@ -222,13 +233,15 @@ export class BenchRunner {
             }
           }, ask.timeoutMs);
           const watchdog = setTimeout(() => {
-            if (this.state.lines.length <= linesAtAsk) this.fail("The board stopped answering during the self-test. Check the cable and power, then retry.");
+            if (this.state.lines.length <= linesAtAsk) this.fail(STOPPED_ANSWERING);
           }, ask.timeoutMs + 5_000);
           this.askTimeouts.set(ask.id, timeout);
           this.askWatchdogs.set(ask.id, watchdog);
         }
       }
       if (line.t === "done") this.clearAskTimers();
+      // Any word from the board means the test is alive; silence only counts while nothing is being asked.
+      this.armTestIdle();
     }
     if (event.type === "transport-error") this.rejectWaiters(new Error(event.message));
     this.onState?.(this.stateValue);
@@ -243,14 +256,47 @@ export class BenchRunner {
   }
 
   private rejectWaiters(reason: Error): void {
-    const waiters = [...this.helloWaiters, ...this.vccWaiters, ...this.endWaiters];
+    const waiters = [...this.helloWaiters, ...this.vccWaiters];
     this.helloWaiters.splice(0, this.helloWaiters.length);
     this.vccWaiters.splice(0, this.vccWaiters.length);
-    this.endWaiters.splice(0, this.endWaiters.length);
     for (const waiter of waiters) {
       clearTimeout(waiter.timer);
       waiter.reject(reason);
     }
+    this.endTestWatch()?.reject(reason);
+  }
+
+  /** Stop watching the current test (its timer too) and hand back its promise callbacks. */
+  private endTestWatch(): { resolve: () => void; reject: (reason: Error) => void } | undefined {
+    const watch = this.testWatch;
+    if (!watch) return undefined;
+    clearTimeout(watch.timer);
+    this.testWatch = undefined;
+    return watch;
+  }
+
+  /** (Re)start the watched test's inactivity timer, or pause it while a prompt waits for the person. */
+  private armTestIdle(): void {
+    const watch = this.testWatch;
+    if (!watch) return;
+    clearTimeout(watch.timer);
+    watch.timer = undefined;
+    const ask = this.state.asks[0];
+    if (ask && this.state.answers[ask.id] === undefined) return;
+    watch.timer = setTimeout(() => {
+      this.log?.("error", `serial: ${watch.test} — no device line for ${this.testIdleMs} ms`, { bytesSinceFlash: this.bytesSinceFlashValue });
+      this.endTestWatch()?.reject(new Error(STOPPED_ANSWERING));
+    }, this.testIdleMs);
+  }
+
+  /** Resolves when `test` ends (an `end` line at or after `from`); rejects after TEST_IDLE_MS of silence. */
+  private waitForTestEnd(test: TestId, from: number): Promise<void> {
+    if (this.state.lines.slice(from).some((line) => line.t === "end" && line.test === test)) return Promise.resolve();
+    this.endTestWatch()?.reject(new Error("A new checkpoint test started."));
+    return new Promise<void>((resolve, reject) => {
+      this.testWatch = { test, resolve, reject };
+      this.armTestIdle();
+    });
   }
 
   private clearAskTimeouts(): void {
@@ -289,6 +335,8 @@ export class BenchRunner {
   }
   private async send(command: HostCommand): Promise<void> {
     this.dispatch({ type: "command", command });
+    // An answer resumes the firmware: count silence from here again.
+    if (command.c === "answer") this.armTestIdle();
     await this.transport.write(new TextEncoder().encode(encodeHostCommand(command)));
   }
 
@@ -329,8 +377,7 @@ export class BenchRunner {
     }
   }
 
-  /** Start all planned read-before-drive tests. */
-  /** Run the full suite, or selected test IDs for a Build Steps checkpoint. */
+  /** Run the full suite, or selected test IDs for a Build Steps checkpoint (one after another, each to its `end`). */
   async startSelfTest(tests?: TestId[]): Promise<void> {
     if (!tests || tests.length === 0) {
       await this.send({ c: "run", test: "all" });
@@ -338,9 +385,14 @@ export class BenchRunner {
     }
     this.subsetTests = [...tests];
     for (const test of tests) {
-      const from = this.state.lines.length;
-      await this.send({ c: "run", test });
-      await this.waitForLine(this.endWaiters, (line): line is Extract<DeviceLine, { t: "end" }> => line.t === "end" && line.test === test, `${test} test`, 30_000, from);
+      const ended = this.waitForTestEnd(test, this.state.lines.length);
+      try {
+        await this.send({ c: "run", test });
+      } catch (error) {
+        this.endTestWatch();
+        throw error;
+      }
+      await ended;
     }
     this.stateValue = { ...this.stateValue, done: true, phase: "complete" };
     this.onState?.(this.stateValue);

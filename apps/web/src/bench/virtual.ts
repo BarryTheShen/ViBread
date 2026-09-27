@@ -9,6 +9,50 @@ export interface VirtualPartTelemetry {
   parts: Record<string, number>;
 }
 
+/**
+ * The virtual board's latest part readings, for the board drawings that show them. The simulator reports every
+ * 20 ms whether or not anything changed, and a blinking light changes the readings on nearly every report; redrawing
+ * the breadboard is a full SVG parse. Readers are told at most once per animation frame, and only if some part's value
+ * changed, so a steady board costs no redraws and a blinking one never outruns the screen (or the page's main thread).
+ */
+export interface TelemetryStore {
+  get(): VirtualPartTelemetry | undefined;
+  set(next: VirtualPartTelemetry | undefined): void;
+  subscribe(listener: () => void): () => void;
+}
+
+function sameParts(a: Record<string, number>, b: Record<string, number>): boolean {
+  const keys = Object.keys(a);
+  return keys.length === Object.keys(b).length && keys.every((key) => a[key] === b[key]);
+}
+
+export function createTelemetryStore(schedule: (notify: () => void) => void = (notify) => void requestAnimationFrame(notify)): TelemetryStore {
+  let current: VirtualPartTelemetry | undefined;
+  // What readers see: changes only when they are told, so a render between frames never sees a different reading.
+  let published: VirtualPartTelemetry | undefined;
+  let pending = false;
+  const listeners = new Set<() => void>();
+  const notify = (): void => {
+    pending = false;
+    published = current;
+    for (const listener of listeners) listener();
+  };
+  return {
+    get: () => published,
+    set(next) {
+      if (next === current || (next && current && sameParts(next.parts, current.parts))) return;
+      current = next;
+      if (pending) return;
+      pending = true;
+      schedule(notify);
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+  };
+}
+
 export interface VirtualBenchOptions {
   circuit: Circuit;
   hex: string;
