@@ -178,7 +178,7 @@ describe("mission action routes", () => {
     }
   });
 
-  it("creates a mission only from a valid body: brief 1–4000 characters, title ≤ 80, known inventory modules", async () => {
+  it("creates a mission only from a valid body: a non-empty brief of any length, title ≤ 80, known inventory modules", async () => {
     const running = await server();
     try {
       const post = (body: unknown) => fetch(`${running.base}/api/missions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -189,7 +189,6 @@ describe("mission action routes", () => {
       };
       expect(await rejected({})).toBe("brief is required: say what the circuit should do");
       expect(await rejected({ brief: "   " })).toBe("brief is required: say what the circuit should do");
-      expect(await rejected({ brief: "x".repeat(4001) })).toBe("brief must be at most 4000 characters");
       expect(await rejected({ brief: "Blink", title: "t".repeat(81) })).toBe("title must be at most 80 characters");
       expect(await rejected({ brief: "Blink", inventory: [{ module: "flux-capacitor", count: 1 }] })).toBe("inventory.0.module is not a known module (GET /api/modules lists them)");
       expect(await rejected({ brief: "Blink", inventory: [{ module: "led", count: -1 }] })).toBe("inventory.0.count must be a whole number, 0 or more");
@@ -197,11 +196,11 @@ describe("mission action routes", () => {
       expect(await rejected(["Blink"])).toMatch(/^the body must be a JSON object/);
       expect((await running.store.listMissions("owner")).length).toBe(0);
 
-      const created = await post({ brief: "x".repeat(4000), title: "  Blinker  ", inventory: [{ module: "led", count: 2, params: { color: "red" }, junk: true }] });
+      const created = await post({ brief: "x".repeat(100_000), title: "  Blinker  ", inventory: [{ module: "led", count: 2, params: { color: "red" }, junk: true }] });
       expect(created.status).toBe(201);
       const stored = (await running.store.getMission(Created.parse(await created.json()).id))!;
       expect(stored.title).toBe("Blinker");
-      expect(stored.brief).toHaveLength(4000);
+      expect(stored.brief).toHaveLength(100_000);
       expect(stored.inventory).toEqual([{ module: "led", count: 2, params: { color: "red" } }]);
 
       // The web composer sends the brief alone.

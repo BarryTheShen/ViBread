@@ -90,7 +90,6 @@ export function Composer(props: ChatComposerProps) {
             input: {
               "aria-label": label,
               "aria-describedby": disabledReason ? helperId : undefined,
-              maxLength: 4000,
             },
           }}
           sx={{ fontSize: "1rem", lineHeight: 1.5, "& textarea": { resize: "none" } }}

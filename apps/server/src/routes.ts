@@ -58,13 +58,11 @@ const inventoryPatchSchema = z.object({
   note: z.string().optional(),
 });
 
-/** POST /missions: the web composer's limits (brief 4000, mission name 80), the same as MCP's vibread_create_mission. */
-const MAX_BRIEF = 4000;
+/** POST /missions: a brief of any length; mission name ≤ 80 (the web field's limit), the same as MCP's vibread_create_mission. */
 const MAX_TITLE = 80;
 const createMissionSchema = z.object({
   brief: z
     .string({ error: "is required: say what the circuit should do" })
-    .max(MAX_BRIEF, `must be at most ${MAX_BRIEF} characters`)
     .refine((brief) => brief.trim().length > 0, "is required: say what the circuit should do"),
   title: z.string({ error: "must be text" }).trim().min(1, "must not be empty").max(MAX_TITLE, `must be at most ${MAX_TITLE} characters`).optional(),
   inventory: z
