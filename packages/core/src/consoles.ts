@@ -34,8 +34,8 @@ export interface Finding {
   fix?: string;
   refs?: FindingRefs;
   /**
-   * True when the problem is ViBread's (a tool limit or bug), not the design: the design agent must not redesign to
-   * work around it, and the user is told plainly.
+   * True when the problem is a ViBread limit, not a design mistake (e.g. no room on the breadboard). Person-facing
+   * notices say so; the design agent only sees the fix, which says what it can do (bigger board, fewer parts, …).
    */
   toolSide?: boolean;
 }

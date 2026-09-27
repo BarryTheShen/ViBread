@@ -64,11 +64,13 @@ export interface TestReview {
 
 /** What the review of a revision's failing tests did. */
 export interface ReviewOutcome {
-  /** The revision to report: `revision` itself, or n+1 with the corrected suite, already evaluated. */
+  /** The revision to report: `revision` itself, or a later one (same circuit) with the corrected or set-aside suite, already evaluated. */
   revision: Revision;
   reviews: TestReview[];
-  /** Scenario ids replaced by corrected ones. */
+  /** Scenario ids replaced by corrected ones (and still passing or not failing any more). */
   corrected: string[];
+  /** Scenario ids set aside: judged wrong without a working correction, or disputed and not confirmed. They only warn. */
+  setAside: string[];
 }
 
 /** Hardware the tests drive and watch: part ids + kinds and pin roles (labels, order and values don't change a test). */
@@ -111,8 +113,10 @@ export interface DesignOps {
   recordSuite(mission: Mission, revision: Revision, suite: TestSuite): Promise<Revision>;
   /**
    * When simulation tests failed, the test author reviews them against the intent (never the sketch): scenarios that
-   * contradict the intent are corrected and re-run as revision n+1 (same circuit); ones still in doubt become TESTS-SUSPECT
-   * (tool-side) and ones the reviewer confirms stay SIM-FAIL with its reason. `only`/`dispute`: the design agent's dispute.
+   * contradict the intent are corrected and re-run as revision n+1 (same circuit). Ones judged wrong without a working
+   * correction are set aside (recorded in the suite, so FIDO keeps reporting them as warnings only), and so are disputed
+   * ones the reviewer can't confirm ("unsure" with `dispute`). Only tests the reviewer confirms stay SIM-FAIL (blocking),
+   * with its reason. `only`/`dispute`: the design agent's dispute.
    */
   reviewFailedTests(mission: Mission, revision: Revision, options?: { signal?: AbortSignal; only?: string[]; dispute?: string }): Promise<ReviewOutcome>;
 }
@@ -125,6 +129,9 @@ export function createDesignOps(deps: { store: MissionStore; pipeline: Pipeline;
     const next = await store.createRevision(mission.id, { circuit: revision.circuit, suite, author: TEST_AUTHOR, note, parent: revision.n });
     await store.updateMission(mission.id, { currentRevision: next.n });
     await store.appendEvent({ missionId: mission.id, channel: "system", actor: TEST_AUTHOR, kind: "revision.created", text: `Revision ${next.n}: ${note}`, revision: next.n, data: { hash: next.hash, parent: revision.n } });
+    // Proposing the same design again gets the reviewed suite, not the one before the review.
+    const key = hashJson({ brief: mission.brief, design: circuitInterface(revision.circuit) });
+    if (suites.has(key)) suites.set(key, suite);
     return next;
   }
 
@@ -185,7 +192,7 @@ export function createDesignOps(deps: { store: MissionStore; pipeline: Pipeline;
     },
 
     async reviewFailedTests(mission, revision, options = {}) {
-      const unchanged: ReviewOutcome = { revision, reviews: [], corrected: [] };
+      const unchanged: ReviewOutcome = { revision, reviews: [], corrected: [], setAside: [] };
       const suite = revision.suite;
       if (!hooks.reviewTests || !suite || suite.author !== "test-author") return unchanged;
       const failing = failingScenarios(revision).filter((f) => !options.only || options.only.includes(f.id));
@@ -204,58 +211,64 @@ export function createDesignOps(deps: { store: MissionStore; pipeline: Pipeline;
       });
       const judged = reviews.filter((r) => failures.some((f) => f.scenario.id === r.id));
       if (!judged.length) return unchanged;
+      const byId = new Map(judged.map((r) => [r.id, r]));
       const repairs = new Map<string, Scenario>();
+      const aside = new Map<string, string>();
+      const markAside = (s: Scenario): Scenario => (aside.has(s.id) ? { ...s, setAside: aside.get(s.id)! } : s);
       for (const review of judged) {
-        if (review.verdict !== "test-wrong" || !review.scenario) continue;
-        const parsed = ScenarioSchema.safeParse({ ...review.scenario, id: review.id });
-        if (parsed.success) repairs.set(review.id, parsed.data);
+        // The reviewer's correction can't set itself aside (omit strips the key).
+        const parsed = review.verdict === "test-wrong" && review.scenario ? ScenarioSchema.omit({ setAside: true }).safeParse({ ...review.scenario, id: review.id }) : undefined;
+        if (parsed?.success) repairs.set(review.id, parsed.data);
+        else if (review.verdict === "test-wrong") aside.set(review.id, `The test reviewer judged it wrong for the intent: ${review.reason}`);
+        // Two independent calls (the design agent's dispute and an unsure reviewer) don't confirm the test.
+        else if (review.verdict === "unsure" && options.dispute) aside.set(review.id, `The design agent disputed it and the test reviewer couldn't confirm it matches the intent: ${review.reason}`);
       }
 
       let final = revision;
-      if (repairs.size) {
-        const corrected: TestSuite = { ...suite, scenarios: suite.scenarios.map((s) => repairs.get(s.id) ?? s) };
-        const ids = [...repairs.keys()];
-        const next = await recordCorrectedSuite(mission, revision, corrected, `revision ${revision.n} with corrected independent tests (${ids.join(", ")}): they contradicted the intent, not the design.`);
+      if (repairs.size || aside.size) {
+        const reviewed: TestSuite = { ...suite, scenarios: suite.scenarios.map((s) => repairs.get(s.id) ?? markAside(s)) };
+        const notes = [
+          ...(repairs.size ? [`corrected independent tests (${[...repairs.keys()].join(", ")}): they contradicted the intent, not the design`] : []),
+          ...(aside.size ? [`set aside independent tests (${[...aside.keys()].join(", ")}): the test review didn't confirm them`] : []),
+        ];
+        const next = await recordCorrectedSuite(mission, revision, reviewed, `revision ${revision.n} with ${notes.join("; ")}.`);
         final = await ops.evaluate(mission, next.n, options.signal);
       }
 
-      // Rewrite FIDO's findings with what the review found.
-      const stillFailing = new Map(failingScenarios(final).map((f) => [f.id, f.detail]));
-      const byId = new Map(judged.map((r) => [r.id, r]));
+      // A correction that still fails is set aside too: the reviewer already judged the original wrong for the intent.
+      const failedRepairs = failingScenarios(final).filter((f) => repairs.has(f.id));
+      if (failedRepairs.length && final.suite) {
+        for (const { id } of failedRepairs) {
+          repairs.delete(id);
+          aside.set(id, `The test reviewer judged the original wrong for the intent, and its correction still fails: ${byId.get(id)?.reason ?? ""}`);
+        }
+        const reviewed: TestSuite = { ...final.suite, scenarios: final.suite.scenarios.map(markAside) };
+        const next = await recordCorrectedSuite(mission, final, reviewed, `revision ${final.n} with set-aside independent tests (${failedRepairs.map((f) => f.id).join(", ")}): their corrections still fail.`);
+        final = await ops.evaluate(mission, next.n, options.signal);
+      }
+
+      // Tests the review kept (confirmed, or unsure without a dispute) stay SIM-FAIL with the reviewer's reason.
       const fido = final.results.reports.find((r) => r.console === "FIDO");
-      if (fido && stillFailing.size) {
+      if (fido && failingScenarios(final).some((f) => byId.has(f.id))) {
         const findings = fido.findings.map((finding): Finding => {
           const id = finding.ruleId === "SIM-FAIL" ? finding.refs?.scenarios?.[0] : undefined;
           const review = id ? byId.get(id) : undefined;
-          if (!id || !review) return finding;
-          if (review.verdict === "test-wrong") {
-            return {
-              ...finding,
-              ruleId: "TESTS-SUSPECT",
-              toolSide: true,
-              title: `${id}: this test looks wrong, not the design`,
-              detail: `${repairs.has(id) ? "The corrected test still fails" : "The test reviewer couldn't correct it"}. Reviewer: ${review.reason} Failure: ${finding.detail ?? ""}`.trim(),
-              fix: "A ViBread test problem: don't change the design for it; tell the person what the test expects and ask how to proceed.",
-            };
-          }
+          if (!review) return finding;
           const note = review.verdict === "design-wrong" ? `The test reviewer confirmed this test matches the intent: ${review.reason}` : `The test reviewer couldn't tell whether the test or the design is wrong: ${review.reason}`;
           return { ...finding, detail: `${finding.detail ?? ""} — ${note}`.trim() };
         });
-        const saved = await store.saveResults(mission.id, final.n, {
-          reports: final.results.reports.map((r) => (r.console === "FIDO" ? { ...r, findings, summary: summaryWithSuspects(r.summary, findings) } : r)),
-        });
-        final = saved;
+        final = await store.saveResults(mission.id, final.n, { reports: final.results.reports.map((r) => (r.console === "FIDO" ? { ...r, findings } : r)) });
       }
       await store.appendEvent({
         missionId: mission.id,
         channel: "system",
         actor: TEST_AUTHOR,
         kind: "tests.reviewed",
-        text: `Test review of revision ${revision.n}: ${judged.map((r) => `${r.id} ${r.verdict}${repairs.has(r.id) ? " (corrected)" : ""}`).join(", ") || "no verdict"}`,
+        text: `Test review of revision ${revision.n}: ${judged.map((r) => `${r.id} ${r.verdict}${repairs.has(r.id) ? " (corrected)" : aside.has(r.id) ? " (set aside)" : ""}`).join(", ") || "no verdict"}`,
         revision: final.n,
-        data: { reviews: judged.map(({ scenario: _scenario, ...rest }) => rest), corrected: [...repairs.keys()] },
+        data: { reviews: judged.map(({ scenario: _scenario, ...rest }) => rest), corrected: [...repairs.keys()], setAside: [...aside.keys()] },
       });
-      return { revision: final, reviews: judged, corrected: [...repairs.keys()] };
+      return { revision: final, reviews: judged, corrected: [...repairs.keys()], setAside: [...aside.keys()] };
     },
   };
   return ops;
@@ -265,9 +278,4 @@ export function createDesignOps(deps: { store: MissionStore; pipeline: Pipeline;
 function failingScenarios(revision: Revision): { id: string; detail: string }[] {
   const fido = revision.results.reports.find((r) => r.console === "FIDO");
   return (fido?.findings ?? []).flatMap((f) => (f.ruleId === "SIM-FAIL" && f.refs?.scenarios?.[0] ? [{ id: f.refs.scenarios[0], detail: f.detail ?? f.title }] : []));
-}
-
-function summaryWithSuspects(summary: string, findings: Finding[]): string {
-  const suspects = findings.filter((f) => f.ruleId === "TESTS-SUSPECT").length;
-  return suspects ? `${summary} ${suspects} failing test${suspects === 1 ? " looks" : "s look"} wrong (a ViBread test problem).` : summary;
 }

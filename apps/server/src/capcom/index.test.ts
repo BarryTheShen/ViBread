@@ -151,6 +151,10 @@ describe("CAPCOM notice texts", () => {
     expect(designNotice("Launch Control", { n: 2, results: { reports: allGo, artifacts: {} } })?.text).toBe(
       "Launch Control r2 is ready — EECOM GO · GUIDO GO · FIDO GO · FAO GO · RETRO GO. Reply GO to start building.",
     );
+    const withAside = allGo.map((r) => (r.console === "FIDO" ? { ...r, findings: [{ console: "FIDO" as const, ruleId: "TEST-SET-ASIDE", severity: "warning" as const, title: "T3 set aside", refs: { scenarios: ["T3"] } }] } : r));
+    expect(designNotice("Launch Control", { n: 2, results: { reports: withAside, artifacts: {} } })?.text).toBe(
+      "Launch Control r2 is ready — EECOM GO · GUIDO GO · FIDO GO · FAO GO · RETRO GO · 1 test set aside (they only warn). Reply GO to start building.",
+    );
     const nogo = [report("EECOM", "GO"), report("FIDO", "NO-GO", "2 of 5 scenarios fail: the button never lights LED2."), report("RETRO", "PENDING")];
     expect(designNotice("Launch Control", { n: 3, results: { reports: nogo, artifacts: {} } })?.text).toBe("Launch Control r3: NO-GO from FIDO — 2 of 5 scenarios fail: the button never lights LED2.");
     const noFit = [report("FAO", "NO-GO", "Doesn't fit", [{ console: "FAO", ruleId: "LAYOUT-NO-FIT", severity: "error", title: "ViBread could not lay this circuit out on the breadboard.", fix: "A bigger breadboard will fit.", toolSide: true }])];

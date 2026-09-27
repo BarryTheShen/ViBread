@@ -317,7 +317,7 @@ async function setupWithTestWriter(suiteAnswer: (attempt: number) => unknown) {
   const runtime = createAgentRuntime({ ...deps, models: mockModels(scriptedDesign([proposeGolden, { text: "Done." }]), fast), pipeline: goPipeline(deps.store) });
   const mission = await runtime.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: HUMAN });
   const chunks = await say(await serve(runtime), mission.id, golden.brief);
-  const output = chunks.find((c) => c.type === "tool-output-available")?.output as { summary: string; verdicts: Record<string, string>; findings: { ruleId: string; toolSide?: boolean; detail?: string }[] };
+  const output = chunks.find((c) => c.type === "tool-output-available")?.output as { summary: string; verdicts: Record<string, string>; findings: { ruleId: string; fix?: string; detail?: string }[] };
   return { deps, fast, mission, output };
 }
 
@@ -337,11 +337,10 @@ describe("independent test writer answers (pi-ai structured call)", () => {
     expect(JSON.stringify(repair)).toContain("didn't match the schema");
   });
 
-  it("when the answer can't be used, FIDO says why as a tool-side finding and the agent is told not to redesign", async () => {
+  it("when the answer can't be used, FIDO says why and the fix is to propose again (retrying the test writer)", async () => {
     const { deps, mission, output } = await setupWithTestWriter(() => ({ tests: "nope" }));
     expect(output.verdicts.FIDO).toBe("NO-GO");
-    expect(output.findings).toContainEqual(expect.objectContaining({ ruleId: "TESTS-NOT-WRITTEN", toolSide: true, detail: expect.stringContaining("didn't match the expected format") }));
-    expect(output.summary).toContain("ViBread tool problem (toolSide), not a design problem");
+    expect(output.findings).toContainEqual(expect.objectContaining({ ruleId: "TESTS-NOT-WRITTEN", fix: expect.stringContaining("Propose the same design again"), detail: expect.stringContaining("didn't match the expected format") }));
     const fido = (await deps.store.getRevision(mission.id, 1))!.results.reports.find((r) => r.console === "FIDO");
     expect(fido).toMatchObject({ verdict: "NO-GO", findings: [expect.objectContaining({ ruleId: "TESTS-NOT-WRITTEN" })] });
     const failure = deps.debug.entries.find((e) => e.message.startsWith("test author failed"));

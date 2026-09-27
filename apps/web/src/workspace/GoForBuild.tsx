@@ -25,11 +25,14 @@ const OVERRIDE_CODES: Record<string, true> = { not_all_go: true, tests_missing: 
 function overrideReasons(detail: MissionDetail, error: HttpError | undefined): string[] {
   const reasons: string[] = [];
   if (error?.code === "tests_missing") reasons.push("Simulation tests (FIDO) not written");
-  const serverFidoDetails = (error?.message.match(/(?:failed scenarios|TESTS-SUSPECT scenarios):[^.]+/g) ?? []).join("; ");
+  const serverFidoDetails = (error?.message.match(/(?:failed scenarios|set-aside tests \(warnings only\)):[^.;]+/g) ?? []).join("; ");
   for (const report of detail.consoles) {
     if (report.verdict === "GO") continue;
-    const scenarios = report.findings.flatMap((finding) => finding.refs?.scenarios ?? []);
-    const details = scenarios.length > 0 ? `failing scenarios: ${[...new Set(scenarios)].join(", ")}` : report.console === "FIDO" ? serverFidoDetails : "";
+    const ids = (ruleId?: string) => [...new Set(report.findings.filter((finding) => (ruleId ? finding.ruleId === ruleId : finding.severity === "error")).flatMap((finding) => finding.refs?.scenarios ?? []))];
+    const failing = ids();
+    const setAside = ids("TEST-SET-ASIDE");
+    const found = [...(failing.length > 0 ? [`failing scenarios: ${failing.join(", ")}`] : []), ...(setAside.length > 0 ? [`set-aside tests (warnings only): ${setAside.join(", ")}`] : [])].join("; ");
+    const details = found || (report.console === "FIDO" ? serverFidoDetails : "");
     const suffix = report.console === "FIDO" && details ? ` — ${details}` : "";
     if (report.console === "FIDO" && error?.code === "tests_missing") continue;
     reasons.push(`${CONSOLE_LABELS[report.console]} (${report.console}) ${report.verdict}${suffix}`);

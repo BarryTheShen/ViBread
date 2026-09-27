@@ -152,16 +152,12 @@ ${boardFacts()}
    breadboard assembly, RETRO independent review.
 3. Read the findings (title, detail, fix), fix the design, and call propose_design again. Stop when every console is GO,
    or after 4 propose_design calls — then report exactly what still blocks and what the user could decide or change.
-   Findings marked "toolSide" are ViBread tool problems, not design problems: a check crashed, the independent tests
-   couldn't be written, a test looks wrong (TESTS-SUSPECT), the tests don't cover a part or clause (only the test writer
-   writes tests), or the layout tool couldn't do something. Never change the design because of them. If only toolSide
-   findings block, stop and tell the person plainly which ViBread check has a problem and that the design itself passed
-   everything else; don't call propose_design again for them.
    Simulation tests (FIDO) check the intent, and a test can be wrong. A SIM-FAIL detail gives the failing step with its
    time window (t=start–end ms) and what was seen: compare it with the intent's timeline. If the test contradicts the
    intent — not your sketch — call dispute_test with the scenario ids and why, instead of changing the design. Never
    remove, weaken or change user-visible behavior (a feature, a light, a timer, a sound, how a button acts) just to make
-   a test pass: if you think a feature must change, ask the person with ask_user first.
+   a test pass: if you think a feature must change, ask the person with ask_user first. When the test review agrees a
+   disputed test is wrong, ViBread sets it aside itself (it only warns) and FIDO can go GO: carry on.
 4. When everything is GO, tell the person in one sentence that the design is ready and that they press **GO for build**
    to make it the build target. You can't release a design yourself — only the person can. If a GO for build is already
    done (released build target above), a new revision needs another GO for build before the bench uses it.
@@ -209,8 +205,9 @@ ${boardFacts()}
 7. Colours by role: GND black, 5V red, one signal family in unit order (the layout tool assigns them).
 8. Easy to check: a beginner compares the board to the picture at a glance, counts the units, follows each wire.
 9. Don't ship a broken promise. A spatial request the layout didn't meet is FAO NO-GO (PLACEMENT-UNMET). Parts in the
-   wrong order: fix the group's order and pins as its fix says and propose again. No room (toolSide): tell the person
-   which request and why; never describe the parts as if it were met.
+   wrong order: fix the group's order and pins as its fix says and propose again. No room: use the bigger breadboard
+   (bb-830) or fewer parts, or relax that placement request and say so in "assumptions"; never describe the layout as if
+   the request were met.
 How to say it in the IR:
 - Whenever the brief implies an arrangement, state it in "placement", and say it in "assumptions" and the part labels
   ("Five lights in one row: 16s on the left, 1s on the right"); not as an intent clause (the simulator can't test it).
@@ -272,8 +269,9 @@ const SIM_TIME_RULES = `Steps run one after another, and time only moves forward
 - {"wait": ms} by ms; {"press": …} by holdMs + gapMs; {"bounce": …} by ms;
 - {"expect-part": …}, {"expect-parts": …}, {"expect-pwm": …} and {"expect-tone": …} by their windowMs — an expectation is not
   a snapshot, it watches the part over the NEXT windowMs and the clock ends at the window's end;
-- {"expect-serial": …} by up to withinMs.
-Only set-digital, set-light, set-analog and expect-pin take no time. So consecutive expect-part steps check consecutive
+- {"expect-serial": …} by up to max(2 × withinMs, withinMs + 500 ms) (it stops as soon as the text appears).
+Only set-digital, set-light and set-analog take no time; expect-pin takes none when the level already holds, else up to
+100 ms. So consecutive expect-part steps check consecutive
 windows (t..t+50, then t+50..t+100, …), never the same moment: to check several parts at the same moment, use ONE
 {"expect-parts": {checks: [{part, state}, …], windowMs}} step.
 Write the timeline down before choosing waits: start at the intent's numbers (a 1000 ms start delay, a 500 ms gap after
@@ -295,9 +293,10 @@ Semantics (the ATmega328P simulator implements exactly this):
 - {"bounce": {part, to, edges=6, ms=8}} simulates contact bounce ending in state "to" (true = held down, false = released).
   A bouncy press is bounce to true, then later bounce to false; releasing a button is never a press by itself.
 - {"set-digital": {part, value}}, {"set-light": {part, level 0..1}}, {"set-analog": {part, value 0..1}}.
-- {"expect-pin": {pin, level: high|low}} checks a board pin now. {"expect-part": {part, state: on|off, windowMs=50}} watches an LED/active
-  buzzer over a window (on = lit ≥ 90%, off = ≤ 10%), so a dimmed (PWM) LED is neither: check in-between brightness with
-  {"expect-pwm": {pin, min, max, windowMs}} (duty 0..1). {"expect-tone": {part, minHz, maxHz}}.
+- {"expect-pin": {pin, level: high|low}} checks a board pin now (waiting up to 100 ms for the level). {"expect-part": {part, state: on|off, windowMs=50}} watches an LED/active
+  buzzer over a window. Windows are open-ended: the state may start or end anywhere in the window, so "on" = lit for at
+  least 25% of it and "off" = dark for at least 25% of it. A dimmed (PWM) LED passes both, so check in-between brightness
+  with {"expect-pwm": {pin, min, max, windowMs}} (duty 0..1, ±0.10 allowed). {"expect-tone": {part, minHz, maxHz}} (±15% allowed).
   {"expect-parts": {checks: [{part, state: on|off}, …], windowMs=50}} watches several parts over ONE shared window.
   {"expect-serial": {contains, withinMs}} — avoid unless the intent names serial output.
 
@@ -335,6 +334,8 @@ never see the firmware. For each failing scenario decide, from the brief, the in
 - "test-wrong": the scenario contradicts the intent or the simulator's time rules — e.g. it checks a moment the intent
   doesn't fix, stacks expect windows as if they were simultaneous, forgets that elapsed windows moved the clock, or asserts
   something the intent leaves open. Give a corrected scenario (same id, same clauses) that tests the same intent correctly.
+  If you judge a test wrong but can't write a correction, say why in "reason": ViBread then sets that test aside and it
+  stops blocking the design (it only warns).
 - "design-wrong": the scenario matches the intent and the time rules, and the failure shows the design doesn't do what the
   intent says (wrong output, wrong timing, missing behavior). Keep it.
 - "unsure": you can't tell from the timeline. Explain in one sentence what makes it unclear.
