@@ -181,26 +181,42 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
   });
 
   const rails = railJumpers(layout);
+  const onRail = (jumper: Jumper, prefix: string) => [jumper.from, jumper.to].some((end) => "hole" in end && end.hole.startsWith(prefix));
+  const usesPlus = rails.some((jumper) => onRail(jumper, "T+"));
+  const usesMinus = rails.some((jumper) => onRail(jumper, "T-"));
+  // Say which rails this build uses, so a picture with one wire is never mistaken for a missing one.
+  const railsUsed = usesPlus && usesMinus
+    ? "This build uses both top rails: red + (5 V) and blue − (GND)."
+    : usesMinus
+      ? "Only the blue − rail (GND) is used in this build; nothing connects to the red + rail, so it gets no wire."
+      : usesPlus
+        ? "Only the red + rail (5 V) is used in this build; nothing connects to the blue − rail, so it gets no wire."
+        : "";
+  const railNames = usesPlus && usesMinus ? "the red + and blue − rails" : usesMinus ? "the blue − rail" : "the red + rail";
   push({
     kind: "rails",
-    title: "Connect the top power rails",
+    title: usesPlus && usesMinus ? "Connect the top power rails" : usesMinus ? "Connect the ground rail" : usesPlus ? "Connect the 5 V rail" : "Power rails (not used)",
     text: rails.length > 0
-      ? `With USB unplugged, ${rails.map((jumper) => `connect ${aWire(colorOf(jumper))} from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}`).join("; then ")}. Wire colors are aids; verify the T+ and T− labels.`
+      ? `${railsUsed} With USB unplugged, ${rails.map((jumper) => `connect ${aWire(colorOf(jumper))} from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}`).join("; then ")}. Wire colors are aids; verify the T+ and T− labels.`
       : "This build does not use the power rails; nothing to connect yet.",
     plug: "unplugged",
     adds: { parts: [], jumpers: rails.map((jumper) => jumper.id) },
     holes: rails.flatMap((jumper) => ["hole" in jumper.from ? jumper.from.hole : "", "hole" in jumper.to ? jumper.to.hole : ""]).filter(Boolean),
     callouts: [],
   });
+  // rails.vcc reads the Arduino's own supply (USB VCC), not the breadboard rails: claim only that (issues #14, #18).
+  const railTest = rails.length > 0
+    ? ` ${railNames[0]!.toUpperCase()}${railNames.slice(1)} ${usesPlus && usesMinus ? "are" : "is"} checked by the part tests that follow; if the board resets or USB drops when you plug in, unplug at once and look for a short between the red + and blue − rails.`
+    : "";
   push({
     kind: "checkpoint",
-    title: "Rail checkpoint — plug in",
-    text: "Plug in the USB cable. ViBread checks that the board is powered (about 5 V) before anything else runs; the red + and blue − rails get tested by the part checks that follow. Unplug again before touching the build.",
+    title: "Power checkpoint — plug in",
+    text: `Plug in the USB cable. ViBread checks that the board is powered and responding (USB VCC about 5 V) before anything else runs.${railTest} Unplug again before touching the build.`,
     plug: "plugged",
     adds: { parts: [], jumpers: [] },
     holes: [],
     callouts: [],
-    checkpoint: { tests: ["rails.vcc"], text: "Pass rails.vcc before continuing; a failure means stop and inspect T+ / T−." },
+    checkpoint: { tests: ["rails.vcc"], text: `Board powered and responding (USB VCC ≈ 5 V).${railTest}` },
   });
   push({
     kind: "unplug",
