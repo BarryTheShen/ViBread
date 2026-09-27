@@ -219,15 +219,28 @@ function solveNodes(
   return values;
 }
 
+/** Set once the prescaler fix couldn't be applied, so a suite of hundreds of machines warns once, not per machine. */
+let prescalerFixWarned = false;
+
 /**
  * avr8js restarts a timer's prescaler on every TCCRnB write; the ATmega328P only changes it when the clock-select bits do.
  * Arduino's tone() rewrites TCCR2B on every call, so a sketch that calls tone() in loop() while a key is held (a common
  * button-piano pattern that sounds on the real board) was silent in the simulator.
+ *
+ * It relies on avr8js internals (the TCCRnB write hook and the timer's `updateDivider` flag). If an avr8js build doesn't
+ * have them, the board still runs with avr8js's own behaviour (only that tone() pattern stays quiet) and a warning is
+ * logged; it never stops the simulator from starting.
  */
 function keepPrescalerPhase(cpu: CPU, timer: AVRTimer, tccrb: number): void {
   const write = cpu.writeHooks[tccrb];
-  if (!write) throw new Error(`avr8js timer has no TCCRB hook at 0x${tccrb.toString(16)}`);
-  const internals = timer as unknown as { updateDivider: boolean };
+  const internals = timer as unknown as { updateDivider?: unknown };
+  if (typeof write !== "function" || typeof internals.updateDivider !== "boolean") {
+    if (!prescalerFixWarned) {
+      prescalerFixWarned = true;
+      console.warn(`vibread sim: avr8js has no TCCRB write hook or prescaler flag at 0x${tccrb.toString(16)}; tone() called on every loop() pass may sound quiet`);
+    }
+    return;
+  }
   cpu.writeHooks[tccrb] = (value, oldValue, addr, mask) => {
     const handled = write(value, oldValue, addr, mask);
     if ((value & 0x7) === (oldValue & 0x7)) internals.updateDivider = false;

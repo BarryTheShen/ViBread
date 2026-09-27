@@ -14,4 +14,5 @@ export type LiveSimOutput =
   /** `tones`: what each buzzer is producing right now in Hz (0 = silent), for the speaker. */
   | { type: "state"; timeMs: number; parts: Record<string, number>; tones: Record<string, number> }
   | { type: "serial"; text: string }
-  | { type: "error"; message: string };
+  /** `stack`: where it was thrown in the worker, for the console and the error report (never shown in the banner). */
+  | { type: "error"; message: string; stack?: string };
