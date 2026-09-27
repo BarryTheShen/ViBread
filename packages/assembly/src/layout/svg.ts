@@ -17,7 +17,7 @@ import {
   type Part,
   type StepList,
 } from "@vibread/core";
-import { PANEL_CSS, renderPartsPanel, renderRepeatPanel } from "./panel.js";
+import { PANEL_CSS, renderPartsPanel, renderRepeatBanner, renderRepeatPanel } from "./panel.js";
 
 const DEFAULT_WIDTH = 1200;
 const BOARD_LEFT = 70;
@@ -389,6 +389,29 @@ function focusViewBox(input: RenderInput, state: ViewState, pins: Map<string, Po
   return { x: left, y: top, width, height };
 }
 
+function repeatBox(layout: Layout, holes: string[]): { left: number; right: number; top: number; bottom: number } {
+  const points = holes.flatMap((hole) => holePoint(layout, hole) ?? []);
+  return { left: Math.min(...points.map((p) => p.x)) - 11, right: Math.max(...points.map((p) => p.x)) + 11, top: Math.min(...points.map((p) => p.y)) - 11, bottom: Math.max(...points.map((p) => p.y)) + 11 };
+}
+
+/** The "×N" badge on a repeat picture, on the channel: its centre, width and words (undefined off a repeat step). */
+function repeatBadge(input: RenderInput): { x: number; width: number; text: string } | undefined {
+  const repeat = input.steps && input.upToStep !== undefined ? input.steps.steps[input.upToStep - 1]?.repeat : undefined;
+  if (!repeat) return undefined;
+  if (repeat.role === "template") {
+    // Beside the first copy, at the channel, clear of its wire and the ghosts.
+    const first = repeatBox(input.layout, repeat.copies[0]!.holes);
+    const text = `×${repeat.count}`;
+    const width = text.length * 9 + 18;
+    return { x: first.left - width / 2 - 6, width, text };
+  }
+  const all = repeatBox(input.layout, repeat.copies.flatMap((copy) => copy.holes));
+  const text = `×${repeat.count} · ${repeat.columns} column${repeat.columns === 1 ? "" : "s"} apart`;
+  const width = text.length * 9 + 18;
+  // Right of the row at the channel (left of it when the row reaches the board's right end).
+  return { x: all.right + width / 2 + 6 <= BOARD_RIGHT ? all.right + width / 2 + 6 : all.left - width / 2 - 6, width, text };
+}
+
 /**
  * Repeated units (issue #25). On the step that builds the first copy: a "×N" badge on it and a dashed ghost where each
  * other copy goes, with the Arduino pin it takes. On the repeat step: the badge over the whole row and each copy's
@@ -398,15 +421,7 @@ function renderRepeatMarks(input: RenderInput): string {
   const step = input.steps && input.upToStep !== undefined ? input.steps.steps[input.upToStep - 1] : undefined;
   const repeat = step?.repeat;
   if (!repeat) return "";
-  const boxOf = (holes: string[]) => {
-    const points = holes.flatMap((hole) => holePoint(input.layout, hole) ?? []);
-    return { left: Math.min(...points.map((p) => p.x)) - 11, right: Math.max(...points.map((p) => p.x)) + 11, top: Math.min(...points.map((p) => p.y)) - 11, bottom: Math.max(...points.map((p) => p.y)) + 11 };
-  };
-  const badge = (x: number, y: number, text: string) => {
-    const width = text.length * 9 + 18;
-    return `<g class="repeat-badge"><rect x="${x - width / 2}" y="${y - 13}" width="${width}" height="26" rx="13" class="repeat-badge-bg"/><text x="${x}" y="${y + 5}" text-anchor="middle" class="repeat-badge-text">${escapeSvg(text)}</text></g>`;
-  };
-  const copyBoxes = repeat.copies.map((copy) => boxOf(copy.holes));
+  const copyBoxes = repeat.copies.map((copy) => repeatBox(input.layout, copy.holes));
   const copyLabel = (copy: (typeof repeat.copies)[number], index: number): string => {
     if (copy.boardPins.length === 0) return String(copy.index);
     const full = `${copy.index} · ${copy.boardPins.join(" ")}`;
@@ -423,23 +438,15 @@ function renderRepeatMarks(input: RenderInput): string {
       const box = copyBoxes[index]!;
       marks.push(`<g class="repeat-ghost" data-repeat-copy="${copy.index}"><rect x="${box.left}" y="${box.top}" width="${box.right - box.left}" height="${box.bottom - box.top}" rx="8" class="ghost-box"/><text x="${(box.left + box.right) / 2}" y="${box.bottom + 14}" text-anchor="middle" class="ghost-label">${escapeSvg(copyLabel(copy, index))}</text></g>`);
     }
-    // Beside the first copy, at the channel, clear of its wire and the ghosts.
-    const first = copyBoxes[0]!;
-    const text = `×${repeat.count}`;
-    marks.push(badge(first.left - (text.length * 9 + 18) / 2 - 6, CHANNEL_Y, text));
   } else {
     for (let index = 0; index < repeat.copies.length; index += 1) {
       const copy = repeat.copies[index]!;
       const box = copyBoxes[index]!;
       marks.push(`<text x="${(box.left + box.right) / 2}" y="${box.bottom + 14}" text-anchor="middle" class="ghost-label" data-repeat-copy="${copy.index}">${escapeSvg(copyLabel(copy, index))}</text>`);
     }
-    const all = boxOf(repeat.copies.flatMap((copy) => copy.holes));
-    const text = `×${repeat.count} · ${repeat.columns} columns apart`;
-    const width = text.length * 9 + 18;
-    // Right of the row at the channel (left of it when the row reaches the board's right end).
-    const x = all.right + width / 2 + 6 <= BOARD_RIGHT ? all.right + width / 2 + 6 : all.left - width / 2 - 6;
-    marks.push(badge(x, CHANNEL_Y, text));
   }
+  const placed = repeatBadge(input)!;
+  marks.push(`<g class="repeat-badge"><rect x="${placed.x - placed.width / 2}" y="${CHANNEL_Y - 13}" width="${placed.width}" height="26" rx="13" class="repeat-badge-bg"/><text x="${placed.x}" y="${CHANNEL_Y + 5}" text-anchor="middle" class="repeat-badge-text">${escapeSvg(placed.text)}</text></g>`);
   return `<g id="repeat-marks">${marks.join("")}</g>`;
 }
 
@@ -824,7 +831,7 @@ function renderRailLabels(layout: Layout): string {
   return marks.join("");
 }
 
-function renderRowLabels(layout: Layout): string {
+function renderRowLabels(layout: Layout, blocked: [number, number][], visible: [number, number]): string {
   const profile = BREADBOARD_PROFILES[layout.breadboard];
   const labels: string[] = [];
   for (let row = 1; row <= profile.rows; row++) {
@@ -836,9 +843,40 @@ function renderRowLabels(layout: Layout): string {
     labels.push(`<text x="${BOARD_RIGHT + 20}" y="${columnY(column) + 5}" class="base-column-label column-label">${column}</text>`);
   }
 
-  labels.push(`<text x="${(BOARD_LEFT + BOARD_RIGHT) / 2}" y="${CHANNEL_Y + 5}" text-anchor="middle" class="channel-label">CENTRE CHANNEL</text>`);
+  const channelX = channelLabelX(layout, blocked, visible);
+  if (channelX !== undefined) labels.push(`<text x="${channelX}" y="${CHANNEL_Y + 5}" text-anchor="middle" class="channel-label">CENTRE CHANNEL</text>`);
   labels.push(`<g id="focus-labels"></g>`);
   return labels.join("");
+}
+
+/**
+ * Where "CENTRE CHANNEL" goes: the middle of the widest stretch of channel no part crosses (a resistor or button over
+ * it) and no repeat badge covers, inside the visible picture; undefined when no stretch fits the words.
+ */
+function channelLabelX(layout: Layout, blocked: [number, number][], visible: [number, number]): number | undefined {
+  const labelWidth = 116;
+  const spans: [number, number][] = [...blocked];
+  for (const placement of layout.placements) {
+    const points = Object.values(placement.pins).flatMap((hole) => {
+      const parsed = parseHole(hole);
+      return parsed?.kind === "terminal" ? [{ top: "abcde".includes(parsed.column), x: holePoint(layout, hole)!.x }] : [];
+    });
+    if (!points.some((point) => point.top) || points.every((point) => point.top)) continue;
+    spans.push([Math.min(...points.map((point) => point.x)) - 16, Math.max(...points.map((point) => point.x)) + 16]);
+  }
+  const [from, to] = [Math.max(BOARD_LEFT, visible[0]), Math.min(BOARD_RIGHT, visible[1])];
+  let best: [number, number] | undefined;
+  let cursor = from;
+  for (const [left, right] of [...spans, [to, to] as [number, number]].sort((a, b) => a[0] - b[0])) {
+    const end = Math.min(left, to);
+    if (end - cursor > (best ? best[1] - best[0] : 0)) best = [cursor, end];
+    cursor = Math.max(cursor, right);
+  }
+  if (!best || best[1] - best[0] < labelWidth + 16) return undefined;
+  // The board's own middle when it is free (the usual picture), else the middle of the widest free stretch.
+  const middle = (BOARD_LEFT + BOARD_RIGHT) / 2;
+  if (middle - labelWidth / 2 - 8 >= best[0] && middle + labelWidth / 2 + 8 <= best[1]) return middle;
+  return (best[0] + best[1]) / 2;
 }
 function renderFocusLabels(layout: Layout, box: ViewBox): string {
   const labels: string[] = [];
@@ -924,13 +962,20 @@ export function renderBreadboardSvg(input: RenderInput): string {
   const jumperLabels = drawnJumpers.map((entry) => entry.label).join("");
   const columnLetters = "";
   const renderHeight = 700;
+  const badge = repeatBadge(input);
+  const channelBlocked: [number, number][] = badge ? [[badge.x - badge.width / 2 - 6, badge.x + badge.width / 2 + 6]] : [];
+  // The "Columns 1–63 / Rows a–e" key, left out of a focus crop that would cut it (the crop has its own labels).
+  const legendBox = { x: BOARD_RIGHT - 196, y: BOARD_TOP + 5, width: 184, height: 42 };
+  const legend = !focusBox || (legendBox.x >= focusBox.x && legendBox.x + legendBox.width <= focusBox.x + focusBox.width && legendBox.y >= focusBox.y && legendBox.y + legendBox.height <= focusBox.y + focusBox.height)
+    ? `<g class="legend"><rect x="${legendBox.x}" y="${legendBox.y}" width="184" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 22}" class="part-label">Columns 1–${BREADBOARD_PROFILES[input.layout.breadboard].rows} left → right</text><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 38}" class="part-label">Rows a–e top · f–j bottom</text></g>`
+    : "";
   const viewBox = focusBox ? `${focusBox.x} ${focusBox.y} ${focusBox.width} ${focusBox.height}` : `0 0 ${width} 700`;
   const railSides = BREADBOARD_PROFILES[input.layout.breadboard].railSides;
   const surfaceTop = railSides.includes("top") ? RAIL_Y["T-"] - 22 : 120;
   const surfaceBottom = railSides.includes("bottom") ? RAIL_Y["B-"] + 8 : 495;
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${renderHeight}" viewBox="${viewBox}" data-vibread="breadboard" role="img" aria-label="ViBread landscape breadboard assembly"><title>${escapeSvg(input.circuit.title)} breadboard</title><desc>Numbered columns run left to right. Lettered rows a through e are above the centre channel; f through j are below it. New step items are drawn at full strength; earlier ones are dimmed.</desc><style>
 svg{font-family:Arial,"DejaVu Sans",sans-serif;background:${CANVAS_FILL}}.ghost-box{fill:#E8590C;fill-opacity:.08;stroke:#E8590C;stroke-width:2;stroke-dasharray:6 4}.ghost-label{fill:#C2410C;font-size:12px;font-weight:800;paint-order:stroke;stroke:${BOARD_FILL};stroke-width:3px}.repeat-badge-bg{fill:#E8590C}.repeat-badge-text{fill:#fff;font-size:15px;font-weight:800}.end-badge{fill:#fff;stroke-width:3}.end-badge-text{fill:#1B1D2B;font-size:13px;font-weight:800}.board-surface{fill:${BOARD_FILL};stroke:#B8C0C9;stroke-width:2}.channel{fill:#D5DAE0}.hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.rail-hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.row-label,.column-label,.rail-label,.channel-label{fill:#3B4552;font-size:12px;font-weight:700}.column-label{font-size:15px}.column-guide{fill:#3B4552;font-size:13px;font-weight:700}.rail-label{font-size:12px}.rail-plus{stroke:#E03131;stroke-width:3}.rail-minus{stroke:#1C7ED6;stroke-width:3}.rail-tick{stroke:#C3CAD2;stroke-width:1}.lead{stroke:#6C7680;stroke-width:3}.leg{stroke:#8D99AE;stroke-width:3;stroke-linecap:round}.leg-foot{fill:#C9D0D8;stroke:#4A525C;stroke-width:1.5}.led-dome{stroke:#F8FAFC;stroke-width:2}.led-glow{filter:blur(3px)}.resistor-body{fill:#E2C89A;stroke:#7A5A3A;stroke-width:2}.button-body{fill:#2B2F36;stroke:#11151A;stroke-width:2}.button-cap{fill:#C92A2A;stroke:#3B0D0D;stroke-width:2}.sensor-body{fill:#9CA3AF;stroke:#111827;stroke-width:2}.sensor-mark{stroke:#17212B;stroke-width:2}.pot-base{fill:#2F4550;stroke:#9FB3BF;stroke-width:2}.pot-pin{fill:#EEF2F5;font-size:10px;font-weight:700}.pot-body{fill:#4F6570;stroke:#EEF2F5;stroke-width:2}.pot-arrow{stroke:#F1C453;stroke-width:4}.pot-arrowhead{fill:#F1C453}.buzzer-body{fill:#212529;stroke:#0B0D10;stroke-width:2}.buzzer-hole{fill:#495057;stroke:#0B0D10;stroke-width:1}.sound-ring{fill:none;stroke:#E8590C;stroke-width:3;stroke-dasharray:6 5}.generic-body{fill:#5F7880;stroke:#E5F2F4;stroke-width:2}.mcu{fill:#1B3339;stroke:#90C5BD;stroke-width:3}.board-title{fill:#F3F7F8;font-weight:700;font-size:15px}.header-label{fill:#90C5BD;font-size:11px;font-weight:700}.header-pin{fill:#F2C94C;stroke:#12181D;stroke-width:2}.pin-label{fill:#F3F7F8;font-size:12px;font-weight:700}.pin-cue{fill:#1B1D2B;font-size:11px;font-weight:700}.part-label{fill:#1B1D2B;font-size:12px;font-weight:700}.label-bg{fill:#FFFFFF;stroke:#8D99AE;stroke-width:1}.leader{stroke:#5C6773;stroke-width:1.5}.wire-casing{fill:none;stroke:#1B1D2B;stroke-width:6.5;stroke-linecap:round;opacity:.55}.wire-casing.edge-route{stroke:#C9D0D8;opacity:.9}.wire-path{fill:none;stroke-width:4;stroke-linecap:round}.wire-bg{fill:#1B1D2B}.wire-label{fill:#fff;font-size:11px;font-weight:700}.vb-old{opacity:.48}.part.vb-hl,.wire.vb-hl{filter:drop-shadow(0 0 5px #fff)}.vb-new{filter:drop-shadow(0 0 8px #f7d774)}.hole.vb-hl,.rail-hole.vb-hl{fill:#ffe166;stroke:#111;stroke-width:2}
-</style><rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/><rect x="${BOARD_LEFT - 36}" y="${surfaceTop}" width="${BOARD_RIGHT - BOARD_LEFT + 72}" height="${surfaceBottom - surfaceTop}" rx="14" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout)}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}${renderRepeatMarks(input)}${newJumpers}${jumperLabels}<g class="legend"><rect x="${BOARD_RIGHT - 196}" y="${BOARD_TOP + 5}" width="184" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 22}" class="part-label">Columns 1–${BREADBOARD_PROFILES[input.layout.breadboard].rows} left → right</text><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 38}" class="part-label">Rows a–e top · f–j bottom</text></g></svg>`;
+</style><rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/><rect x="${BOARD_LEFT - 36}" y="${surfaceTop}" width="${BOARD_RIGHT - BOARD_LEFT + 72}" height="${surfaceBottom - surfaceTop}" rx="14" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout, channelBlocked, focusBox ? [focusBox.x, focusBox.x + focusBox.width] : [0, width])}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}${newJumpers}${renderRepeatMarks(input)}${jumperLabels}${legend}</svg>`;
   const scopedSvg = scopeSvgStyles(svg);
   const backgroundSvg = focusBox ? scopedSvg.replace(`<rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/>`, `<rect x="0" y="0" width="${width}" height="700" fill="${BOARD_FILL}"/>`) : scopedSvg;
   const boardSvg = focusBox
@@ -950,7 +995,10 @@ const FOCUS_PANEL_ZOOM = 1.5;
 function withPartsPanel(input: RenderInput, state: ViewState, boardSvg: string, view: ViewBox, width: number, focused: boolean): string {
   if (!input.steps || input.upToStep === undefined || (state.newParts.size === 0 && state.newJumpers.size === 0)) return boardSvg;
   const current = input.steps.steps[input.upToStep - 1];
-  const panel = current?.repeat?.role === "repeat" ? renderRepeatPanel(current.repeat, focused ? FOCUS_PANEL_ZOOM : 1) : renderPartsPanel({
+  // The repeat step: the drawn checklist under the whole board; under a focus crop only a one-line banner (the screen
+  // has the tickable list, and a phone would give the drawn one a third of the picture).
+  const repeat = current?.repeat?.role === "repeat" ? current.repeat : undefined;
+  const panel = repeat ? (focused ? renderRepeatBanner(repeat) : renderRepeatPanel(repeat)) : renderPartsPanel({
     circuit: input.circuit,
     layout: input.layout,
     parts: [...state.newParts],

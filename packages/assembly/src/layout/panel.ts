@@ -270,13 +270,18 @@ export function renderPartsPanel(input: PanelInput, zoom = 1): { svg: string; an
   return { svg: out.join(""), anchors, width, height };
 }
 
+/** "×4 more · 3 columns right each time": the repeat step's headline in its panel and its banner. */
+function repeatHeadline(repeat: StepRepeat): string {
+  return `×${repeat.copies.length - 1} more · ${repeat.columns} column${repeat.columns === 1 ? "" : "s"} right each time`;
+}
+
 /**
- * The repeat step's panel (issue #25): one tick box per copy with its parts, its column and the Arduino pin it goes
- * to. The checklist stays in one column so every row has the full panel width.
+ * The repeat step's panel under the whole-board picture (issue #25): one tick box per copy with its parts, its column
+ * and the Arduino pin it goes to. The checklist stays in one column so every row has the full panel width.
  */
-export function renderRepeatPanel(repeat: StepRepeat, zoom = 1): { svg: string; anchors: PanelAnchor[]; width: number; height: number } {
+export function renderRepeatPanel(repeat: StepRepeat): { svg: string; anchors: PanelAnchor[]; width: number; height: number } {
   const width = PANEL_WIDTH;
-  const height = Math.round(PANEL_HEIGHT * zoom);
+  const height = PANEL_HEIGHT;
   const rest = repeat.copies.slice(1);
   const labels = rest.map((copy) => {
     const pins = copy.boardPins.length > 0 ? ` → ${copy.boardPins.join(", ")}` : "";
@@ -288,13 +293,25 @@ export function renderRepeatPanel(repeat: StepRepeat, zoom = 1): { svg: string; 
   // proportional, but 0.55 × font size per character is a conservative fit for these monospace-ish labels.
   const maxTextWidth = width - 60 - 16 - 36;
   const size = Math.min(30, line * 0.55, maxTextWidth / (1 + longestLabel * 0.55));
-  const out: string[] = [`<rect x="12" y="10" width="${width - 24}" height="${height - 20}" rx="18" class="panel-card"/>`, text(width / 2, 52, `Repeat ×${rest.length} more · ${repeat.columns} columns right each time`, "panel-title")];
+  const out: string[] = [`<rect x="12" y="10" width="${width - 24}" height="${height - 20}" rx="18" class="panel-card"/>`, text(width / 2, 52, `Repeat ${repeatHeadline(repeat)}`, "panel-title")];
   rest.forEach((copy, index) => {
     const x = 60;
     const y = 100 + index * line;
     out.push(`<g data-repeat-check="${copy.index}"><rect x="${x}" y="${y}" width="${size}" height="${size}" rx="5" class="panel-check"/><text x="${x + size + 16}" y="${y + size * 0.8}" class="panel-label" style="font-size:${Math.round(size)}px">${esc(labels[index]!)}</text></g>`);
   });
   return { svg: out.join(""), anchors: [], width, height };
+}
+
+/**
+ * The repeat step's strip under a focus (phone) picture: one line, "×4 more · 3 columns right each time". The screen
+ * beside the picture has the tickable checklist, and the copies' numbers and Arduino pins are drawn on the board, so a
+ * drawn checklist would only repeat them at a third of the picture's height.
+ */
+export function renderRepeatBanner(repeat: StepRepeat): { svg: string; anchors: PanelAnchor[]; width: number; height: number } {
+  const width = PANEL_WIDTH;
+  const height = 96;
+  const svg = `<g data-repeat-banner="${repeat.copies.length - 1}"><rect x="12" y="10" width="${width - 24}" height="${height - 20}" rx="18" class="panel-card"/>${text(width / 2, height / 2 + 12, `Repeat ${repeatHeadline(repeat)}`, "panel-title")}</g>`;
+  return { svg, anchors: [], width, height };
 }
 
 /** Panel styles (scoped by the caller like the rest of the drawing). */
