@@ -131,8 +131,47 @@ describe("avr8js golden simulation", () => {
     const failed = await runScenario({ circuit: design.circuit, hex: readFileSync(design.hexFile, "utf8"), scenario: failure });
     const failureMessage = failed.result.steps.find((step) => "expect-part" in step.step)?.message ?? "";
     expect(failed.result.ok).toBe(false);
-    expect(failureMessage).toContain("LED1 should be on (lit ≥ 90% of the window) but was lit 0%");
+    expect(failureMessage).toContain("but was lit 0%");
   }, 30_000);
+  it("expect-part windows are open-ended: an LED that turns on 30% into an 'on' window passes; one that never lights fails", async () => {
+    const design = GOLDEN.find((entry) => entry.key === "knob-night-light");
+    if (!design) throw new Error("knob fixture is required");
+    // LED1 (D9) turns on at t = 1030 ms and stays on; the "never" sketch keeps it dark.
+    const late = await compileSketch({ source: "void setup() { pinMode(9, OUTPUT); }\nvoid loop() { digitalWrite(9, millis() >= 1030 ? HIGH : LOW); }\n", board: design.circuit.board.profile });
+    const never = await compileSketch({ source: "void setup() { pinMode(9, OUTPUT); }\nvoid loop() { digitalWrite(9, LOW); }\n", board: design.circuit.board.profile });
+    if (!late.hex || !never.hex) throw new Error("test sketch compile failed");
+    const scenario: Scenario = {
+      id: "T1",
+      title: "LED1 comes on after a second",
+      clauses: ["C1"],
+      categories: ["normal"],
+      setup: {},
+      steps: [{ wait: 1000 }, { "expect-part": { part: "LED1", state: "on", windowMs: 100 } }, { "expect-parts": { checks: [{ part: "LED1", state: "off" }], windowMs: 100 } }],
+    };
+    // Window 1000–1100 ms: lit 70% → "on"; window 1100–1200 ms: lit 100% → not "off".
+    const passed = await runScenario({ circuit: design.circuit, hex: late.hex, scenario });
+    expect(passed.result.steps.map((step) => step.ok)).toEqual([true, true, false]);
+    const onWindow = { ...scenario, steps: scenario.steps.slice(0, 2) };
+    const dark = await runScenario({ circuit: design.circuit, hex: never.hex, scenario: onWindow });
+    expect(dark.result.ok).toBe(false);
+    expect(dark.result.steps[1]?.message).toContain("but was lit 0%");
+    // A late start that leaves the LED lit for only 10% of the window is still not "on".
+    const tooLate = await runScenario({ circuit: design.circuit, hex: late.hex, scenario: { ...onWindow, steps: [{ wait: 940 }, { "expect-part": { part: "LED1", state: "on", windowMs: 100 } }] } });
+    expect(tooLate.result.ok).toBe(false);
+  }, 120_000);
+  it("expect-pin as the first step waits for setup() to drive the pin instead of failing at t = 0", async () => {
+    const design = GOLDEN.find((entry) => entry.key === "knob-night-light");
+    if (!design) throw new Error("knob fixture is required");
+    const high = await compileSketch({ source: "void setup() { pinMode(9, OUTPUT); digitalWrite(9, HIGH); }\nvoid loop() {}\n", board: design.circuit.board.profile });
+    if (!high.hex) throw new Error("test sketch compile failed");
+    const scenario: Scenario = { id: "T1", title: "D9 is high after reset", clauses: ["C1"], categories: ["power-on"], setup: {}, steps: [{ "expect-pin": { pin: "D9", level: "high" } }] };
+    const outcome = await runScenario({ circuit: design.circuit, hex: high.hex, scenario });
+    expect(outcome.result.steps[0]).toMatchObject({ ok: true, message: "D9 is high" });
+    // A level that never comes still fails after the wait.
+    const low = await runScenario({ circuit: design.circuit, hex: high.hex, scenario: { ...scenario, steps: [{ "expect-pin": { pin: "D9", level: "low" } }] } });
+    expect(low.result.steps[0]?.ok).toBe(false);
+    expect(low.result.steps[0]?.endMs).toBeGreaterThanOrEqual(100);
+  }, 120_000);
   it("reports LED partState as lit-window duty", () => {
     const knob = GOLDEN.find((entry) => entry.key === "knob-night-light");
     if (!knob) throw new Error("knob fixture is required");

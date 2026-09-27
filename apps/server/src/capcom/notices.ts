@@ -5,9 +5,6 @@ import { CONSOLE_IDS, isPracticeRun, type BenchRunResult, type ConsoleReport, ty
  * when (quiet hours queue them) and how often (each notice is deduped by `key`).
  */
 
-/** Findings that stop a design on a ViBread limit rather than a design mistake (plus any finding marked toolSide). */
-const TOOL_STOP_RULES: Record<string, true> = { "LAYOUT-NO-FIT": true, "TESTS-SUSPECT": true };
-
 export function clip(text: string, max: number): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
@@ -23,7 +20,8 @@ export function designNotice(title: string, revision: Pick<Revision, "n" | "resu
   if (reports.length === 0) return undefined;
   const name = `${title} r${revision.n}`;
   for (const report of reports) {
-    const stop = report.findings.find((f) => f.severity === "error" && (f.toolSide === true || TOOL_STOP_RULES[f.ruleId] === true));
+    // toolSide marks a ViBread limit (no room on the breadboard), not a design mistake. Set-aside tests only warn.
+    const stop = report.findings.find((f) => f.severity === "error" && f.toolSide === true);
     if (stop) {
       return {
         key: `design:${revision.n}`,
@@ -34,7 +32,8 @@ export function designNotice(title: string, revision: Pick<Revision, "n" | "resu
   const nogo = reports.find((r) => r.verdict === "NO-GO");
   if (nogo) return { key: `design:${revision.n}`, text: `${name}: NO-GO from ${nogo.console} — ${clip(nogo.summary, 180)}` };
   if (reports.some((r) => r.verdict === "PENDING")) return undefined;
-  const line = reports.map((r) => `${r.console} ${r.verdict}`).join(" · ");
+  const aside = new Set(reports.flatMap((r) => r.findings.filter((f) => f.ruleId === "TEST-SET-ASIDE").flatMap((f) => f.refs?.scenarios ?? []))).size;
+  const line = [...reports.map((r) => `${r.console} ${r.verdict}`), ...(aside ? [`${aside} test${aside === 1 ? "" : "s"} set aside (they only warn)`] : [])].join(" · ");
   return { key: `design:${revision.n}`, text: `${name} is ready — ${line}. Reply GO to start building.` };
 }
 

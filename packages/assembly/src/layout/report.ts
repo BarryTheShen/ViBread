@@ -9,10 +9,10 @@ export function assemblyReport(input: { circuit: Circuit; layout: Layout; lvs: L
   const quality = layoutQuality(input.circuit, input.layout);
   const placement = placementSummary(input.circuit, input.layout, quality);
   // Design philosophy rule 9: a spatial request the layout does not honour is a broken promise, so the design is not
-  // GO. The circuit itself is fine: toolSide tells the design agent to stop and tell the person which request could
-  // not be met and why, instead of redesigning or describing the parts as if it were.
+  // GO. The fix says what the design agent can do: fix the order, or make room (bigger board, fewer parts) or relax the
+  // request and say so. `toolSide` only tells the person-facing notices that no room is a ViBread limit.
   for (const group of placement.groups.filter((entry) => !entry.met)) {
-    // An order the layout couldn't follow is the design's to fix (it can retry); lack of room is a ViBread limit.
+    // An order the layout couldn't follow is the design's to fix; lack of room needs a bigger board or a smaller ask.
     findings.push(group.orderOnly
       ? {
           console: "FAO",
@@ -29,7 +29,7 @@ export function assemblyReport(input: { circuit: Circuit; layout: Layout; lvs: L
           severity: "error",
           title: `ViBread could not place ${group.parts.join(", ")} as requested on the breadboard.`,
           detail: group.detail,
-          fix: "Not a design mistake: there is no room for this arrangement. Tell the person which arrangement could not be built and why (the detail says), and describe the layout only from the placement summary. A bigger breadboard or fewer parts may make room; don't ship it as if the request were met.",
+          fix: "There is no room for this arrangement on this breadboard. Use the bigger breadboard (bb-830) or fewer parts, or relax this placement request and say so in \"assumptions\"; then call propose_design again. Describe the layout only from the placement summary, never as if the request were met.",
           refs: { parts: group.parts },
           toolSide: true,
         });
@@ -109,8 +109,8 @@ export function assemblyReport(input: { circuit: Circuit; layout: Layout; lvs: L
 }
 
 /**
- * FAO report when `layoutBoard` throws `LayoutFitError`. A tool-side failure (the design is valid but ViBread cannot
- * place it) is flagged `toolSide` so the design agent stops redesigning and tells the user instead.
+ * FAO report when `layoutBoard` throws `LayoutFitError`. When the design is valid but doesn't fit (`toolSide`), the fix
+ * says how to make it fit: the bigger breadboard or fewer parts.
  */
 export function layoutFailureReport(input: { error: LayoutFitError; revisionHash: string }): ConsoleReport {
   const { error } = input;
@@ -121,7 +121,7 @@ export function layoutFailureReport(input: { error: LayoutFitError; revisionHash
         severity: "error",
         title: "ViBread could not lay this circuit out on the breadboard.",
         detail: error.message,
-        fix: "This is a ViBread limit, not a design mistake: a bigger breadboard (830 points) or fewer parts will fit; redesigning the same circuit will not help.",
+        fix: "The circuit is valid but doesn't fit this breadboard: switch to the bigger breadboard (bb-830) or use fewer parts, then call propose_design again. Proposing the same circuit on the same board won't fit.",
         toolSide: true,
       }
     : {

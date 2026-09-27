@@ -8,8 +8,8 @@ import { CORRECTED, NAIVE_SUITE, WHACK_A_MOLE, WHACK_A_MOLE_INVENTORY } from "./
 /**
  * GitHub issue #16: simulation tests that contradict the intent must not count against a design that does what the intent
  * says. The tester's whack-a-mole (real compile + simulator): the test author's first suite stacks expect-part windows as
- * if they were simultaneous (T1, T2 fail although the firmware is right). The test review corrects them or reports
- * TESTS-SUSPECT (tool-side); it never becomes a design NO-GO that sends the agent into rewriting the sketch.
+ * if they were simultaneous (T1, T2 fail although the firmware is right). The test review corrects them or ViBread sets
+ * them aside (warnings only); it never becomes a design NO-GO that sends the agent into rewriting the sketch.
  */
 
 const HUMAN: Actor = { kind: "human", id: "operator", name: "Operator", channel: "web" };
@@ -36,15 +36,15 @@ async function run(design: ScriptStep[], reviews: (call: number) => Review[], su
   await runtime.missions.say(mission.id, BRIEF, HUMAN);
   const reply = (await deps.messages.list(mission.id)).findLast((m) => m.role === "assistant")!;
   const outputs = reply.parts.flatMap((p) => ("output" in p && p.state === "output-available" ? [{ tool: p.type.slice(5), output: p.output as ToolOutput }] : []));
-  return { deps, mission, fast, outputs, reply, revisions: await deps.store.listRevisions(mission.id), reviewCalls: () => reviewCalls };
+  return { deps, runtime, mission, fast, outputs, reply, revisions: await deps.store.listRevisions(mission.id), reviewCalls: () => reviewCalls };
 }
 
 interface ToolOutput {
   summary: string;
   revision: number;
   verdicts: Record<string, string>;
-  findings: { ruleId: string; toolSide?: boolean; detail?: string; title: string }[];
-  testReview?: { scenario: string; verdict: string; corrected?: boolean }[];
+  findings: { ruleId: string; severity: string; detail?: string; title: string }[];
+  testReview?: { scenario: string; verdict: string; corrected?: boolean; setAside?: boolean }[];
 }
 
 describe("independent tests that contradict the intent (issue #16, whack-a-mole)", () => {
@@ -68,24 +68,36 @@ describe("independent tests that contradict the intent (issue #16, whack-a-mole)
     expect(reviewLog?.message).toBe("test review: T1 test-wrong, T2 test-wrong");
   }, 180_000);
 
-  it("tests the review still suspects are reported as TESTS-SUSPECT (tool-side), never as a design failure", async () => {
-    const { outputs, revisions } = await run([propose, { text: "Done." }], () => [
+  it("tests the review judges wrong without a working correction are set aside: FIDO GO, and they stay set aside on re-evaluation", async () => {
+    const { outputs, revisions, runtime, deps, mission } = await run([propose, { text: "Done." }], () => [
       // No correction offered for T1; T2's "correction" is the same broken scenario.
       { id: "T1", verdict: "test-wrong", reason: STACKED },
       { id: "T2", verdict: "test-wrong", reason: STACKED, scenario: NAIVE_SUITE.scenarios.find((s) => s.id === "T2")! },
     ]);
     const result = outputs.find((o) => o.tool === "propose_design")!.output;
 
-    expect(result.verdicts.FIDO).toBe("NO-GO");
+    expect(result.verdicts).toMatchObject({ EECOM: "GO", GUIDO: "GO", FIDO: "GO", FAO: "GO" });
     expect(result.findings.filter((f) => f.ruleId === "SIM-FAIL")).toEqual([]);
-    expect(result.findings.filter((f) => f.ruleId === "TESTS-SUSPECT").map((f) => [f.toolSide, f.title])).toEqual([
-      [true, "T1: this test looks wrong, not the design"],
-      [true, "T2: this test looks wrong, not the design"],
+    const aside = result.findings.filter((f) => f.ruleId === "TEST-SET-ASIDE");
+    expect(aside.map((f) => [f.severity, f.title])).toEqual([
+      ["warning", "T1 set aside: the test review judged it wrong for the intent"],
+      ["warning", "T2 set aside: the test review judged it wrong for the intent"],
     ]);
-    expect(result.findings.find((f) => f.ruleId === "TESTS-SUSPECT")?.detail).toContain("t=1050–1100 ms");
-    expect(result.summary).toContain("a ViBread tool problem (toolSide), not a design problem");
-    // The sketch was never touched.
+    // The failure still shows, with the reviewer's reason: the test really fails, it just doesn't block.
+    expect(aside[0]!.detail).toContain("t=1050–1100 ms");
+    expect(aside[0]!.detail).toContain(STACKED);
+    expect(result.testReview?.map((r) => [r.scenario, r.setAside])).toEqual([["T1", true], ["T2", true]]);
+    expect(result.summary).toContain("ViBread set aside T1, T2");
+    // r1 naive suite; r2 T1 set aside + T2 "corrected"; r3 T2's failing correction set aside too. The sketch never changed.
+    expect(revisions.map((r) => [r.n, r.results.reports.find((c) => c.console === "FIDO")?.verdict])).toEqual([[1, "NO-GO"], [2, "NO-GO"], [3, "GO"]]);
     expect(revisions.every((r) => r.circuit.sketch.source === WHACK_A_MOLE.sketch.source)).toBe(true);
+    expect(revisions[2]!.suite!.scenarios.filter((s) => s.setAside).map((s) => s.id)).toEqual(["T1", "T2"]);
+
+    // Re-running the pipeline (a re-check, a server restart) keeps them set aside: it's in the suite, not the report.
+    await runtime.pipeline.evaluate(mission.id, 3);
+    const fido = (await deps.store.getRevision(mission.id, 3))!.results.reports.find((r) => r.console === "FIDO")!;
+    expect(fido.verdict).toBe("GO");
+    expect(fido.findings.map((f) => [f.ruleId, f.severity])).toEqual([["TEST-SET-ASIDE", "warning"], ["TEST-SET-ASIDE", "warning"]]);
   }, 180_000);
 
   it("tests the review confirms stay design findings, with the reviewer's reason and a pointer to dispute_test", async () => {
@@ -119,6 +131,26 @@ describe("independent tests that contradict the intent (issue #16, whack-a-mole)
     expect(disputed.verdicts.FIDO).toBe("GO");
     expect(disputed.revision).toBe(2);
     expect(revisions.map((r) => r.circuit.sketch.source === WHACK_A_MOLE.sketch.source)).toEqual([true, true]);
+  }, 180_000);
+
+  it("a disputed test the reviewer is unsure about is set aside; one it confirms keeps blocking", async () => {
+    const dispute: ScriptStep = { toolCalls: [{ name: "dispute_test", input: { revision: 1, scenarios: ["T1", "T2"], reason: "C1 fixes red at 1 s; the test checks at 1.05 s because its three off-windows moved the clock." } }] };
+    const { outputs, revisions } = await run([propose, dispute, { text: "Done." }], (call) =>
+      call === 0
+        ? [{ id: "T1", verdict: "unsure", reason: "Can't tell." }, { id: "T2", verdict: "unsure", reason: "Can't tell." }]
+        : [{ id: "T1", verdict: "unsure", reason: "The intent doesn't say when the gap starts." }, { id: "T2", verdict: "design-wrong", reason: "C1 says red lights at 1 s; checked at 1.05 s it was on." }],
+    );
+    // Without a dispute, "unsure" alone doesn't set a test aside.
+    const proposed = outputs.find((o) => o.tool === "propose_design")!.output;
+    expect(proposed.findings.filter((f) => f.ruleId === "SIM-FAIL").map((f) => f.title.split(":")[0])).toEqual(["T1", "T2"]);
+    const disputed = outputs.find((o) => o.tool === "dispute_test")!.output;
+    expect(disputed.verdicts.FIDO).toBe("NO-GO");
+    expect(disputed.findings.filter((f) => f.ruleId === "TEST-SET-ASIDE").map((f) => [f.title.split(" ")[0], f.severity])).toEqual([["T1", "warning"]]);
+    const blocking = disputed.findings.filter((f) => f.ruleId === "SIM-FAIL");
+    expect(blocking.map((f) => f.title.split(":")[0])).toEqual(["T2"]);
+    expect(blocking[0]!.detail).toContain("The test reviewer confirmed this test matches the intent");
+    expect(revisions.at(-1)!.suite!.scenarios.find((s) => s.id === "T1")!.setAside).toContain("The design agent disputed it");
+    expect(revisions.at(-1)!.suite!.scenarios.find((s) => s.id === "T2")!.setAside).toBeUndefined();
   }, 180_000);
 
   it("a later revision keeps the scenarios of unchanged clauses; the author writes only for the changed clause", async () => {

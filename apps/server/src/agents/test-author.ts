@@ -7,10 +7,14 @@ import { TEST_AUTHOR_SYSTEM, TEST_REVIEW_SYSTEM, testAuthorPrompt, testReviewPro
 
 const MAX_ATTEMPTS = 2;
 
+/** A scenario as the test author writes it: `setAside` is ViBread's (from the test review), never the author's. */
+const AuthoredScenarioSchema = ScenarioSchema.omit({ setAside: true });
+
 /** What the test author sends: the suite; the fixed header fields may be missing or off (ViBread sets them). */
 const AuthoredSuiteSchema = TestSuiteSchema.extend({
   schema: z.string().optional().describe(`Always "${SIM_SCHEMA}".`),
   author: z.string().optional().describe('Always "test-author".'),
+  scenarios: z.array(AuthoredScenarioSchema).min(1),
 });
 
 /** What the test author sends when reviewing its failing scenarios. */
@@ -20,7 +24,7 @@ const ReviewSchema = z.object({
       id: z.string().regex(/^T\d+$/).describe("The failing scenario's id."),
       verdict: z.enum(["test-wrong", "design-wrong", "unsure"]),
       reason: z.string().min(1).describe("One or two sentences citing the intent clause and the timeline."),
-      scenario: ScenarioSchema.optional().describe('For "test-wrong": the corrected scenario (same id and clauses).'),
+      scenario: AuthoredScenarioSchema.optional().describe('For "test-wrong": the corrected scenario (same id and clauses).'),
     }),
   ),
 });

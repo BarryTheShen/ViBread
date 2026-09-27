@@ -923,6 +923,34 @@ function expectPartsFor(step: ScenarioStep): { checks: readonly PartExpectation[
   return undefined;
 }
 
+/**
+ * Simulation checks are open-ended (the expected state may start or end anywhere in the window) and tolerant, so a test
+ * whose timing or numbers are a little off doesn't fail a correct design.
+ */
+/** A part is "on" when lit for at least this share of the window, "off" when dark for at least this share of it. */
+export const STATE_MIN_SHARE = 0.25;
+/** Slack on expect-parts minBrightness/maxBrightness. */
+export const BRIGHTNESS_SLACK = 0.15;
+/** Slack on expect-pwm duty bounds (clamped to 0..1). */
+export const PWM_SLACK = 0.1;
+/** expect-tone accepts minHz × this … */
+export const TONE_LOW_FACTOR = 0.85;
+/** … up to maxHz × this. */
+export const TONE_HIGH_FACTOR = 1.15;
+/** expect-serial waits at least this much longer than withinMs (and at least 2 × withinMs). */
+export const SERIAL_EXTRA_MS = 500;
+/** expect-pin waits up to this long for the level before failing. */
+export const PIN_WAIT_MS = 100;
+
+function stateOk(state: "on" | "off", onFraction: number): boolean {
+  return state === "on" ? onFraction >= STATE_MIN_SHARE : 1 - onFraction >= STATE_MIN_SHARE;
+}
+
+function stateRule(state: "on" | "off"): string {
+  const share = `${Math.round(STATE_MIN_SHARE * 100)}%`;
+  return state === "on" ? `lit for at least ${share} of the window, anywhere in it` : `dark for at least ${share} of the window, anywhere in it`;
+}
+
 function timelineFailure(machine: SimMachine, startCycle: number, message: string, part?: string): string {
   const startMs = Math.round((startCycle * 1000) / machine.profile.clockHz);
   const endMs = Math.round(machine.timeMs);
@@ -970,20 +998,24 @@ function executeStep(machine: SimMachine, step: ScenarioStep): { ok: boolean; me
   }
   if ("expect-pin" in step) {
     const { pin, level } = step["expect-pin"];
-    const actual = machine.pinLevel(pin);
     const expected = level === "high" ? 1 : 0;
+    const start = machine.currentCycle;
+    const deadline = start + Math.round(PIN_WAIT_MS * CLOCK_HZ / 1000);
+    // Keeps waiting while the pin isn't an OUTPUT yet (before setup() runs pinMode at t = 0).
+    while (machine.pinLevel(pin) !== expected && machine.currentCycle < deadline) machine.run(Math.min(1, (deadline - machine.currentCycle) * 1000 / CLOCK_HZ));
+    const actual = machine.pinLevel(pin);
     if (actual === expected) return { ok: true, message: `${pin} is ${level}` };
-    return { ok: false, message: timelineFailure(machine, machine.currentCycle, `${pin} is ${actual === null ? "not an output" : actual ? "high" : "low"}; expected ${level}`) };
+    return { ok: false, message: timelineFailure(machine, start, `${pin} is ${actual === null ? "not an output" : actual ? "high" : "low"}; expected ${level} within ${PIN_WAIT_MS} ms`) };
   }
   if ("expect-part" in step) {
     const { part, state, windowMs } = step["expect-part"];
     const start = machine.currentCycle;
     machine.run(windowMs);
     const onFraction = machine.partOnFraction(part, start);
-    const ok = state === "on" ? onFraction >= 0.9 : onFraction <= 0.1;
+    const ok = stateOk(state, onFraction);
     const percentage = (onFraction * 100).toFixed(0);
     if (ok) return { ok: true, message: `${part} was ${state} as expected (lit ${percentage}% of the window)` };
-    return { ok: false, message: timelineFailure(machine, start, `${part} should be ${state} (lit ${state === "on" ? "≥ 90%" : "≤ 10%"} of the window) but was lit ${percentage}%`, part) };
+    return { ok: false, message: timelineFailure(machine, start, `${part} should be ${state} (${stateRule(state)}) but was lit ${percentage}%`, part) };
   }
   const expectParts = expectPartsFor(step);
   if (expectParts) {
@@ -995,11 +1027,10 @@ function executeStep(machine: SimMachine, step: ScenarioStep): { ok: boolean; me
       const brightness = machine.partState(check.part);
       const percentage = (onFraction * 100).toFixed(0);
       if (check.state !== undefined) {
-        const stateOk = check.state === "on" ? onFraction >= 0.9 : onFraction <= 0.1;
-        if (!stateOk) failures.push(`${check.part} should be ${check.state} (lit ${check.state === "on" ? "≥ 90%" : "≤ 10%"} of the window) but was lit ${percentage}%`);
+        if (!stateOk(check.state, onFraction)) failures.push(`${check.part} should be ${check.state} (${stateRule(check.state)}) but was lit ${percentage}%`);
       }
-      if (check.minBrightness !== undefined && brightness < check.minBrightness) failures.push(`${check.part} brightness ${(brightness * 100).toFixed(0)}% is below ${(check.minBrightness * 100).toFixed(0)}%`);
-      if (check.maxBrightness !== undefined && brightness > check.maxBrightness) failures.push(`${check.part} brightness ${(brightness * 100).toFixed(0)}% exceeds ${(check.maxBrightness * 100).toFixed(0)}%`);
+      if (check.minBrightness !== undefined && brightness < check.minBrightness - BRIGHTNESS_SLACK) failures.push(`${check.part} brightness ${(brightness * 100).toFixed(0)}% is below ${(check.minBrightness * 100).toFixed(0)}% (−${BRIGHTNESS_SLACK * 100} points allowed)`);
+      if (check.maxBrightness !== undefined && brightness > check.maxBrightness + BRIGHTNESS_SLACK) failures.push(`${check.part} brightness ${(brightness * 100).toFixed(0)}% exceeds ${(check.maxBrightness * 100).toFixed(0)}% (+${BRIGHTNESS_SLACK * 100} points allowed)`);
     }
     if (failures.length === 0) return { ok: true, message: `checked ${expectParts.checks.length} parts over ${expectParts.windowMs} ms` };
     const firstPart = expectParts.checks.find((check) => failures.some((failure) => failure.startsWith(`${check.part} `)))?.part;
@@ -1010,24 +1041,29 @@ function executeStep(machine: SimMachine, step: ScenarioStep): { ok: boolean; me
     const start = machine.currentCycle;
     machine.run(windowMs);
     const fraction = machine.pinHighFraction(pin, start);
-    if (fraction >= min && fraction <= max) return { ok: true, message: `${pin} duty ${(fraction * 100).toFixed(1)}%` };
-    return { ok: false, message: timelineFailure(machine, start, `${pin} duty ${(fraction * 100).toFixed(1)}% outside ${(min * 100).toFixed(1)}–${(max * 100).toFixed(1)}%`) };
+    const low = Math.max(0, min - PWM_SLACK);
+    const high = Math.min(1, max + PWM_SLACK);
+    if (fraction >= low && fraction <= high) return { ok: true, message: `${pin} duty ${(fraction * 100).toFixed(1)}%` };
+    return { ok: false, message: timelineFailure(machine, start, `${pin} duty ${(fraction * 100).toFixed(1)}% outside ${(low * 100).toFixed(1)}–${(high * 100).toFixed(1)}% (${(min * 100).toFixed(1)}–${(max * 100).toFixed(1)}% ± ${PWM_SLACK * 100} points)`) };
   }
   if ("expect-tone" in step) {
     const { part, minHz, maxHz, windowMs } = step["expect-tone"];
     const start = machine.currentCycle;
     machine.run(windowMs);
     const hz = machine.toneFrequency(part, start);
-    if (hz >= minHz && hz <= maxHz) return { ok: true, message: `${part} tone ${hz.toFixed(1)} Hz` };
-    return { ok: false, message: timelineFailure(machine, start, `${part} tone ${hz.toFixed(1)} Hz outside ${minHz}–${maxHz} Hz`, part) };
+    const low = minHz * TONE_LOW_FACTOR;
+    const high = maxHz * TONE_HIGH_FACTOR;
+    if (hz >= low && hz <= high) return { ok: true, message: `${part} tone ${hz.toFixed(1)} Hz` };
+    return { ok: false, message: timelineFailure(machine, start, `${part} tone ${hz.toFixed(1)} Hz outside ${low.toFixed(1)}–${high.toFixed(1)} Hz (${minHz}–${maxHz} Hz ± 15%)`, part) };
   }
   if ("expect-serial" in step) {
     const { contains, withinMs } = step["expect-serial"];
+    const waitMs = Math.max(2 * withinMs, withinMs + SERIAL_EXTRA_MS);
     const start = machine.currentCycle;
-    const deadline = machine.currentCycle + Math.round(withinMs * CLOCK_HZ / 1000);
+    const deadline = machine.currentCycle + Math.round(waitMs * CLOCK_HZ / 1000);
     while (!machine.serialContains(contains) && machine.currentCycle < deadline) machine.run(Math.min(1, (deadline - machine.currentCycle) * 1000 / CLOCK_HZ));
     if (machine.serialContains(contains)) return { ok: true, message: `serial contains ${JSON.stringify(contains)}` };
-    return { ok: false, message: timelineFailure(machine, start, `serial did not contain ${JSON.stringify(contains)}`) };
+    return { ok: false, message: timelineFailure(machine, start, `serial did not contain ${JSON.stringify(contains)} within ${waitMs} ms`) };
   }
   return { ok: false, message: timelineFailure(machine, machine.currentCycle, "unsupported scenario step") };
 }

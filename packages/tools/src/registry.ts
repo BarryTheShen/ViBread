@@ -77,16 +77,6 @@ const revisionArg = z.number().int().positive().optional().describe("Revision nu
 /** Longest finding detail the agent reads per finding (failed scenario steps, compiler text, measured values). */
 const DETAIL_LIMIT = 600;
 
-/**
- * Findings the design can't fix: a stage crashed, the independent tests couldn't be written, or the independent suite
- * doesn't cover the circuit (only the test author writes tests), plus any finding a console marks `toolSide`.
- */
-const TOOL_SIDE_RULES: Record<string, true> = { "STAGE-CRASH": true, "TESTS-NOT-WRITTEN": true, "TESTS-SUSPECT": true, "COV-OUTPUT": true, "COV-INPUT": true, "COV-CLAUSE": true, "COV-CATEGORY": true };
-
-export function isToolSide(finding: Finding): boolean {
-  return TOOL_SIDE_RULES[finding.ruleId] === true || finding.toolSide === true;
-}
-
 interface BriefFinding {
   console: string;
   ruleId: string;
@@ -95,7 +85,6 @@ interface BriefFinding {
   detail?: string;
   fix?: string;
   refs?: Finding["refs"];
-  toolSide?: true;
 }
 
 function brief(findings: Finding[]): BriefFinding[] {
@@ -109,7 +98,6 @@ function brief(findings: Finding[]): BriefFinding[] {
       ...(f.detail ? { detail: f.detail.length > DETAIL_LIMIT ? `${f.detail.slice(0, DETAIL_LIMIT)}…` : f.detail } : {}),
       ...(f.fix ? { fix: f.fix } : {}),
       ...(f.refs ? { refs: f.refs } : {}),
-      ...(isToolSide(f) ? { toolSide: true as const } : {}),
     }));
 }
 
@@ -134,15 +122,14 @@ function placementOf(revision: Revision): { text: string; unmet: string[] } | un
 function designResult(revision: Revision, review?: ReviewOutcome) {
   const reports = revision.results.reports;
   const findings = brief(reports.flatMap((r) => r.findings));
-  const toolSide = findings.filter((f) => f.toolSide && f.severity === "error").length;
   const notes: string[] = [];
-  if (toolSide) notes.push(`${toolSide} blocking finding${toolSide === 1 ? " is" : "s are"} a ViBread tool problem (toolSide), not a design problem: don't redesign for ${toolSide === 1 ? "it" : "them"}; tell the person.`);
   if (review?.corrected.length) notes.push(`The test author corrected ${review.corrected.join(", ")} (they contradicted the intent) and re-ran them as revision ${revision.n}.`);
+  if (review?.setAside.length) notes.push(`ViBread set aside ${review.setAside.join(", ")} (the test review didn't confirm ${review.setAside.length === 1 ? "it matches" : "they match"} the intent): ${review.setAside.length === 1 ? "it only warns" : "they only warn"} now, so carry on.`);
   if (findings.some((f) => f.ruleId === "SIM-FAIL")) {
     notes.push("If a failing test looks wrong rather than the design, call dispute_test — never remove or change user-visible behavior just to pass a test.");
   }
   const placement = placementOf(revision);
-  if (placement?.unmet.length) notes.push(`The requested placement wasn't met (${placement.unmet.join("; ")}): tell the person, and don't describe the layout as if it were.`);
+  if (placement?.unmet.length) notes.push(`The requested placement wasn't met (${placement.unmet.join("; ")}): follow the PLACEMENT-UNMET fix and propose again, and never describe the layout as if it were met.`);
   return {
     summary: `Revision ${revision.n}: ${verdictLine(reports)}${notes.length ? ` — ${notes.join(" ")}` : ""}`,
     accepted: true,
@@ -152,7 +139,7 @@ function designResult(revision: Revision, review?: ReviewOutcome) {
     allGo: allGo(reports),
     findings,
     consoles: reports.map((r) => ({ console: r.console, verdict: r.verdict, summary: r.summary })),
-    ...(review?.reviews.length ? { testReview: review.reviews.map((r) => ({ scenario: r.id, verdict: r.verdict, reason: r.reason, ...(review.corrected.includes(r.id) ? { corrected: true } : {}) })) } : {}),
+    ...(review?.reviews.length ? { testReview: review.reviews.map((r) => ({ scenario: r.id, verdict: r.verdict, reason: r.reason, ...(review.corrected.includes(r.id) ? { corrected: true } : {}), ...(review.setAside.includes(r.id) ? { setAside: true } : {}) })) } : {}),
     ...(placement ? { placement: placement.text } : {}),
   };
 }
@@ -281,7 +268,7 @@ export function createToolRegistry(deps: {
           // No suite: FIDO says why instead of waiting silently for tests that won't come.
           const fido = report(
             "FIDO",
-            [{ console: "FIDO", ruleId: "TESTS-NOT-WRITTEN", severity: "error", toolSide: true, title: "The simulation tests couldn't be written, so nothing was simulated.", detail: testsNote, fix: "Not a design problem: propose the design again to retry the test writer, or tell the person." }],
+            [{ console: "FIDO", ruleId: "TESTS-NOT-WRITTEN", severity: "error", title: "The simulation tests couldn't be written, so nothing was simulated.", detail: testsNote, fix: "Propose the same design again to retry the test writer." }],
             "NO-GO: the independent test writer's answer couldn't be used.",
             revision.hash,
           );
@@ -302,8 +289,9 @@ export function createToolRegistry(deps: {
       description:
         "When a failing simulation test (FIDO SIM-FAIL) looks wrong rather than the design — it checks something the intent " +
         "doesn't say, or its timing contradicts the intent — ask the independent test author to review it instead of changing " +
-        "the design to pass it. Wrong tests are corrected and re-run as a new revision (same circuit); confirmed tests stay, " +
-        "with the reviewer's reason. Never remove or change user-visible behavior just to satisfy a test.",
+        "the design to pass it. Wrong tests are corrected and re-run as a new revision (same circuit), or set aside (they only " +
+        "warn) when the correction doesn't work or the reviewer can't confirm them; tests the reviewer confirms stay, with its " +
+        "reason. Never remove or change user-visible behavior just to satisfy a test.",
       actionClass: "state-changing",
       input: z.object({
         revision: revisionArg,

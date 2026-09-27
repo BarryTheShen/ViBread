@@ -28,23 +28,21 @@ function validateOverride(actor: Actor, value: unknown): SafetyOverride | undefi
   return reason === undefined ? {} : { reason };
 }
 
-function scenarioNames(revision: Revision): string[] {
-  return (revision.results.sim?.scenarios ?? []).filter((scenario) => !scenario.ok).map((scenario) => scenario.title || scenario.id);
-}
-
-function suspectScenarioNames(revision: Revision): string[] {
+/** Scenario names of a FIDO finding rule (titles from the simulation results when present). */
+function scenarioNames(revision: Revision, ruleId: "SIM-FAIL" | "TEST-SET-ASIDE"): string[] {
   const fido = revision.results.reports.find((report) => report.console === "FIDO");
-  const ids = fido?.findings.filter((finding) => finding.ruleId === "TESTS-SUSPECT").flatMap((finding) => finding.refs?.scenarios ?? []) ?? [];
-  const scenarios = new Map((revision.results.sim?.scenarios ?? []).map((scenario) => [scenario.id, scenario.title || scenario.id]));
-  return [...new Set(ids)].map((id) => scenarios.get(id) ?? id);
+  const ids = fido?.findings.filter((finding) => finding.ruleId === ruleId).flatMap((finding) => finding.refs?.scenarios ?? []) ?? [];
+  const titles = new Map((revision.results.sim?.scenarios ?? []).map((scenario) => [scenario.id, scenario.title || scenario.id]));
+  return [...new Set(ids)].map((id) => titles.get(id) ?? id);
 }
 
 function fidoDetails(revision: Revision): string {
+  const failed = scenarioNames(revision, "SIM-FAIL");
+  const setAside = scenarioNames(revision, "TEST-SET-ASIDE");
   const details: string[] = [];
-  const failed = scenarioNames(revision);
   if (failed.length > 0) details.push(`failed scenarios: ${failed.join(", ")}`);
-  const suspect = suspectScenarioNames(revision);
-  if (suspect.length > 0) details.push(`TESTS-SUSPECT scenarios: ${suspect.join(", ")}`);
+  // Tests the test review set aside only warn; they're listed so the person sees them, not as a bypassed gate.
+  if (setAside.length > 0) details.push(`set-aside tests (warnings only): ${setAside.join(", ")}`);
   return details.join("; ");
 }
 

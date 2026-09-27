@@ -170,7 +170,10 @@ describe("human release (GO for build)", () => {
     const reports = revision.results.reports.map((report) => report.console === "FIDO" ? {
       ...report,
       verdict: "NO-GO" as const,
-      findings: [{ console: "FIDO" as const, ruleId: "TESTS-SUSPECT", severity: "error" as const, title: "T1 looks wrong", refs: { scenarios: ["T1"] } }],
+      findings: [
+        { console: "FIDO" as const, ruleId: "SIM-FAIL", severity: "error" as const, title: "T1 fails", refs: { scenarios: ["T1"] } },
+        { console: "FIDO" as const, ruleId: "TEST-SET-ASIDE", severity: "warning" as const, title: "T2 set aside", refs: { scenarios: ["T2"] } },
+      ],
     } : report.console === "RETRO" ? report : report);
     await deps.store.saveResults(mission.id, 1, {
       reports: [
@@ -184,7 +187,7 @@ describe("human release (GO for build)", () => {
     expect(detail.mission.releasedRevision).toBe(1);
     const event = (await runtime.missions.events(mission.id)).find((candidate) => candidate.kind === "release.override");
     expect(event?.text).toContain("Simulation tests (FIDO) NO-GO");
-    expect(event?.text).toContain("TESTS-SUSPECT scenarios: T1");
+    expect(event?.text).toContain("failed scenarios: T1; set-aside tests (warnings only): T2");
     expect(event?.text).toContain("Independent review (RETRO) NO-GO");
     expect((await deps.store.getRevision(mission.id, 1))?.results.reports.find((report) => report.console === "FIDO")?.verdict).toBe("NO-GO");
   });

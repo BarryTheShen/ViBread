@@ -46,7 +46,11 @@ system setting, using a space-cadet, cool-gray, anti-flash-white and red palette
    - **GUIDO, firmware:** the sketch really compiles for your board (the real Arduino compiler, inside the app), and the
      pins the code uses match the wiring.
    - **FIDO, simulation:** a *second* AI, which never sees the sketch, writes tests from your description ("after 4
-     presses in the dark, all 4 LEDs are on"). ViBread runs them on a simulated Arduino (see below).
+     presses in the dark, all 4 LEDs are on"). ViBread runs them on a simulated Arduino (see below). The checks are
+     open-ended and tolerant: a light counts as "on" when it's lit for at least a quarter of the check window, wherever
+     in the window that happens, and brightness, duty, pitch and serial timing each get some slack. A failing test is
+     reviewed against your description; one the review judges wrong (or can't confirm when the design agent disputes it)
+     is corrected or set aside, and a set-aside test only warns.
    - **FAO, assembly:** ViBread lays the circuit out on a breadboard and proves the layout connects exactly what the
      design says.
    - **RETRO, review:** a third AI compares your description, the design and all the results, and votes GO or NO-GO.
@@ -129,8 +133,8 @@ How the pieces carry it out:
   that meets every request with the best score wins: fewest wires, no crossings, copies regular and in order, short
   wires. The choice and why is written to the mission's debug log.
 - **Assembly check (FAO):** an unmet placement request is NO-GO (`PLACEMENT-UNMET`). Parts side by side but in the
-  wrong order is the design's to fix (the fix says how, and the agent proposes again); no room is tool-side, so the
-  agent stops and explains instead of redesigning; crossing wires (`LAYOUT-CROSSINGS`) and irregular repeats
+  wrong order is the design's to fix (the fix says how, and the agent proposes again); no room means the agent moves
+  to the bigger breadboard, uses fewer parts, or relaxes that request and says so; crossing wires (`LAYOUT-CROSSINGS`) and irregular repeats
   (`LAYOUT-IRREGULAR`) and parts not where their labels say (`LAYOUT-LABEL-ORDER`) are warnings the agent sees.
 - **Wire colours** (`colors.ts`) follow role and the order the units are built in.
 
