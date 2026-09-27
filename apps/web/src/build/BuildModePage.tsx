@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { BuildState, PhotoCheckResult } from "@vibread/core";
 import Alert from "@mui/material/Alert";
@@ -49,6 +49,7 @@ import { StepWireChips, WireColorPicker, WireLegend, useWireColor, type WireTarg
 import { checkpointChecksForRevision, checkpointChecksPass, checkpointStatusText, describeCheckpointChecks, isFullSelfTestStep, type CheckpointCheck } from "./checkpointChecks.js";
 import { RepeatChecklist } from "./RepeatChecklist.js";
 import { plugInstruction } from "./plugBanner.js";
+import { scrollForCentre, viewCentre, type ViewCentre } from "./zoomScroll.js";
 import {
   BuildApiError,
   createInventoryScan,
@@ -173,27 +174,41 @@ const ZOOM_LEVELS = [1, 2, 3, 4] as const;
 function ZoomedStepImage({ url, title, label, open, onClose }: { url: string; title: string; label: string; open: boolean; onClose: () => void }) {
   const [zoom, setZoom] = useState(2);
   const zoomIndex = ZOOM_LEVELS.indexOf(zoom as (typeof ZOOM_LEVELS)[number]);
+  const scroller = useRef<HTMLDivElement | null>(null);
+  // Opens on the middle of the picture; each zoom keeps whatever spot was in the middle of the screen.
+  const centre = useRef<ViewCentre>({ x: 0.5, y: 0.5 });
+  const recentre = () => {
+    const box = scroller.current;
+    if (!box) return;
+    const { left, top } = scrollForCentre(centre.current, box);
+    box.scrollTo({ left, top });
+  };
+  const changeZoom = (next: number) => {
+    if (scroller.current) centre.current = viewCentre(scroller.current);
+    setZoom(next);
+  };
+  useLayoutEffect(recentre, [zoom, open]);
   return (
     <Dialog fullScreen open={open} onClose={onClose} aria-label={label}>
       <Stack direction="row" sx={{ alignItems: "center", gap: 0.5, px: 1, py: 0.5, borderBottom: 1, borderColor: "divider" }}>
         <Typography variant="subtitle2" sx={{ flex: 1, minWidth: 0, fontWeight: 800 }} noWrap>
           {title}
         </Typography>
-        <IconButton aria-label="Zoom out" disabled={zoomIndex <= 0} onClick={() => setZoom(ZOOM_LEVELS[zoomIndex - 1])} sx={{ width: 48, height: 48 }}>
+        <IconButton aria-label="Zoom out" disabled={zoomIndex <= 0} onClick={() => changeZoom(ZOOM_LEVELS[zoomIndex - 1])} sx={{ width: 48, height: 48 }}>
           <ZoomOut />
         </IconButton>
         <Typography variant="body2" aria-live="polite" sx={{ minWidth: 28, textAlign: "center" }}>
           {zoom}×
         </Typography>
-        <IconButton aria-label="Zoom in" disabled={zoomIndex >= ZOOM_LEVELS.length - 1} onClick={() => setZoom(ZOOM_LEVELS[zoomIndex + 1])} sx={{ width: 48, height: 48 }}>
+        <IconButton aria-label="Zoom in" disabled={zoomIndex >= ZOOM_LEVELS.length - 1} onClick={() => changeZoom(ZOOM_LEVELS[zoomIndex + 1])} sx={{ width: 48, height: 48 }}>
           <ZoomIn />
         </IconButton>
         <IconButton aria-label="Close picture" onClick={onClose} sx={{ width: 48, height: 48 }}>
           <Close />
         </IconButton>
       </Stack>
-      <Box sx={{ flex: 1, overflow: "auto", bgcolor: "canvas.main", display: "flex", alignItems: zoom === 1 ? "center" : "flex-start" }}>
-        <Box component="img" src={url} alt={label} sx={{ display: "block", width: `${zoom * 100}%`, maxWidth: "none", height: "auto", flexShrink: 0 }} />
+      <Box ref={scroller} sx={{ flex: 1, overflow: "auto", bgcolor: "canvas.main", display: "flex", alignItems: zoom === 1 ? "center" : "flex-start" }}>
+        <Box component="img" src={url} alt={label} onLoad={recentre} sx={{ display: "block", width: `${zoom * 100}%`, maxWidth: "none", height: "auto", flexShrink: 0 }} />
       </Box>
     </Dialog>
   );
@@ -1056,7 +1071,8 @@ function BuildModeScreen({ missionId }: { missionId: string }) {
   const build = query.data;
   const notReleased = Boolean(build && phoneMissionsQuery.data && !phoneMissionsQuery.data.some((mission) => mission.id === missionId));
   const stale = Boolean(build && query.dataUpdatedAt > 0 && now - query.dataUpdatedAt > STALE_AFTER_MS);
-  const headline = build?.headline?.trim() || (build && build.steps.length > 0 ? "Build checklist ready" : undefined);
+  // An unreleased preview gets the warning below instead of a "ready" chip.
+  const headline = build?.headline?.trim() || (build && build.steps.length > 0 && !notReleased ? "Build checklist ready" : undefined);
 
   return (
     <Box

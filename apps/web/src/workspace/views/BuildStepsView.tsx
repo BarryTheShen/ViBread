@@ -28,6 +28,7 @@ import { queryKeys, useBuildState } from "../../api/hooks.js";
 import { checkpointChecksForRevision, checkpointChecksPass, checkpointStatusText, checkpointTests, isFullSelfTestStep, type CheckpointCheck } from "../../build/checkpointChecks.js";
 import { needVsHave } from "../../inventory/PartsView.js";
 import { RepeatChecklist } from "../../build/RepeatChecklist.js";
+import { plugInstruction } from "../../build/plugBanner.js";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
 import { PhoneQr } from "../PhoneLink.js";
 import { StepWireChips, WireColorPicker, WireLegend, useWireColor, type WireTarget } from "../WireColors.js";
@@ -203,6 +204,8 @@ export function BuildStepsView({
   const liveStep = liveBuild?.steps.find((candidate) => candidate.n === step.n);
   const image = revision.artifactUrls[`step-${step.n}.svg`] ?? revision.artifactUrls[`step-${step.n}.png`];
   const canMark = released && current !== undefined && step.n >= current;
+  // Same wording as phone Build Mode: "Unplug the USB cable now" on the step where the cable changes.
+  const plug = plugInstruction(step.plug, steps[steps.indexOf(step) - 1]?.plug);
   return (
     <Stack sx={{ gap: 2 }}>
       {!released && (
@@ -234,10 +237,10 @@ export function BuildStepsView({
           {current === step.n && <Chip color="primary" icon={<PhoneIphoneIcon />} label="You're here" />}
           {current !== undefined && step.n < current && <Chip color="success" variant="outlined" icon={<CheckIcon />} label="Done" />}
           <Chip
-            icon={step.plug === "plugged" ? <PowerIcon /> : <PowerOffIcon />}
-            color={step.plug === "plugged" ? "warning" : "default"}
-            variant="outlined"
-            label={step.plug === "plugged" ? "USB plugged in" : "USB unplugged"}
+            icon={plug.plugged ? <PowerIcon /> : <PowerOffIcon />}
+            color={plug.plugged ? "warning" : "default"}
+            variant={plug.change ? "filled" : "outlined"}
+            label={plug.change ? plug.action : plug.plugged ? "USB plugged in" : "USB unplugged"}
           />
         </Stack>
         {liveStep?.svgUrl ? (
