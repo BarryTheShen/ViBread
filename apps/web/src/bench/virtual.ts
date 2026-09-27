@@ -1,6 +1,7 @@
 import type { DeviceLine, Circuit } from "@vibread/core";
 import type { FaultId } from "@vibread/bench";
 import type { BenchTransport } from "./runner.js";
+import { reloadForStaleChunk } from "../staleChunks.js";
 
 export type VirtualFault = "none" | FaultId;
 
@@ -93,7 +94,15 @@ export class VirtualBenchTransport implements BenchTransport {
         this.onError?.(message.message);
       }
     };
-    this.worker.onerror = (event) => this.onError?.(event.message || "The virtual board worker stopped.");
+    this.worker.onerror = (event) => {
+      // A plain Event (no message) is a worker that never loaded: after a redeploy the old file name is gone (issue #29).
+      // Reload once for the new build; otherwise say so instead of a bare "stopped".
+      if (!(event instanceof ErrorEvent)) {
+        this.onError?.(reloadForStaleChunk() ? "ViBread was updated; reloading the page…" : "The virtual board's code couldn't load. Reload the page to try again.");
+        return;
+      }
+      this.onError?.(event.message ? event.message.replace(/^Uncaught\s+/, "") : "The virtual board worker stopped.");
+    };
     this.worker.postMessage({ type: "init", circuit: options.circuit, hex: options.hex, fault: options.fault });
   }
 
