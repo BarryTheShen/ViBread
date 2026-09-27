@@ -44,6 +44,8 @@ module.exports = {
     allowToChangeInstallationDirectory: true,
     differentialPackage: false,
     shortcutName: "ViBread",
+    // Upgrades install over the old version when one of its files is busy (see installer/installer.nsh).
+    include: "installer/installer.nsh",
   },
   linux: {
     target: [

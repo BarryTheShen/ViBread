@@ -25,7 +25,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        scenario: [app-open, app-closed, app-crashed]
+        # file-busy: another program (an antivirus or search-index scan) holds one of the old files during the upgrade.
+        scenario: [app-open, app-closed, app-crashed, file-busy]
     steps:
       - name: Download both installers
         shell: bash
@@ -85,12 +86,23 @@ jobs:
               Stop-Process -Id $app.Id -Force
               Start-Sleep 5
             }
+            "file-busy" {
+              $null = $app.CloseMainWindow()
+              if (-not $app.WaitForExit(60000)) { Write-Host "the app didn't close within 60 s" }
+              Start-Sleep 10
+              # Same file in every version (Electron's license list); held open without delete sharing, like a scanner.
+              $busy = Join-Path $installDir "LICENSES.chromium.html"
+              $holder = Start-Process -FilePath "powershell.exe" -PassThru -WindowStyle Hidden -ArgumentList @("-NoProfile", "-Command", "`$s = [IO.File]::Open('$busy', 'Open', 'Read', 'Read'); Start-Sleep 900")
+              Start-Sleep 5
+              Write-Host "holding $busy open (pid $($holder.Id))"
+            }
           }
           Show-InstallProcesses "before the upgrade ($env:SCENARIO)"
 
           $clock.Restart()
           $p = Start-Process -FilePath $new -ArgumentList "/S" -Wait -PassThru
           Write-Host "NEW INSTALLER EXITED $($p.ExitCode) after $([int]$clock.Elapsed.TotalSeconds) s"
+          if ($holder) { Stop-Process -Id $holder.Id -Force -ErrorAction SilentlyContinue }
           Show-InstallProcesses "after the upgrade"
           if (Test-Path -LiteralPath $exe) { Write-Host "installed version now: $((Get-Item $exe).VersionInfo.ProductVersion)" } else { Write-Host "ViBread.exe is missing after the upgrade" }
           if ($p.ExitCode -ne 0) { throw "the upgrade failed (installer exit code $($p.ExitCode))" }
