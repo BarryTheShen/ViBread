@@ -8,8 +8,8 @@ import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import { useQuery } from "@tanstack/react-query";
 import type { MissionDetail, TimelineEvent } from "@vibread/core";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link as RouterLink, useParams } from "react-router";
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { Link as RouterLink, useParams, useSearchParams } from "react-router";
 import { api } from "../api/client.js";
 import { queryKeys, useConnections, useMission, useRevisions } from "../api/hooks.js";
 import { isSignInRequired, SignInRequired } from "../components/SignIn.js";
@@ -22,15 +22,9 @@ import { ArtifactPanel } from "../workspace/ArtifactPanel.js";
 import { ResizablePanel } from "../workspace/ResizablePanel.js";
 import { MissionCompleteCard } from "../workspace/MissionCompleteCard.js";
 import { MissionHeader } from "../workspace/MissionHeader.js";
+import { readPanel, writePanel, type PanelState } from "../workspace/panelUrl.js";
 
 const EMPTY_EVENTS: TimelineEvent[] = [];
-
-interface PanelState {
-  open: boolean;
-  view: PanelView;
-  revision?: number;
-  console?: string;
-}
 
 /**
  * Opens the panel by itself at the moments the plan names (§3.2): the first design (Schematic), GO for build (Build
@@ -72,25 +66,23 @@ export default function MissionPage() {
   const phone = useMediaQuery("(max-width: 699.95px)");
   const roomy = useMediaQuery("(min-width: 1200px)");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
-  const [panel, setPanel] = useState<PanelState>({ open: false, view: "schematic" });
-  const panelTouched = useRef(false);
+  // Panel view, design version and focused check live in the URL (?panel=…&rev=…), so reload and shared links restore
+  // them; with no choice yet it opens on a wide screen with the phase's default view (workspace/panelUrl.ts).
+  const [searchParams, setSearchParams] = useSearchParams();
+  const panel = readPanel(searchParams, detail, roomy);
+  const setPanel = useCallback(
+    (update: (current: PanelState) => PanelState) =>
+      setSearchParams((params) => writePanel(params, update(readPanel(params, detail, roomy))), { replace: true }),
+    [setSearchParams, detail, roomy],
+  );
 
-  const openPanel = useCallback<MissionShellValue["openPanel"]>((view, options) => {
-    panelTouched.current = true;
-    setPanel({ open: true, view, revision: options?.revision, console: options?.console });
-  }, []);
-  const closePanel = useCallback(() => {
-    panelTouched.current = true;
-    setPanel((p) => ({ ...p, open: false }));
-  }, []);
-  const autoOpen = useCallback((view: PanelView) => setPanel({ open: true, view }), []);
+  const openPanel = useCallback<MissionShellValue["openPanel"]>(
+    (view, options) => setPanel(() => ({ open: true, view, revision: options?.revision, console: options?.console })),
+    [setPanel],
+  );
+  const closePanel = useCallback(() => setPanel((p) => ({ ...p, open: false })), [setPanel]);
+  const autoOpen = useCallback((view: PanelView) => setPanel(() => ({ open: true, view })), [setPanel]);
   useAutoPanel(detail, events, autoOpen);
-
-  // A mission that already has a design opens with its schematic beside the chat on a wide screen.
-  const hasDesign = detail?.mission.currentRevision !== undefined;
-  useEffect(() => {
-    if (hasDesign && roomy && !panelTouched.current) setPanel((p) => (p.open ? p : { ...p, open: true }));
-  }, [hasDesign, roomy]);
 
   const shell = useMemo<MissionShellValue | null>(
     () =>

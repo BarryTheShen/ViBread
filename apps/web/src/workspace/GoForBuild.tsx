@@ -11,7 +11,6 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { MissionDetail } from "@vibread/core";
 import { useState } from "react";
-import { Link as RouterLink } from "react-router";
 import { HttpError } from "../api/client.js";
 import { useConnections, useRelease } from "../api/hooks.js";
 import { releaseReadiness } from "./nextStep.js";
@@ -83,11 +82,6 @@ export function GoForBuildButton({ missionId, detail, onReleased }: { missionId:
             </Button>
           </span>
         </Tooltip>
-        {testsBlocked && noAgent && (
-          <Button component={RouterLink} to="/settings" size="small" aria-label="Connect Claude in Settings so the tests can be written" sx={{ whiteSpace: "nowrap" }}>
-            Connect Claude
-          </Button>
-        )}
       </Stack>
       {release.isError && !confirmOpen && (
         <Snackbar

@@ -34,8 +34,12 @@ function GatherParts({ revision, inventory }: { revision: RevisionDetail; invent
   const missing = rows.filter((r) => r.have < r.need);
   return (
     <Box sx={{ mt: 1.5 }}>
-      <Typography variant="overline" sx={{ color: "text.secondary" }}>
-        Need vs have
+      <Typography variant="overline" sx={{ color: "text.secondary", display: "block" }}>
+        What the design needs vs this mission's parts list
+      </Typography>
+      {/* The counts are the parts attached to this mission when it was created, not the live Inventory page. */}
+      <Typography variant="body2" sx={{ color: "text.secondary" }}>
+        Counted from the parts list saved with this mission (your Inventory page may have changed since).
       </Typography>
       <List dense disablePadding>
         {rows.map((r) => (
@@ -43,7 +47,7 @@ function GatherParts({ revision, inventory }: { revision: RevisionDetail; invent
             <ListItemIcon sx={{ minWidth: 32 }}>
               {r.have >= r.need ? <TaskAltIcon color="success" fontSize="small" /> : <ReportProblemOutlinedIcon color="warning" fontSize="small" />}
             </ListItemIcon>
-            <ListItemText primary={r.label} secondary={r.have >= r.need ? `need ${r.need} · have ${r.have}` : `need ${r.need} · have ${r.have} — missing ${r.need - r.have}`} />
+            <ListItemText primary={r.label} secondary={`need ${r.need} · ${r.have} in this mission's parts list${r.have < r.need ? ` — missing ${r.need - r.have}` : ""}`} />
           </ListItem>
         ))}
       </List>

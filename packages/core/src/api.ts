@@ -43,6 +43,7 @@ import type { DeviceLine } from "./telemetry.js";
  *   POST   /api/missions/:id/build/wire-color WireColorRequest → BuildState   (the builder recolours a wire or net)
  *   GET    /api/missions/:id/build/steps/:n.svg|.png[?focus=1]  → step picture with the builder's wire colours
  *   GET    /api/missions/:id/build/schematic.svg                → schematic with the builder's wire colours
+ *   GET    /api/missions/:id/build/breadboard.svg               → finished breadboard with the builder's wire colours
  *   POST   /api/missions/:id/bench/firmware { kind }            → BenchFirmwareResponse  kind: "bench" | "app"
  *   POST   /api/missions/:id/bench/runs   BenchRunRequest       → BenchRunResult
  *   POST   /api/missions/:id/photo        multipart photo + step → PhotoCheckResult
@@ -191,6 +192,8 @@ export interface BuildState {
     legend: { colors: string[]; label: string }[];
     /** Schematic drawn with these colours. */
     schematicUrl: string;
+    /** Finished breadboard drawn with these colours (Try it, the bench's virtual board). */
+    breadboardUrl: string;
   };
   /** 1-based index of the step the builder is on. */
   current: number;

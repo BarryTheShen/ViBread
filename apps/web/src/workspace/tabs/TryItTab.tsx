@@ -8,7 +8,6 @@ import Button from "@mui/material/Button";
 import Paper from "@mui/material/Paper";
 import Skeleton from "@mui/material/Skeleton";
 import Slider from "@mui/material/Slider";
-import Snackbar from "@mui/material/Snackbar";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
@@ -16,7 +15,7 @@ import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import type { Part, RevisionDetail } from "@vibread/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useArtifactText } from "../../api/hooks.js";
+import { useArtifactText, useBuildState } from "../../api/hooks.js";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
 import { SERIAL_LIMIT, SerialMonitor } from "../../components/SerialMonitor.js";
 
@@ -75,11 +74,13 @@ function HoldButton({ part, pressed, onChange }: { part: Part; pressed: boolean;
 const SOUND_HINT_KEY = "vibread:tryit-sound-hint-shown";
 
 /** PLAN item 12: the revision's app.hex running live in the browser, driving the breadboard drawing. */
-export function TryItTab({ revision }: { revision: RevisionDetail }) {
+export function TryItTab({ missionId, revision, released }: { missionId: string; revision: RevisionDetail; released: boolean }) {
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)");
   const hexUrl = revision.artifactUrls["app.hex"];
   const hex = useArtifactText(hexUrl);
-  const board = breadboardUrl(revision.artifactUrls);
+  // The build target is drawn with the builder's wire colours; other revisions use their pipeline drawing.
+  const build = useBuildState(missionId, released);
+  const board = (build.data?.revision === revision.n ? build.data.wires?.breadboardUrl : undefined) ?? breadboardUrl(revision.artifactUrls);
   const { circuit } = revision;
   const buttons = useMemo(() => circuit.parts.filter((p) => p.module === "button"), [circuit]);
   const sensors = circuit.parts.filter((p) => p.module === "photoresistor");
@@ -235,7 +236,8 @@ export function TryItTab({ revision }: { revision: RevisionDetail }) {
               aria-pressed={!muted}
               startIcon={muted ? <VolumeOffIcon /> : <VolumeUpIcon />}
               onClick={() => toggleSound(!muted)}
-              sx={{ minWidth: 118, justifyContent: "flex-start" }}
+              // Fixed width: "Sound off" and "Sound on" differ by a few pixels and must not shift Reset.
+              sx={{ width: 136, flexShrink: 0, justifyContent: "flex-start" }}
             >
               {muted ? "Sound off" : "Sound on"}
             </Button>
@@ -271,6 +273,7 @@ export function TryItTab({ revision }: { revision: RevisionDetail }) {
         onPointerCancel={(e) => releaseDiagramPointer(e.pointerId)}
         onPointerLeave={(e) => releaseDiagramPointer(e.pointerId)}
         sx={{
+          position: "relative",
           p: 1,
           bgcolor: "canvas.main",
           ...(buttonSelector ? { [buttonSelector]: { cursor: "pointer", touchAction: "none", userSelect: "none" } } : {}),
@@ -282,6 +285,25 @@ export function TryItTab({ revision }: { revision: RevisionDetail }) {
           <SvgArtifact ref={onSvgMounted} url={board} label="Live breadboard simulation. The PRESS buttons on the drawing can be held down." />
         ) : (
           <Alert severity="info">The breadboard drawing isn't ready yet; the part states below are live.</Alert>
+        )}
+        {/* Over the drawing's top corner, inside the panel: never covers the controls and never moves them. */}
+        {soundHint && (
+          <Alert
+            role="status"
+            severity="info"
+            variant="filled"
+            icon={<VolumeOffIcon />}
+            onClose={() => setSoundHint(false)}
+            onPointerDown={(e) => e.stopPropagation()}
+            action={
+              <Button color="inherit" size="small" startIcon={<VolumeUpIcon />} onClick={() => toggleSound(false)} sx={{ whiteSpace: "nowrap" }}>
+                Unmute
+              </Button>
+            }
+            sx={{ position: "absolute", top: 12, right: 12, left: { xs: 12, sm: "auto" }, maxWidth: 420, boxShadow: 3, alignItems: "center" }}
+          >
+            Your board is making sound — unmute to hear it.
+          </Alert>
         )}
       </Paper>
       {/* Fixed grid cells: a part changing state never moves the others. */}
@@ -380,20 +402,6 @@ export function TryItTab({ revision }: { revision: RevisionDetail }) {
       <Typography variant="caption" sx={{ color: "text.secondary" }}>
         About this simulation: {FIDELITY}
       </Typography>
-      <Snackbar open={soundHint} anchorOrigin={{ vertical: "bottom", horizontal: "right" }} onClose={(_, why) => why !== "clickaway" && setSoundHint(false)}>
-        <Alert
-          severity="info"
-          icon={<VolumeOffIcon />}
-          onClose={() => setSoundHint(false)}
-          action={
-            <Button color="inherit" size="small" startIcon={<VolumeUpIcon />} onClick={() => toggleSound(false)}>
-              Unmute
-            </Button>
-          }
-        >
-          Your board is making sound — unmute to hear it.
-        </Alert>
-      </Snackbar>
     </Stack>
   );
 }

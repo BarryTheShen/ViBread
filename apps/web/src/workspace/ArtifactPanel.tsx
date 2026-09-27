@@ -205,7 +205,7 @@ export function ArtifactPanel({ missionId, detail, view, revision: pickedRevisio
             {view === "steps" && <BuildStepsView missionId={missionId} revision={revision.data} released={revision.data.n === released} inventory={detail.mission.inventory} />}
             {view === "code" && <CodeTab revision={revision.data} />}
             {view === "tests" && <TestsTab revision={revision.data} recording={detail.recording} />}
-            {view === "tryit" && <TryItTab revision={revision.data} />}
+            {view === "tryit" && <TryItTab missionId={missionId} revision={revision.data} released={revision.data.n === released} />}
             {view === "replay" && <ReplayTab revision={revision.data} />}
             {view === "telemetry" && <TelemetryTab missionId={missionId} revision={revision.data} />}
             {view === "diagnosis" && <DiagnosisView missionId={missionId} revision={revision.data} />}

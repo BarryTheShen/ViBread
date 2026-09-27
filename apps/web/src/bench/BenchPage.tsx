@@ -19,7 +19,7 @@ import Step from "@mui/material/Step";
 import StepLabel from "@mui/material/StepLabel";
 import Stepper from "@mui/material/Stepper";
 import Typography from "@mui/material/Typography";
-import type { BenchRunResult, BoardProfileId, Circuit, DeviceLine, Layout, MissionDetail, RevisionDetail, SelfTestPlan } from "@vibread/core";
+import type { BenchRunResult, BoardProfileId, BuildState, Circuit, DeviceLine, Layout, MissionDetail, RevisionDetail, SelfTestPlan } from "@vibread/core";
 import { BOARD_PROFILES, revisionHash } from "@vibread/core";
 import { FAULTS, evaluateRun, planSelfTest, promptFor } from "@vibread/bench";
 import { BenchRunner, type BenchRunnerState } from "./runner.js";
@@ -104,7 +104,10 @@ async function loadBench(missionId: string): Promise<LoadedBench> {
   const hash = revision.hash || revisionHash(revision.circuit, revision.suite);
   const plan = revision.results.selftest ?? planSelfTest(revision.circuit, hash);
   let boardSvg = fallbackBreadboardSvg(revision.circuit.parts.map((part) => part.id));
-  const artifactUrl = revision.artifactUrls["breadboard.svg"] ?? revision.artifactUrls["breadboard"];
+  // The finished board with the builder's wire colours when this is the build target; else the pipeline drawing.
+  const build = await readJson<BuildState>(`/api/missions/${encodeURIComponent(missionId)}/build`).catch(() => undefined);
+  const coloredUrl = build?.revision === revisionNumber ? build.wires?.breadboardUrl : undefined;
+  const artifactUrl = coloredUrl ?? revision.artifactUrls["breadboard.svg"] ?? revision.artifactUrls["breadboard"];
   if (artifactUrl) {
     try {
       const response = await fetch(artifactUrl);
@@ -149,11 +152,41 @@ function virtualPromptHint(ask: Extract<DeviceLine, { t: "ask" }>): string | und
 }
 function promptTitle(ask: Extract<DeviceLine, { t: "ask" }>, plan: SelfTestPlan, fallback: string): string {
   const subject = plan.subjects.find((candidate) => candidate.part === ask.part);
-  if (ask.kind === "which-led" && subject?.kind === "led") {
-    const total = plan.subjects.filter((candidate) => candidate.kind === "led").length;
-    return `Light ${subject.order} of ${total}: ${fallback}`;
-  }
+  if (ask.kind === "which-led" && subject?.kind === "led") return `${subject.label}: ${fallback}`;
   return subject === undefined ? fallback : `${subject.label}: ${fallback}`;
+}
+function cleanTelemetryLog(lines: string[]): string[] {
+  const cleaned: string[] = [];
+  let railsRuns = 0;
+  let skipRails = false;
+  for (const raw of lines) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      cleaned.push(raw);
+      continue;
+    }
+    if (typeof parsed !== "object" || parsed === null || !("t" in parsed)) {
+      cleaned.push(raw);
+      continue;
+    }
+    const line = parsed as { t?: unknown; test?: unknown };
+    if (line.t === "hello" && cleaned.at(-1) === raw) continue;
+    if (line.t === "begin" && line.test === "rails.vcc") {
+      railsRuns += 1;
+      if (railsRuns > 1) {
+        skipRails = true;
+        continue;
+      }
+    }
+    if (skipRails) {
+      if (line.t === "end" && line.test === "rails.vcc") skipRails = false;
+      continue;
+    }
+    cleaned.push(raw);
+  }
+  return cleaned;
 }
 
 const actionButtonSx = { minHeight: 46, borderRadius: 2 } as const;
@@ -660,6 +693,7 @@ export default function BenchPage(): ReactElement | null {
   const topCandidate = run?.verdict === "pass" ? undefined : run?.diagnosis.candidates[selectedCandidate];
   const indistinguishable = run !== undefined && /indistinguishable|equally likely|cannot distinguish/i.test(run.diagnosis.summary);
   const allLines = runnerState?.rawLines ?? [];
+  const displayLines = cleanTelemetryLog(allLines);
   const currentProfile = connection?.profile;
   const benchArtifactUrl = loaded.revision.artifactUrls["bench.hex"];
   const appArtifactUrl = loaded.revision.artifactUrls["app.hex"];
@@ -760,7 +794,7 @@ export default function BenchPage(): ReactElement | null {
         {activeStep >= 1 && (
           <Card>
             <CardContent>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 1 · Make it safe</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 2 · Make it safe</Typography>
               <Typography color="text.secondary" sx={{ mt: 0.5 }}>ViBread puts every pin in a safe listening mode before it tests your parts. This check belongs to design <strong>{loaded.revision.hash.slice(0, 12)}</strong>.</Typography>
               {currentProfile && connection && <Chip label={describePort(connection)} size="small" sx={{ mt: 1 }} />}
               <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mt: 2, alignItems: { sm: "center" } }}>
@@ -775,15 +809,14 @@ export default function BenchPage(): ReactElement | null {
         {activeStep >= 2 && (
           <Card>
             <CardContent>
-              <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 2 · Check the power</Typography>
-              <Typography color="text.secondary" sx={{ mt: 0.5 }}>The board should say hello and show a healthy power reading before anything is switched on.</Typography>
+              <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 3 · Check board power</Typography>
+              <Typography color="text.secondary" sx={{ mt: 0.5 }}>This confirms the Arduino board is powered (VCC ≈ 5 V). The breadboard rails get tested by the part checks that follow.</Typography>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
                 <Chip label={runnerState?.seenHello ? `Banner: ${runnerState.seenHello.design}` : "Waiting for hello banner"} color={runnerState?.seenHello ? "success" : "default"} />
                 <Chip label={runnerState?.seenVcc ? `VCC ${runnerState.seenVcc.mv} mV` : "Waiting for VCC"} color={runnerState?.seenVcc ? "success" : "default"} />
               </Stack>
-              <Button variant="contained" onClick={() => void startRail()} disabled={Boolean(busy) || activeStep !== 2} sx={{ ...actionButtonSx, mt: 2 }}>{busy === "rail" ? "Listening…" : "Check rails and banner"}</Button>
-              {railReady && <Button variant="outlined" onClick={() => void startSelfTest()} disabled={Boolean(busy) || activeStep !== 2} sx={{ ...actionButtonSx, mt: 2, ml: 1 }}>Rails good · begin self-test</Button>}
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>No banner, repeated resets, or a USB drop means the cable or rails need attention.</Typography>
+              <Button variant="contained" onClick={() => void startRail()} disabled={Boolean(busy) || activeStep !== 2} sx={{ ...actionButtonSx, mt: 2 }}>{busy === "rail" ? "Checking…" : "Check board power"}</Button>
+              {railReady && <Button variant="outlined" onClick={() => void startSelfTest()} disabled={Boolean(busy) || activeStep !== 2} sx={{ ...actionButtonSx, mt: 2, ml: 1 }}>Board powered · begin self-test</Button>}
             </CardContent>
           </Card>
         )}
@@ -793,7 +826,7 @@ export default function BenchPage(): ReactElement | null {
             <CardContent>
               <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ justifyContent: "space-between" }}>
                 <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 3 · Test each part</Typography>
+                  <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 4 · Test each part</Typography>
                   <Typography color="text.secondary" sx={{ mt: 0.5 }}>We look first, then gently test each button, sensor, buzzer, and light.</Typography>
                 </Box>
                 <Chip label={`${runnerState?.lines.length ?? 0} telemetry lines`} color="info" variant="outlined" />
@@ -805,7 +838,7 @@ export default function BenchPage(): ReactElement | null {
                     const hint = mode === "virtual" ? virtualPromptHint(ask) : undefined;
                     return <Paper key={ask.id} sx={{ p: 2.5, border: "2px solid", borderColor: "secondary.main", bgcolor: "background.paper" }}>
                       <Typography variant="h6" sx={{ fontWeight: 700 }}>{promptTitle(ask, loaded.plan, prompt.title)}</Typography>
-                      <Typography color="text.secondary" sx={{ mb: 2 }}>{hint ? `${hint} Tap Done to continue.` : prompt.body}</Typography>
+                      <Typography color="text.secondary" sx={{ mb: 2 }}>{ask.kind === "which-led" ? "Watch the labeled lights on the virtual board and choose which one blinked." : hint ? `${hint} Tap Done to continue.` : prompt.body}</Typography>
                       <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
                         {prompt.choices.map((choice) => <Button key={choice.value} variant="contained" onClick={() => void answerAsk(ask.id, choice.value)} disabled={Boolean(busy)} sx={actionButtonSx}>{choice.label}</Button>)}
                       </Stack>
@@ -816,13 +849,13 @@ export default function BenchPage(): ReactElement | null {
               {mode === "virtual" && (
                 <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }}>
                   <Typography variant="subtitle2">Virtual board — watch the lights here</Typography>
-                  <Box sx={{ mt: 1, p: 1, bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", maxHeight: 360, overflow: "auto", "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3 } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
+                  <Box sx={{ mt: 1, p: 1, bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3 } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
                 </Paper>
               )}
               {remoteAnswer && <Alert severity="info" sx={{ mt: 2 }}>Answered from iMessage by {remoteAnswer.by}: {remoteAnswer.value}</Alert>}
               {runnerState?.done && <Alert severity="info" sx={{ mt: 2 }}>All device tests finished. Preparing the Houston diagnosis…</Alert>}
               <Divider sx={{ my: 2 }} />
-              <SerialMonitor value={allLines.join("\n")} title="Live line log" ariaLabel="Telemetry line log" emptyText="Waiting for NDJSON…" height="auto" maxHeight={220} />
+              <SerialMonitor value={displayLines.join("\n")} title="Live line log" ariaLabel="Telemetry line log" emptyText="Waiting for NDJSON…" height="auto" maxHeight={220} />
             </CardContent>
           </Card>
         )}
@@ -832,7 +865,7 @@ export default function BenchPage(): ReactElement | null {
             <CardContent>
               <Stack direction={{ xs: "column", md: "row" }} spacing={2} sx={{ justifyContent: "space-between", alignItems: { md: "center" } }}>
                 <Box>
-                  <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 4 · Find the problem</Typography>
+                  <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 5 · Find the problem</Typography>
                   <Typography variant="h6" sx={{ mt: 1, color: run.verdict === "pass" ? "success.main" : "warning.main" }}>{run.verdict === "pass" ? "Houston, we are GO." : run.diagnosis.summary}</Typography>
                   <Typography color="text.secondary" sx={{ mt: 0.5 }}>Attribution: {run.diagnosis.attribution}. Candidates are ranked from the telemetry and the revision netlist.</Typography>
                 </Box>
@@ -844,7 +877,7 @@ export default function BenchPage(): ReactElement | null {
                   {run.verdict !== "pass" && run.verdict !== "incomplete" && (indistinguishable ? <Stack spacing={1} sx={{ mt: 2 }}>{run.diagnosis.candidates.slice(0, 2).map((candidate) => <Paper key={candidate.cause} variant="outlined" sx={{ p: 2 }}><Typography sx={{ fontWeight: 700 }}>{candidate.title}</Typography><Typography color="text.secondary">{candidate.fix}</Typography></Paper>)}</Stack> : topCandidate ? <Paper variant="outlined" sx={{ p: 2, mt: 2 }}><Typography sx={{ fontWeight: 700 }}>Recommended fix</Typography><Typography color="text.secondary">{topCandidate.fix}</Typography></Paper> : null)}
                 </Box>
                 <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography variant="subtitle2" sx={{ mb: 1 }}>Highlighted breadboard artifact</Typography>
+                  <Typography variant="subtitle2" sx={{ mb: 1 }}>Where to look on your board</Typography>
                   <Box sx={{ "@keyframes vb-wire-pulse": { to: { strokeDashoffset: -32 } }, "& svg": { display: "block", width: "100%", height: "auto", bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3, filter: "drop-shadow(0 0 5px rgba(255,107,107,.8))" }, "& .vb-hl path, & .vb-hl .wire-path": { stroke: "#ff6b6b !important", strokeWidth: 6, strokeDasharray: "14 8", animation: reducedMotion ? "none" : "vb-wire-pulse 1s linear infinite" } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
                 </Box>
               </Stack>

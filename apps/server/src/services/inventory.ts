@@ -31,13 +31,14 @@ export class SqlInventoryService implements InventoryService {
     const entries = await this.entries(ownerId);
     const types = await this.types(ownerId);
     const missions = await this.deps.store.listMissions(ownerId);
+    const missionRevisions = await Promise.all(missions.map(async (mission) => ({ mission, revision: mission.currentRevision === undefined ? null : await this.deps.store.getRevision(mission.id, mission.currentRevision) })));
     return {
       entries: entries.map((entry) => {
         const type = types.find((candidate) => candidate.id === entry.typeId);
         const mapping = type?.mapping;
         const module = mapping && (mapping.kind === "module" || mapping.kind === "modelled") ? mapping.module : undefined;
         const mappedValues = mapping && (mapping.kind === "module" || mapping.kind === "modelled") ? { ...(mapping.fixed ?? {}), ...Object.fromEntries(Object.entries(mapping.params ?? {}).map(([moduleKey, fieldKey]) => [moduleKey, entry.values[fieldKey]])) } : {};
-        const usedIn = module ? missions.filter((mission) => mission.inventory.some((item) => item.module === module && Object.entries(mappedValues).every(([key, value]) => JSON.stringify(item.params?.[key]) === JSON.stringify(value)))).map((mission) => ({ missionId: mission.id, title: mission.title })) : [];
+        const usedIn = module ? missionRevisions.filter(({ revision }) => revision?.circuit.parts.some((part) => part.module === module && Object.entries(mappedValues).every(([key, value]) => JSON.stringify(part.params[key]) === JSON.stringify(value)))).map(({ mission }) => ({ missionId: mission.id, title: mission.title })) : [];
         return { ...entry, usedIn };
       }),
     };
