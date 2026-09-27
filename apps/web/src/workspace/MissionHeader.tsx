@@ -95,6 +95,8 @@ function StatusDots({ consoles, onOpen }: { consoles: ConsoleReport[]; onOpen(co
 
 function NextStepButton({ step, props, onStop, stopping }: { step: NextStep; props: MissionHeaderProps; onStop(): void; stopping: boolean }) {
   const { missionId, detail, onOpenPanel } = props;
+  // GO for build unmounts itself (and its dialog's focus-return target): the Build steps button that replaces it takes focus.
+  const [justReleased, setJustReleased] = useState(false);
   const toCard = () => {
     const card = document.getElementById("mission-complete-card");
     card?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -109,10 +111,10 @@ function NextStepButton({ step, props, onStop, stopping }: { step: NextStep; pro
         </Button>
       );
     case "go":
-      return <GoForBuildButton missionId={missionId} detail={detail} onReleased={(n) => onOpenPanel("steps", { revision: n })} />;
+      return <GoForBuildButton missionId={missionId} detail={detail} onReleased={(n) => { setJustReleased(true); onOpenPanel("steps", { revision: n }); }} />;
     case "build":
       return (
-        <Button variant="contained" startIcon={<ListAltIcon />} onClick={() => onOpenPanel("steps")} sx={{ whiteSpace: "nowrap" }}>
+        <Button variant="contained" autoFocus={justReleased} startIcon={<ListAltIcon />} onClick={() => onOpenPanel("steps")} sx={{ whiteSpace: "nowrap" }}>
           Build steps · {step.done}/{step.total}
         </Button>
       );

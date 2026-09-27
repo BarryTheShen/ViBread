@@ -10,7 +10,9 @@ import CardContent from "@mui/material/CardContent";
 import CardMedia from "@mui/material/CardMedia";
 import Chip from "@mui/material/Chip";
 import CircularProgress from "@mui/material/CircularProgress";
+import Dialog from "@mui/material/Dialog";
 import Divider from "@mui/material/Divider";
+import IconButton from "@mui/material/IconButton";
 import Link from "@mui/material/Link";
 import MobileStepper from "@mui/material/MobileStepper";
 import Paper from "@mui/material/Paper";
@@ -39,11 +41,14 @@ import KeyboardArrowLeft from "@mui/icons-material/KeyboardArrowLeft";
 import KeyboardArrowRight from "@mui/icons-material/KeyboardArrowRight";
 import Usb from "@mui/icons-material/Usb";
 import UsbOff from "@mui/icons-material/UsbOff";
+import ZoomIn from "@mui/icons-material/ZoomIn";
+import ZoomOut from "@mui/icons-material/ZoomOut";
 import WifiOff from "@mui/icons-material/WifiOff";
 import { useNavigate, useParams } from "react-router";
 import { StepWireChips, WireColorPicker, WireLegend, useWireColor, type WireTarget } from "../workspace/WireColors.js";
 import { checkpointChecksForRevision, checkpointChecksPass, checkpointStatusText, describeCheckpointChecks, isFullSelfTestStep, type CheckpointCheck } from "./checkpointChecks.js";
 import { RepeatChecklist } from "./RepeatChecklist.js";
+import { plugInstruction } from "./plugBanner.js";
 import {
   BuildApiError,
   createInventoryScan,
@@ -133,27 +138,64 @@ function statusDetails(status: PhotoCheckResult["answers"][number]["status"]): {
   }
 }
 
-function PlugBanner({ plug, reducedMotion }: { plug: BuildStep["plug"]; reducedMotion: boolean }) {
-  const plugged = plug === "plugged";
-  const Icon = plugged ? Usb : UsbOff;
+function PlugBanner({ plug, previous, reducedMotion }: { plug: BuildStep["plug"]; previous: BuildStep["plug"] | undefined; reducedMotion: boolean }) {
+  const instruction = plugInstruction(plug, previous);
+  const Icon = instruction.plugged ? Usb : UsbOff;
+  const tone = instruction.plugged ? "success" : "warning";
   return (
     <Chip
       component="section"
-      aria-label={plugged ? "USB plugged in" : "USB unplugged"}
+      aria-label={instruction.action}
       icon={<Icon aria-hidden="true" />}
-      label={plugged ? "USB plugged in · Plug the USB cable in now" : "USB unplugged · Keep the USB cable unplugged"}
-      variant="outlined"
+      label={instruction.action}
+      // A change of cable state is the one thing a builder must not miss: filled, not outlined.
+      variant={instruction.change ? "filled" : "outlined"}
+      color={instruction.change ? tone : "default"}
       sx={{
         alignSelf: "flex-start",
+        height: "auto",
         minHeight: 40,
         maxWidth: "100%",
-        color: plugged ? "success.main" : "warning.main",
-        borderColor: plugged ? "success.main" : "warning.main",
-        bgcolor: "background.paper",
+        fontWeight: instruction.change ? 800 : 500,
+        ...(instruction.change
+          ? {}
+          : { color: `${tone}.main`, borderColor: `${tone}.main`, bgcolor: "background.paper", "& .MuiChip-icon": { color: `${tone}.main` } }),
         transition: reducedMotion ? "none" : "border-color 180ms ease",
         "& .MuiChip-label": { whiteSpace: "normal", py: 0.75 },
       }}
     />
+  );
+}
+
+const ZOOM_LEVELS = [1, 2, 3, 4] as const;
+
+/** Full-screen picture of a step: zoom buttons widen the image and the dialog scrolls both ways (pinch still works). */
+function ZoomedStepImage({ url, title, label, open, onClose }: { url: string; title: string; label: string; open: boolean; onClose: () => void }) {
+  const [zoom, setZoom] = useState(2);
+  const zoomIndex = ZOOM_LEVELS.indexOf(zoom as (typeof ZOOM_LEVELS)[number]);
+  return (
+    <Dialog fullScreen open={open} onClose={onClose} aria-label={label}>
+      <Stack direction="row" sx={{ alignItems: "center", gap: 0.5, px: 1, py: 0.5, borderBottom: 1, borderColor: "divider" }}>
+        <Typography variant="subtitle2" sx={{ flex: 1, minWidth: 0, fontWeight: 800 }} noWrap>
+          {title}
+        </Typography>
+        <IconButton aria-label="Zoom out" disabled={zoomIndex <= 0} onClick={() => setZoom(ZOOM_LEVELS[zoomIndex - 1])} sx={{ width: 48, height: 48 }}>
+          <ZoomOut />
+        </IconButton>
+        <Typography variant="body2" aria-live="polite" sx={{ minWidth: 28, textAlign: "center" }}>
+          {zoom}×
+        </Typography>
+        <IconButton aria-label="Zoom in" disabled={zoomIndex >= ZOOM_LEVELS.length - 1} onClick={() => setZoom(ZOOM_LEVELS[zoomIndex + 1])} sx={{ width: 48, height: 48 }}>
+          <ZoomIn />
+        </IconButton>
+        <IconButton aria-label="Close picture" onClick={onClose} sx={{ width: 48, height: 48 }}>
+          <Close />
+        </IconButton>
+      </Stack>
+      <Box sx={{ flex: 1, overflow: "auto", bgcolor: "canvas.main", display: "flex", alignItems: zoom === 1 ? "center" : "flex-start" }}>
+        <Box component="img" src={url} alt={label} sx={{ display: "block", width: `${zoom * 100}%`, maxWidth: "none", height: "auto", flexShrink: 0 }} />
+      </Box>
+    </Dialog>
   );
 }
 function preloadImage(url?: string): void {
@@ -174,6 +216,7 @@ function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: bo
   const [displayedUrl, setDisplayedUrl] = useState<string | undefined>(() => step.focusImageUrl ?? step.imageUrl);
   const [loading, setLoading] = useState(Boolean(step.focusImageUrl ?? step.imageUrl));
   const [failed, setFailed] = useState(false);
+  const [zoomOpen, setZoomOpen] = useState(false);
   const loadId = useRef(0);
   const hasWholeBoard = Boolean(step.focusImageUrl && step.imageUrl);
   const showWholeBoard = imageView === "whole";
@@ -237,18 +280,28 @@ function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: bo
     }
   };
 
+  const imageLabel = `${showWholeBoard ? "Whole board" : "Focused step"} illustration for step ${step.n}: ${step.title}`;
+  const canZoom = Boolean(displayedUrl && !failed && !loading);
   return (
     <Box>
       <Box
-        role="img"
-        aria-label={`${showWholeBoard ? "Whole board" : "Focused step"} illustration for step ${step.n}: ${step.title}`}
+        component={canZoom ? "button" : "div"}
+        type={canZoom ? "button" : undefined}
+        onClick={canZoom ? () => setZoomOpen(true) : undefined}
+        aria-label={canZoom ? `Enlarge picture — ${imageLabel}` : imageLabel}
+        role={canZoom ? undefined : "img"}
         aria-busy={loading}
         sx={{
           position: "relative",
+          display: "block",
           width: "100%",
           aspectRatio,
           overflow: "hidden",
           bgcolor: "canvas.main",
+          border: 0,
+          p: 0,
+          cursor: canZoom ? "zoom-in" : "default",
+          "&:focus-visible": { outline: "3px solid", outlineColor: "primary.main", outlineOffset: -3 },
         }}
       >
         <Skeleton
@@ -260,7 +313,7 @@ function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: bo
           <CardMedia
             component="img"
             image={displayedUrl}
-            alt={`${showWholeBoard ? "Whole board" : "Focused step"} illustration for step ${step.n}: ${step.title}`}
+            alt={imageLabel}
             onLoad={(event) => {
               const image = event.currentTarget;
               if (image.naturalWidth > 0 && image.naturalHeight > 0) setAspectRatio(`${image.naturalWidth} / ${image.naturalHeight}`);
@@ -278,9 +331,21 @@ function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: bo
             <Typography variant="caption">Step illustration unavailable</Typography>
           </Stack>
         )}
+        {canZoom && (
+          <Box
+            aria-hidden="true"
+            sx={{ position: "absolute", right: 8, bottom: 8, zIndex: 3, display: "flex", p: 0.5, borderRadius: "50%", bgcolor: "background.paper", color: "text.primary", boxShadow: 2 }}
+          >
+            <ZoomIn fontSize="small" />
+          </Box>
+        )}
       </Box>
-      {hasWholeBoard && (
-        <Box sx={{ display: "flex", justifyContent: "flex-end", px: 1.5, pt: 1 }}>
+      {displayedUrl && <ZoomedStepImage key={displayedUrl} url={displayedUrl} title={`Step ${step.n}: ${step.title}`} label={imageLabel} open={zoomOpen} onClose={() => setZoomOpen(false)} />}
+      <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 1.5, pt: 1 }}>
+        <Typography variant="caption" color="text.secondary" sx={{ flex: 1 }}>
+          {canZoom ? "Tap to zoom" : ""}
+        </Typography>
+        {hasWholeBoard && (
           <ToggleButtonGroup
             exclusive
             size="small"
@@ -295,8 +360,8 @@ function StepImage({ step, reducedMotion }: { step: BuildStep; reducedMotion: bo
               Whole board
             </ToggleButton>
           </ToggleButtonGroup>
-        </Box>
-      )}
+        )}
+      </Box>
     </Box>
   );
 }
@@ -685,7 +750,7 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
 
   return (
     <Stack spacing={1.5}>
-      <PlugBanner plug={step.plug} reducedMotion={reducedMotion} />
+      <PlugBanner plug={step.plug} previous={steps[safeActiveStep - 1]?.plug} reducedMotion={reducedMotion} />
       <MobileStepper
         variant="progress"
         steps={steps.length}
@@ -738,6 +803,11 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
       >
         {stepMutation.isPending ? "Saving…" : "Done"}
       </Button>
+      {step.checkpoint && !checkpointPassed && !stepMutation.isPending && (
+        <Typography variant="body2" color="text.secondary" sx={{ textAlign: "center" }}>
+          Done unlocks when the checks above pass — run them from Bench on your laptop.
+        </Typography>
+      )}
       {stepMutation.error && (
         <Alert severity="error" icon={<CloudOffOutlined />}>
           <AlertTitle>Could not save this step</AlertTitle>

@@ -24,7 +24,7 @@ export function RepeatChecklist({ step }: { step: Step }) {
       {copies.map((copy) => (
         <FormControlLabel
           key={copy.index}
-          sx={{ display: "flex", alignItems: "flex-start", mr: 0, mt: 0.5 }}
+          sx={{ display: "flex", alignItems: "flex-start", minHeight: 44, mr: 0, mt: 0.5 }}
           control={
             <Checkbox
               checked={ticked.has(copy.index)}
@@ -36,11 +36,11 @@ export function RepeatChecklist({ step }: { step: Step }) {
                   return next;
                 })
               }
-              sx={{ py: 0.5 }}
+              sx={{ py: 1 }}
             />
           }
           label={
-            <Typography sx={{ pt: 0.6, overflowWrap: "anywhere" }}>
+            <Typography sx={{ pt: 1.1, overflowWrap: "anywhere" }}>
               Copy {copy.index} → {copy.boardPins.join(", ")}: {copy.parts.join(" + ")}, column {copy.column}
             </Typography>
           }
