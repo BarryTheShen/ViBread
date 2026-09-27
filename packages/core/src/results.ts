@@ -114,6 +114,8 @@ export interface BenchTestResult {
   status: "pass" | "fail" | "unknown" | "skipped";
   subjects: SubjectResult[];
   summary: string;
+  /** Machine-readable reason for an actionable failure, when one is known. */
+  reason?: "short-suspected";
 }
 
 export type Attribution = "design" | "code" | "wiring" | "component" | "unknown" | "none";
