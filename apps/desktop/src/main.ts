@@ -3,6 +3,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, type MenuItemConstructorOptions } from "electron";
 import QRCode from "qrcode";
+import { loadServerPage } from "./navigation.js";
 import { loginShellPath } from "./path-env.js";
 import { desktopPaths, openLog, type DesktopPaths } from "./runtime.js";
 import { installSerial, type SerialState } from "./serial.js";
@@ -28,6 +29,11 @@ let quitting = false;
 // Aborted on quit: stops first-run downloads and kills arduino-cli / example-seeding children still running.
 const setupAbort = new AbortController();
 const timings: SmokeTimings = { launchedAt: Date.now() };
+// Settles once boot() has started the server and loaded it into the window (whether or not that worked). The menu is
+// reachable before then (setup window, "Starting ViBread…" page); actions that stop or restart the server wait for it,
+// or they would kill the child boot()'s server.start() is waiting on and boot() would quit with "could not start".
+let firstStartSettled!: () => void;
+const firstStart = new Promise<void>((resolve) => (firstStartSettled = resolve));
 
 if (!SMOKE && !app.requestSingleInstanceLock()) {
   app.quit();
@@ -73,9 +79,14 @@ async function boot(): Promise<void> {
   const window = await openMainWindow();
   setupWindow?.close();
   const serverStarted = Date.now();
-  const info = await server.start();
-  timings.serverStartMs = Date.now() - serverStarted;
-  await window.loadURL(`${info.localUrl}/`);
+  let info: ServerInfo;
+  try {
+    info = await server.start();
+    timings.serverStartMs = Date.now() - serverStarted;
+    await loadServerPage(window, `${info.localUrl}/`);
+  } finally {
+    firstStartSettled();
+  }
   if (SMOKE) {
     const result = await runSmoke({ window: mainWindow!, info, paths, serial, timings, setupRan: pending });
     await shutdown(result.ok ? 0 : 1);
@@ -185,11 +196,13 @@ function registerIpc(): void {
   ipcMain.handle("apikey:save", async (_event, key: unknown) => {
     if (typeof key !== "string" || !key.trim()) throw new Error("Enter a key.");
     setApiKey(key.trim());
+    await firstStart;
     await server.restart();
     mainWindow?.reload();
   });
   ipcMain.handle("apikey:clear", async () => {
     setApiKey(undefined);
+    await firstStart;
     await server.restart();
     mainWindow?.reload();
   });
@@ -221,6 +234,7 @@ async function resetExamples(): Promise<void> {
     detail: "The ViBread server restarts while they are built (about a minute). Your own missions and the current examples are kept.",
   });
   if (response !== 0) return;
+  await firstStart;
   await server.stop();
   const log = openLog(paths, "setup.log");
   const progressWindow = smallWindow("setup.html", 560, 440, "Rebuilding example missions");
@@ -237,7 +251,7 @@ async function resetExamples(): Promise<void> {
     log.end();
     if (!progressWindow.isDestroyed()) progressWindow.close();
     const info = await server.start();
-    await mainWindow?.loadURL(`${info.localUrl}/`);
+    if (mainWindow) await loadServerPage(mainWindow, `${info.localUrl}/`);
   }
 }
 

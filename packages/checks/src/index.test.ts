@@ -220,6 +220,71 @@ describe("EECOM on adversarial beginner circuits", () => {
     expect(ids(await reportFor(potCircuit("A6", "ANALOG_IN", "nano-atmega328p-5v")))).toEqual([]);
   });
 
+  it("suggests a pull resistor to the rail opposite the button's switched side, and that resistor clears the error", async () => {
+    const toGnd = await reportFor(buttonCircuit("D2", "INPUT"));
+    expect(fixOf(toGnd, "BTN-PULLUP")).toBe("Set D2 to INPUT_PULLUP (pinMode(2, INPUT_PULLUP)), or add a 10 kΩ pull-up resistor from D2 to 5 V.");
+    const withPullup = buttonCircuit("D2", "INPUT");
+    withPullup.parts.push({ id: "R1", module: "resistor", label: "pull-up", params: { ohms: 10_000, tolerancePct: 5 } });
+    withPullup.nets[0].pins.push(p("R1", "1"));
+    withPullup.nets.push({ id: "5V", kind: "power", pins: [b("5V"), p("R1", "2")] });
+    expect(ids(await reportFor(withPullup))).not.toContain("BTN-PULLUP");
+
+    const toFiveV = bench(
+      [{ id: "BTN1", module: "button", label: "button", params: {} }],
+      [{ id: "D2", kind: "signal", pins: [b("D2"), p("BTN1", "1")] }, { id: "5V", kind: "power", pins: [b("5V"), p("BTN1", "3")] }],
+      [{ pin: "D2", mode: "INPUT", part: "BTN1", purpose: "press" }],
+    );
+    expect(fixOf(await reportFor(toFiveV), "BTN-PULLUP")).toMatch(/^Add a 10 kΩ resistor from D2 to GND/);
+    toFiveV.parts.push({ id: "R1", module: "resistor", label: "pull-down", params: { ohms: 10_000, tolerancePct: 5 } });
+    toFiveV.nets[0].pins.push(p("R1", "1"));
+    toFiveV.nets.push({ id: "GND", kind: "ground", pins: [b("GND"), p("R1", "2")] });
+    expect(ids(await reportFor(toFiveV))).not.toContain("BTN-PULLUP");
+  });
+
+  it("leaves a knob driven from an output pin (a rheostat) alone, and asks for an ANALOG_IN role when the wiper is already on an analog pin", async () => {
+    const rheostat = bench(
+      [
+        { id: "POT1", module: "potentiometer", label: "dimmer", params: { ohms: 10_000 } },
+        { id: "R1", module: "resistor", label: "resistor", params: { ohms: 220, tolerancePct: 5 } },
+        { id: "LED1", module: "led", label: "light", params: { color: "red" } },
+      ],
+      [
+        { id: "D9", kind: "signal", pins: [b("D9"), p("POT1", "W")] },
+        { id: "P", kind: "signal", pins: [p("POT1", "A"), p("R1", "1")] },
+        { id: "L", kind: "signal", pins: [p("R1", "2"), p("LED1", "A")] },
+        { id: "GND", kind: "ground", pins: [b("GND"), p("LED1", "K")] },
+      ],
+      [{ pin: "D9", mode: "PWM_OUT", part: "LED1", purpose: "dimmed light" }],
+    );
+    expect(ids(await reportFor(rheostat))).not.toContain("POT-ANALOG-PIN");
+    const onA0 = await reportFor(potCircuit("A0", "INPUT"));
+    expect(onA0.verdict).toBe("NO-GO");
+    expect(fixOf(onA0, "POT-ANALOG-PIN")).toBe("Give A0 an ANALOG_IN role and read POT1 with analogRead(A0).");
+  });
+
+  it("gives each part on D0/D1 its own free pin, and a UART module SoftwareSerial pins", async () => {
+    const twoParts = bench(
+      [{ id: "BZ1", module: "buzzer-active", label: "buzzer", params: {} }, { id: "LED1", module: "led", label: "light", params: { color: "red" } }, { id: "R1", module: "resistor", label: "resistor", params: { ohms: 220, tolerancePct: 5 } }],
+      [
+        { id: "D0", kind: "signal", pins: [b("D0"), p("BZ1", "P")] },
+        { id: "D1", kind: "signal", pins: [b("D1"), p("R1", "1")] },
+        { id: "L", kind: "signal", pins: [p("R1", "2"), p("LED1", "A")] },
+        { id: "GND", kind: "ground", pins: [b("GND"), p("BZ1", "N"), p("LED1", "K")] },
+      ],
+      [{ pin: "D0", mode: "OUTPUT", part: "BZ1", purpose: "beep" }, { pin: "D1", mode: "OUTPUT", part: "LED1", purpose: "light" }],
+    );
+    const report = await reportFor(twoParts);
+    expect(report.findings.find((finding) => finding.ruleId === "SERIAL-USB")?.severity).toBe("warning");
+    expect(fixOf(report, "SERIAL-USB")).toBe("Move BZ1 from D0 to D2; move LED1 from D1 to D3; D0/D1 carry uploads and USB serial.");
+
+    const uart = bench(
+      [{ id: "GPS1", module: "generic", label: "GPS module", params: { role: "digital-sensor", description: "GPS" }, pinout: [{ id: "TX", name: "TX", etype: "output" }, { id: "RX", name: "RX", etype: "input" }] }],
+      [{ id: "D0", kind: "signal", pins: [b("D0"), p("GPS1", "TX")] }, { id: "D1", kind: "signal", pins: [b("D1"), p("GPS1", "RX")] }],
+      [{ pin: "D0", mode: "INPUT", part: "GPS1", purpose: "GPS TX" }, { pin: "D1", mode: "OUTPUT", part: "GPS1", purpose: "GPS RX" }],
+    );
+    expect(fixOf(await reportFor(uart), "SERIAL-USB")).toBe("Use SoftwareSerial on two free pins (D2 and D3) for GPS1 instead of D0/D1; D0/D1 carry uploads and USB serial.");
+  });
+
   it("allows 10 LEDs at 15 mA from pins, blocks 12, and does not charge 5 V-header LEDs to the chip", async () => {
     // 200 Ω red: (5 − 2.0) / 200 = 15 mA typical, 18.2 mA at the conservative corner.
     expect((await reportFor(ledBank(10, 200, "pins"))).verdict).toBe("GO");
