@@ -78,12 +78,12 @@ async function evaluateRail(mv?: number, options: Parameters<typeof evaluateRail
 
 describe("bench self-test", () => {
   it.each([
-    [4400, "fail"],
-    [4490, "fail"],
-    [4500, "pass"],
+    [4200, "fail"],
+    [4290, "fail"],
+    [4300, "pass"],
     [5001, "pass"],
-    [5500, "pass"],
-    [5510, "fail"],
+    [5600, "pass"],
+    [5610, "fail"],
   ] as const)("evaluates the board-power VCC window at %d mV", async (mv, status) => {
     const rail = await evaluateRail(mv);
     expect(rail.status).toBe(status);

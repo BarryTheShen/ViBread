@@ -43,8 +43,8 @@ import { z } from "zod";
  *  - buzzer.confirm:     per buzzer: short beeps repeat while waiting on ask `buzzer<i>` (heard-beep, ["yes","no"]) → end
  *  - Answer "timeout" (or no answer within timeoutMs) makes that subject `unknown`, never `fail`.
  */
-/** Board VCC power-check pass window, in millivolts. */
-export const VCC_PASS_MV = { min: 4500, max: 5500 } as const;
+/** Board VCC power-check pass window, in millivolts (loosened: weak USB ports and hubs sag below 4.5 V). */
+export const VCC_PASS_MV = { min: 4300, max: 5600 } as const;
 
 
 export const TEST_IDS = [
