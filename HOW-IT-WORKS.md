@@ -138,9 +138,11 @@ How the pieces carry it out:
   (`units.ts`), tries building them as identical copies at a fixed pitch (resistor across the channel, LED from row a
   straight into the GND rail, one Arduino wire per unit into row j), and also tries its general packings. The layout
   that meets every request with the best score wins: fewest wires, no crossings, copies regular and in order, short
-  wires. The Uno's 5V and GND wires enter the rails at the end hole on the Uno's side and are drawn around the
-  breadboard's edge, so they never cross the part wires; a split-rail bridge hugs the edge too. The choice and why is
-  written to the mission's debug log.
+  wires. When an Arduino wire would cross another, it may land on the far half of a part that spans the centre
+  channel (a button) instead, with every copy moving together; if every regular row still crosses, a row starting
+  further along is tried. The Uno's 5V and GND wires enter the rails at the end hole on the Uno's side and are drawn
+  around the breadboard's edge, so they never cross the part wires; a split-rail bridge hugs the edge too. The choice
+  and why is written to the mission's debug log.
 - **Assembly check (FAO):** an unmet placement request is NO-GO (`PLACEMENT-UNMET`). Parts side by side but in the
   wrong order is the design's to fix (the fix says how, and the agent proposes again); no room means the agent moves
   to the bigger breadboard, uses fewer parts, or relaxes that request and says so; crossing wires (`LAYOUT-CROSSINGS`) and irregular repeats
