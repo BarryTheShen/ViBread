@@ -1,5 +1,6 @@
 import { Chat } from "@ai-sdk/react";
 import { createTheme, ThemeProvider } from "@mui/material/styles";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { MissionDetail } from "@vibread/core";
 import type { UIMessage } from "ai";
 import { createElement, createRef } from "react";
@@ -73,8 +74,14 @@ function renderThread(chat: Chat<UIMessage>): string {
     canChat: true,
     inputRef: createRef<HTMLTextAreaElement>(),
   });
+  // The app always renders the thread inside a QueryClientProvider (it refreshes the missions list on run changes).
+  const queryClient = new QueryClient();
   return renderToStaticMarkup(
-    createElement(ThemeProvider, { theme: createTheme() }, createElement(MemoryRouter, null, createElement(MissionShellContext.Provider, { value: SHELL }, thread))),
+    createElement(
+      QueryClientProvider,
+      { client: queryClient },
+      createElement(ThemeProvider, { theme: createTheme() }, createElement(MemoryRouter, null, createElement(MissionShellContext.Provider, { value: SHELL }, thread))),
+    ),
   );
 }
 

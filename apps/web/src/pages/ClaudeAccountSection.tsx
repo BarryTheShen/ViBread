@@ -107,7 +107,11 @@ export function ClaudeAccountSection() {
         <Typography id="claude-account-heading" variant="h2">
           Connect your Claude account
         </Typography>
-        <Typography sx={{ color: "text.secondary" }}>Use your own Claude account for your missions instead of ViBread's key.</Typography>
+        <Typography sx={{ color: "text.secondary" }}>
+          {claude?.using === "server-key"
+            ? "Use your own Claude account or API key for your missions instead of ViBread's key."
+            : "Connect your Claude account or add an API key to power the AI agent."}
+        </Typography>
         {connections.isPending ? (
           <Skeleton variant="rounded" height={48} />
         ) : connections.isError ? (
