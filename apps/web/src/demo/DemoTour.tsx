@@ -43,12 +43,10 @@ interface TourStep {
   placement?: PopperPlacementType;
   /** Gap between the target and the card; wider next to the Show menu so its dropdown doesn't land on the card. */
   gap?: number;
-  /** True once the visitor has done the step's action. */
+  /** True once the visitor has done the step's action (shows ✓; the visitor still moves on with Next). */
   done?: (context: StepContext) => boolean;
   /** Text after ✓ when the step completes. */
   doneText?: string;
-  /** Keeps a completed step on screen (e.g. while the QR dialog is still open). */
-  holdWhile?: () => boolean;
 }
 
 const q = (selector: string) => () => document.querySelector(selector);
@@ -61,7 +59,7 @@ const pickerOr = (view: string) => () => panelBody(view) ?? document.querySelect
 const STEPS: readonly TourStep[] = [
   {
     title: "Welcome to ViBread",
-    body: "This is a real project recorded in ViBread: a Moon-Phase Lamp built on an Arduino. Each card tells you what to try; you do it on the page. Close the tour any time with the X.",
+    body: "This is a real project recorded in ViBread: a Moon-Phase Lamp built on an Arduino. Each card tells you what to try; you do it on the page, then press Next. Close the tour any time with the X.",
   },
   {
     title: "Describe it, Claude designs it",
@@ -141,8 +139,7 @@ const STEPS: readonly TourStep[] = [
     target: q('[data-tour="phone"]'),
     placement: "left-start",
     done: (c) => c.pressed.has("phone") || phoneDialogOpen(),
-    doneText: "Nice. Close the QR code when you're done.",
-    holdWhile: phoneDialogOpen,
+    doneText: "Nice. Close the QR code, then press Next.",
   },
   {
     title: "Only a person says GO for build",
@@ -173,7 +170,6 @@ const STEPS: readonly TourStep[] = [
 ];
 
 const DONE_KEY = "vibread.demo.tour.done";
-const ADVANCE_MS = 800;
 const RING_PAD = 4;
 /** Above page content and the app bar, below MUI menus, popovers and dialogs (1300), so those always stay usable. */
 const Z_TOUR = 1250;
@@ -369,19 +365,6 @@ export function DemoTour({ onClose }: { onClose(): void }) {
     return () => window.cancelAnimationFrame(frame);
   }, [step, reducedMotion]);
 
-  // Done: show ✓ briefly, then move on (after the step's dialog is closed, if it keeps one open).
-  useEffect(() => {
-    if (!completed) return;
-    let timer = 0;
-    const began = Date.now();
-    const wait = () => {
-      if (Date.now() - began >= ADVANCE_MS && !step.holdWhile?.()) next();
-      else timer = window.setTimeout(wait, 150);
-    };
-    timer = window.setTimeout(wait, 150);
-    return () => window.clearTimeout(timer);
-  }, [completed, next, step]);
-
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       // A menu or dialog is open: its own Escape and arrow keys win.
@@ -454,15 +437,9 @@ export function DemoTour({ onClose }: { onClose(): void }) {
         <Button size="small" onClick={back} disabled={index === 0}>
           Back
         </Button>
-        {step.done ? (
-          <Button size="small" color="inherit" onClick={next} disabled={completed} sx={{ color: "text.secondary" }}>
-            Skip
-          </Button>
-        ) : (
-          <Button size="small" variant="contained" onClick={next}>
-            {last ? "Finish" : "Next"}
-          </Button>
-        )}
+        <Button size="small" variant="contained" onClick={next}>
+          {last ? "Finish" : "Next"}
+        </Button>
       </Stack>
     </Paper>
   );
