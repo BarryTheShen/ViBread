@@ -48,8 +48,8 @@ import {
 import { defaultNetColors } from "./colors.js";
 import { lvs } from "./lvs.js";
 import { GROUP_GAP, partExtent, placementSummary } from "./placement.js";
-import { layoutQuality, type LayoutQuality } from "./quality.js";
-import { headerRow, partDrawingBox, type DrawingBox } from "./svg.js";
+import { jumperSegments, layoutQuality, wiresCross, type LayoutQuality } from "./quality.js";
+import { endpointPosition, headerRow, partDrawingBox, segmentsCross, type DrawingBox } from "./svg.js";
 import { repeatedUnits, type Unit, type UnitCopy, type UnitMember, type UnitSet } from "./units.js";
 
 type Side = "left" | "right";
@@ -74,8 +74,9 @@ interface Strategy {
   /**
    * Build repeated units as identical copies first (design philosophy rule 2), using the `anchorRank`-th best start
    * column for the largest set; off for the plain packings. Both kinds are candidates of the same search, scored alike.
+   * `uncrossed`: instead, every set's best start column whose own Arduino wires cross none of each other (rule 4).
    */
-  repeats?: { anchorRank: number };
+  repeats?: { anchorRank: number; uncrossed?: boolean };
   /** Free holes every strip keeps after part placement (jumper room). */
   reserve: number;
   /** Keep every part's drawing (body, leads, label) clear of the others; off for the tightest packing. */
@@ -166,6 +167,14 @@ function occupy(ctx: Ctx, hole: HoleId, owner: string): void {
   if (parseHole(hole)?.kind === "terminal") {
     const group = groupOf(ctx, hole);
     ctx.freeCount.set(group, (ctx.freeCount.get(group) ?? 5) - 1);
+  }
+}
+
+function release(ctx: Ctx, hole: HoleId): void {
+  ctx.occupied.delete(hole);
+  if (parseHole(hole)?.kind === "terminal") {
+    const group = groupOf(ctx, hole);
+    ctx.freeCount.set(group, (ctx.freeCount.get(group) ?? 5) + 1);
   }
 }
 
@@ -557,6 +566,8 @@ function unitTiles(ctx: Ctx, unit: Unit, column: number): Tile[] | undefined {
   if (unit.kind === "chain") {
     const rail = ctx.railOf.get(unit.railNet);
     if (!rail || !rail.startsWith("T") || !ctx.profile.railPositions.includes(column)) return undefined;
+    // A split rail's bridge wire needs the holes either side of the gap (connectNet).
+    if (railBridge(ctx.profile, rail)?.includes(`${rail}${column}`)) return undefined;
     const [first, second] = unit.members as [UnitMember, UnitMember];
     tiles.push({ part: partOf(first.part), pins: { [first.enter]: `f${column}`, [first.exit]: `e${column}` }, covered: [] });
     tiles.push({ part: partOf(second.part), pins: { [second.enter]: `a${column}`, [second.exit]: `${rail}${column}` }, covered: [] });
@@ -628,19 +639,61 @@ function setAnchors(ctx: Ctx, set: UnitSet, pitch: number): number[] {
   return options.sort((a, b) => a.cost - b.cost).map((option) => option.anchor);
 }
 
-/** Builds a set's copies at a fixed pitch from its `rank`-th best start column; false when it doesn't fit. */
-function placeSet(ctx: Ctx, set: UnitSet, rank: number): boolean {
+/**
+ * Crossings among a set's own Arduino wires with its copies from `anchor` at `pitch`: straight from each header pin to
+ * where connectNet lands it (the strip's edge-most hole), a button's wire on whichever half of the channel crosses
+ * less, the same half for every copy (uncrossBoardWires makes that choice for real). Nothing of the set is placed yet.
+ */
+function setCrossings(ctx: Ctx, set: UnitSet, anchor: number, pitch: number): number {
+  const view = { board: ctx.circuit.board.profile, breadboard: ctx.profile.id, boardOrientation: ctx.strategy.orientation };
+  // Per copy, per unit position: the header pin and the unit's landing holes (a button's two halves).
+  const wires = set.copies.map((copy, index) => {
+    let at = anchor + index * pitch;
+    return copy.units.map((unit) => {
+      const landings = unit.kind === "button" ? [`${JUMPER_COLUMNS.right[0]}${at}`, `${JUMPER_COLUMNS.left[0]}${at}`] : [`${JUMPER_COLUMNS.right[0]}${at}`];
+      at += unitWidth(ctx, unit) + 1;
+      return { from: endpointPosition(view, { board: unit.boardPin }), to: landings.map((hole) => endpointPosition(view, { hole })) };
+    });
+  });
+  const positions = wires[0]?.length ?? 0;
+  let best = Infinity;
+  // Bit p of `mask`: unit position p lands on its second half.
+  for (let mask = 0; mask < 2 ** positions && best > 0; mask += 1) {
+    if (wires[0]!.some((wire, position) => (mask >> position) & 1 && wire.to.length < 2)) continue;
+    const segments = wires.flatMap((copy) => copy.map((wire, position): [{ x: number; y: number }, { x: number; y: number }] => [wire.from, wire.to[(mask >> position) & 1]!]));
+    let count = 0;
+    for (let i = 0; i < segments.length; i += 1) for (let j = i + 1; j < segments.length; j += 1) if (segmentsCross(segments[i]!, segments[j]!)) count += 1;
+    best = Math.min(best, count);
+  }
+  return best;
+}
+
+/**
+ * Builds a set's copies at a fixed pitch from its `rank`-th best start column (`uncrossed`: the best whose own wires
+ * don't cross, else the one with fewest crossings). False when it doesn't fit; "moved" when `uncrossed` found a
+ * crossing-free start column other than the best.
+ */
+function placeSet(ctx: Ctx, set: UnitSet, rank: number): false | "placed" | "moved" {
   const width = Math.max(...set.copies.map((copy) => copyWidth(ctx, copy)));
+  const offBoard = BOARD_PROFILES[ctx.circuit.board.profile].placement !== "straddle";
   // One free column between copies at least; two for single-column copies, so 5 mm LEDs and labels don't touch.
   for (const pitch of width === 1 ? [3, 2] : [width + 1, width + 2]) {
     const anchors = setAnchors(ctx, set, pitch);
     if (anchors.length === 0) continue;
-    const anchor = anchors[Math.min(rank, anchors.length - 1)]!;
+    let anchor = anchors[Math.min(rank, anchors.length - 1)]!;
+    let fewest = Infinity;
+    if (ctx.strategy.repeats?.uncrossed && offBoard) {
+      for (const option of anchors) {
+        const crossings = setCrossings(ctx, set, option, pitch);
+        if (crossings < fewest) [fewest, anchor] = [crossings, option];
+        if (fewest === 0) break;
+      }
+    }
     set.copies.forEach((copy, index) => {
       for (const tile of copyTiles(ctx, copy, anchor + index * pitch)!) commit(ctx, tile.part, tile.pins, tile.covered, partDrawingBox(ctx.profile.id, tile.part, tile.pins));
     });
     ctx.keepOut.push([anchor, anchor + (set.copies.length - 1) * pitch + copyWidth(ctx, set.copies.at(-1)!) - 1]);
-    return true;
+    return fewest === 0 && anchor !== anchors[0] ? "moved" : "placed";
   }
   return false;
 }
@@ -928,6 +981,94 @@ function connectNet(ctx: Ctx, netId: string): void {
   }
 }
 
+/**
+ * Rule 4, wires never cross: an Arduino wire into a strip that a part joins to another strip of its net (a button's
+ * legs on both sides of the channel) may land on that other strip instead. A move stays only when it leaves fewer
+ * crossings; the wires of one unit position in a set's identical copies move together, so the copies stay wired alike.
+ */
+function uncrossBoardWires(ctx: Ctx, sets: UnitSet[]): void {
+  if (BOARD_PROFILES[ctx.circuit.board.profile].placement === "straddle") return;
+  const position = new Map<string, string>();
+  if (ctx.strategy.repeats) sets.forEach((set, s) => set.copies.forEach((copy) => copy.units.forEach((unit, u) => position.set(unit.signalNet, `unit:${s}:${u}`))));
+  // Strip → the strips a placed part joins it to.
+  const joined = new Map<string, string[]>();
+  for (const placement of ctx.placements) {
+    const part = ctx.circuit.parts.find((candidate) => candidate.id === placement.part)!;
+    for (const group of MODULES[part.module].internallyConnected ?? []) {
+      const strips = [...new Set(group.flatMap((pin) => placement.pins[pin] ?? []).filter((hole) => parseHole(hole)?.kind === "terminal").map((hole) => groupOf(ctx, hole)))];
+      for (const strip of strips) joined.set(strip, [...(joined.get(strip) ?? []), ...strips.filter((other) => other !== strip)]);
+    }
+  }
+  type Move = { entry: Ctx["jumpers"][number]; end: "from" | "to"; other: HoleId };
+  const moves = new Map<string, Move[]>();
+  const targets = new Set<HoleId>();
+  for (const entry of ctx.jumpers) {
+    const { from, to, net } = entry.jumper;
+    const end = "board" in from && "hole" in to ? "to" : "board" in to && "hole" in from ? "from" : undefined;
+    if (!end) continue;
+    const endpoint = entry.jumper[end];
+    if (!("hole" in endpoint) || parseHole(endpoint.hole)?.kind !== "terminal") continue;
+    const other = (joined.get(groupOf(ctx, endpoint.hole)) ?? []).flatMap((group) => {
+      const match = /^r(\d+):(a-e|f-j)$/.exec(group);
+      return match && ctx.stripNet.get(group) === net ? freeHoles(ctx, match[2] === "a-e" ? "left" : "right", Number(match[1])).slice(0, 1) : [];
+    }).find((hole) => !targets.has(hole));
+    if (!other) continue;
+    targets.add(other);
+    const key = position.get(net) ?? `wire:${net}:${endpoint.hole}`;
+    moves.set(key, [...(moves.get(key) ?? []), { entry, end, other }]);
+  }
+  if (moves.size === 0) return;
+  const view: Layout = {
+    schema: "vibread.layout/1",
+    board: ctx.circuit.board.profile,
+    breadboard: ctx.circuit.breadboard.profile,
+    placements: ctx.placements,
+    jumpers: ctx.jumpers.map((entry) => entry.jumper),
+    boardOrientation: ctx.strategy.orientation,
+  };
+  // Drawn segments per wire; a moved wire (Arduino pin to a strip hole) is a straight line, the others never change.
+  const segments = new Map(ctx.jumpers.map((entry) => [entry, jumperSegments(view, entry.jumper)]));
+  const wires = [...segments.values()];
+  let total = 0;
+  for (let i = 0; i < wires.length; i += 1) for (let j = i + 1; j < wires.length; j += 1) if (wiresCross(wires[i]!, wires[j]!)) total += 1;
+  // Crossings with at least one wire of `group` in them.
+  const involving = (group: Move[]) => {
+    const own = group.map((move) => move.entry);
+    let count = 0;
+    own.forEach((entry, index) => {
+      for (const [other, drawn] of segments) {
+        const at = own.indexOf(other);
+        if (at <= index && at !== -1) continue;
+        if (wiresCross(segments.get(entry)!, drawn)) count += 1;
+      }
+    });
+    return count;
+  };
+  // Swaps each wire's end between its hole and the other strip's.
+  const toggle = (group: Move[]) => {
+    for (const move of group) {
+      const current = (move.entry.jumper[move.end] as { hole: HoleId }).hole;
+      release(ctx, current);
+      occupy(ctx, move.other, "jumper");
+      move.entry.jumper = { ...move.entry.jumper, [move.end]: { hole: move.other } };
+      move.other = current;
+      segments.set(move.entry, jumperSegments(view, move.entry.jumper));
+    }
+  };
+  for (let improved = total > 0; improved; ) {
+    improved = false;
+    for (const group of moves.values()) {
+      const before = involving(group);
+      if (before === 0) continue;
+      toggle(group);
+      const after = involving(group);
+      if (after < before) [total, improved] = [total - before + after, true];
+      else toggle(group);
+      if (total === 0) return;
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Entry points
 
@@ -967,8 +1108,9 @@ function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strateg
   reserveNano(ctx);
   assignRails(ctx);
   if (strategy.repeats) {
-    sets.forEach((set, index) => placeSet(ctx, set, index === 0 ? strategy.repeats!.anchorRank : 0));
+    const results = sets.map((set, index) => placeSet(ctx, set, index === 0 ? strategy.repeats!.anchorRank : 0));
     if (ctx.keepOut.length === 0) throw new LayoutFitError("No repeated units could be built as identical copies.", true);
+    if (strategy.repeats.uncrossed && !results.includes("moved")) throw new LayoutFitError("No other start column keeps the copies' own wires from crossing.", true);
   }
   const placed = new Set(ctx.placements.map((placement) => placement.part));
   for (const part of placementOrder(ctx)) if (!placed.has(part.id)) place(ctx, part);
@@ -978,6 +1120,7 @@ function attempt(circuit: Circuit, profile: BreadboardProfile, strategy: Strateg
     for (const hole of holes) ctx.jumpers.push({ phase: 1, jumper: { id: "", from: { board: pin }, to: { hole }, color: wireColor(ctx, net.id), net: net.id } });
   }
   for (const net of [...circuit.nets].sort((a, b) => a.id.localeCompare(b.id))) connectNet(ctx, net.id);
+  uncrossBoardWires(ctx, sets);
   // A split rail's bridge stays only when the rail's other wires really use both halves.
   const railHalves = (rail: string, except: Jumper) =>
     new Set([
@@ -1006,7 +1149,7 @@ export interface LayoutDecision {
 
 function strategyLabel(strategy: Strategy, uno: boolean): string {
   const facing = uno ? `, Uno USB ${strategy.orientation === "usb-right" ? "right" : "left"}` : "";
-  if (strategy.repeats) return `repeated units as identical copies (start column option ${strategy.repeats.anchorRank + 1}${strategy.spread ? "" : ", tight"}${facing})`;
+  if (strategy.repeats) return `repeated units as identical copies (${strategy.repeats.uncrossed ? "start column with no crossing wires" : `start column option ${strategy.repeats.anchorRank + 1}`}${strategy.spread ? "" : ", tight"}${facing})`;
   return `packing (reserve ${strategy.reserve}${strategy.spread ? ", spread" : ""}${strategy.grouped ? ", connected parts together" : ""}${strategy.placementGroups ? ", placement groups" : ""}${facing})`;
 }
 
@@ -1065,6 +1208,11 @@ export function layoutWithDecision(circuit: Circuit): { layout: Layout; decision
     }
   };
   for (const strategy of tiled) run(strategy);
+  // Every identical-copies layout so far has crossing wires (copies with two Arduino pins each, as in the whack-a-mole:
+  // the two pin families interleave copy by copy): also try each set's best start column whose own wires don't cross.
+  if (tiled.length > 0 && orientations.length > 1 && candidates.length > 0 && candidates.every((entry) => entry.quality.crossings > 0)) {
+    for (const orientation of orientations) run({ ...tiled[0]!, orientation, repeats: { anchorRank: 0, uncrossed: true } });
+  }
   if (tiled.length > 0 && !candidates.some((entry) => entry.unmet === 0)) for (const orientation of orientations) run({ ...tiled[0]!, orientation, spread: false });
   // The plain packings. When identical copies already meet every request, each orientation's first good packing is
   // enough to compare against (trying them all costs seconds on big designs and rarely wins); otherwise the score
