@@ -680,6 +680,21 @@ function capacity(ctx: Ctx, island: Island, usedBoardPins: Set<string>): number 
   return usedBoardPins.has(island.pin) ? 0 : 1;
 }
 
+/**
+ * Where the Uno's 5 V / GND wire enters its rail (issue #28): the rail's end nearest the Uno's power header (its first
+ * hole when the pin sits on the left half of the board, as with the USB socket on the left; its last hole with the USB
+ * socket on the right), so the wire runs around the outside of the breadboard instead of across it (svg.ts
+ * `jumperRoute`). When a part's leg already sits in that hole, the other end (the wire goes round the far side); when
+ * both are taken, the free hole nearest the pin, drawn as an ordinary wire.
+ */
+function feedHole(ctx: Ctx, rail: RailId, pin: string): HoleId | undefined {
+  const positions = ctx.profile.railPositions;
+  const home = headerRow(ctx.profile.id, ctx.circuit.board.profile, pin, ctx.strategy.orientation) ?? 1;
+  const ends = home <= (ctx.profile.rows + 1) / 2 ? [positions[0]!, positions.at(-1)!] : [positions.at(-1)!, positions[0]!];
+  const free = railHoles(ctx, rail);
+  return ends.map((position): HoleId => `${rail}${position}`).find((hole) => free.includes(hole)) ?? free.sort((a, b) => Math.abs(holeRow(a) - home) - Math.abs(holeRow(b) - home) || holeRow(a) - holeRow(b))[0];
+}
+
 function endpointFor(ctx: Ctx, island: Island, towardRow: number): Endpoint {
   if (island.kind === "board") return { board: island.pin };
   if (island.kind === "rail") {
@@ -778,12 +793,11 @@ function connectNet(ctx: Ctx, netId: string): void {
       addJumper(ctx, { hole: bridge[0] }, { hole: bridge[1] }, netId, 0);
     }
   }
-  // The Arduino's 5 V / GND header always feeds its rail first (the "rails" build step).
+  // The Arduino's 5 V / GND header always feeds its rail first (the "rails" build step), at the rail's end.
   if (rail && islands.has(rail)) {
     const pin = rail.endsWith("+") ? "5V" : "GND";
     if (islands.has(`board:${pin}`)) {
-      const home = headerRow(ctx.profile.id, ctx.circuit.board.profile, pin, ctx.strategy.orientation) ?? 1;
-      const hole = railHoles(ctx, rail).sort((a, b) => Math.abs(holeRow(a) - home) - Math.abs(holeRow(b) - home) || holeRow(a) - holeRow(b))[0];
+      const hole = feedHole(ctx, rail, pin);
       if (!hole) throw new LayoutFitError(`The ${rail} rail has no free holes left.`, true);
       addJumper(ctx, { board: pin }, { hole }, netId, 0);
       usedBoardPins.add(pin);
