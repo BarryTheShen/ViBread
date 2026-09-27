@@ -27,6 +27,7 @@
     "@vibread/core": "0.1.0",
     "ai": "7.0.116",
     "better-auth": "1.7.6",
+    "fflate": "^0.8.3",
     "qrcode.react": "4.2.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",

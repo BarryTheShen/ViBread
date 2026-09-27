@@ -1,11 +1,13 @@
 import ErrorIcon from "@mui/icons-material/Error";
 import InfoIcon from "@mui/icons-material/Info";
+import RemoveCircleOutlineIcon from "@mui/icons-material/RemoveCircleOutlineOutlined";
 import WarningIcon from "@mui/icons-material/Warning";
 import Accordion from "@mui/material/Accordion";
 import AccordionDetails from "@mui/material/AccordionDetails";
 import AccordionSummary from "@mui/material/AccordionSummary";
 import ExpandMoreIcon from "@mui/icons-material/ExpandMore";
 import Box from "@mui/material/Box";
+import Chip from "@mui/material/Chip";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
 import ListItemIcon from "@mui/material/ListItemIcon";
@@ -41,7 +43,19 @@ function recordedVoteOf(report: ConsoleReport | undefined): string | undefined {
   return isRecord(recorded) && typeof recorded.label === "string" ? recorded.label : undefined;
 }
 
-function Findings({ id, report }: { id: ConsoleId; report: ConsoleReport | undefined }) {
+/** On an older design, a check with no result (or still "waiting") never runs: the newer design replaced it. */
+export function isSupersededCheck(report: ConsoleReport | undefined, supersededBy: number | undefined): boolean {
+  return supersededBy !== undefined && (report === undefined || report.verdict === "PENDING");
+}
+
+function Findings({ id, report, supersededBy }: { id: ConsoleId; report: ConsoleReport | undefined; supersededBy?: number }) {
+  if (isSupersededCheck(report, supersededBy)) {
+    return (
+      <Typography sx={{ color: "text.secondary" }}>
+        This check didn't run on this design: design r{supersededBy} replaced it first. Switch to r{supersededBy} to see its result.
+      </Typography>
+    );
+  }
   if (!report) {
     return (
       <Typography>
@@ -95,7 +109,8 @@ function Findings({ id, report }: { id: ConsoleId; report: ConsoleReport | undef
 }
 
 /** All five checks with their findings; `focus` (from a header status dot) opens and scrolls to that check. */
-export function ChecksView({ consoles, focus }: { consoles: ConsoleReport[]; focus?: ConsoleId }) {
+/** `supersededBy`: set when this is an older design; its never-run checks then read "Not run — superseded by rN". */
+export function ChecksView({ consoles, focus, supersededBy }: { consoles: ConsoleReport[]; focus?: ConsoleId; supersededBy?: number }) {
   const [expanded, setExpanded] = useState<ConsoleId | undefined>(focus);
   useEffect(() => {
     if (!focus) return;
@@ -123,12 +138,16 @@ export function ChecksView({ consoles, focus }: { consoles: ConsoleReport[]; foc
                     {WHAT_IT_CHECKS[id]}
                   </Typography>
                 </Box>
-                <VerdictChip verdict={report?.verdict} warnings={warnings} />
+                {isSupersededCheck(report, supersededBy) ? (
+                  <Chip size="small" variant="outlined" icon={<RemoveCircleOutlineIcon />} label={`Not run — superseded by r${supersededBy}`} />
+                ) : (
+                  <VerdictChip verdict={report?.verdict} warnings={warnings} />
+                )}
                 {recorded && <RecordedChip label="Recorded vote" title={recorded} />}
               </Stack>
             </AccordionSummary>
             <AccordionDetails id={`check-${id}-body`}>
-              <Findings id={id} report={report} />
+              <Findings id={id} report={report} supersededBy={supersededBy} />
             </AccordionDetails>
           </Accordion>
         );
