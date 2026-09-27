@@ -56,10 +56,14 @@ system setting, using a space-cadet, cool-gray, anti-flash-white and red palette
    - **RETRO, review:** a third AI compares your description, the design and all the results, and votes GO or NO-GO.
 4. **GO for build.** You (the "Flight Director") press it in the web app, or send `GO` from iMessage as the human operator.
    Only then does the design become the build target.
-5. **Build it.** Numbered LEGO-style steps, one small piece at a time: a picture, the exact holes ("from e12 to
-   e16"), and whether the USB cable must be plugged in. A unit that repeats (five identical lights) is shown once,
-   then "Repeat ×4 more, 3 columns right each time" with a tick-box per copy and the Arduino pin it goes to. On the laptop (Steps tab) or the phone (scan the QR code). The phone's
-   **Check with camera** asks Claude whether the photo matches the step — advice only, it never blocks you.
+5. **Build it.** Numbered LEGO-style steps, one small piece at a time: a picture (tap it on the phone to zoom), the
+   exact holes ("from e12 to e16"), and whether the USB cable must be plugged in — the step where it changes says
+   "Plug the USB cable in now" or "Unplug the USB cable now". A unit that repeats (five identical lights) is shown once,
+   then "Repeat ×4 more, 3 columns right each time" with a tick-box per copy and the Arduino pin it goes to. On the
+   laptop (Steps tab) or the phone (scan the QR code); both follow the same current step. On the phone, a checkpoint step's
+   **Done** unlocks when its bench checks pass on the laptop; **Skip checks and continue** moves on without them. The phone's
+   **Check with camera** asks Claude whether the photo matches the step — advice only, it never blocks you (without
+   Claude it shows a recorded example, clearly labelled, instead).
 
 6. **Bench: test the real board.** Plug in the Arduino and open **Bench** → **Use USB board**. The seven steps on
    screen:
@@ -67,9 +71,12 @@ system setting, using a space-cadet, cool-gray, anti-flash-white and red palette
    2. **Make it safe:** ViBread flashes its own *safe self-test* program first. It keeps every pin switched off until
       that pin has been checked, so a misplaced wire is far less likely to damage anything. (No program can protect
       against a wire straight from + to −: the build steps have you keep USB unplugged while wiring.)
-   3. **Check power:** the board starts up, answers, and reports its own supply voltage.
+   3. **Check power:** the board starts up, answers, and reports its own supply voltage (4.3–5.6 V counts as powered,
+      so a sagging hub port still passes).
    4. **Test each part:** the board checks each pin *before* driving it, then asks you to help: "press the button",
-      "cover the light sensor", "which light is blinking?", "did you hear a beep?".
+      "cover the light sensor", "which light is blinking?", "did you hear a beep?". The limits are forgiving: a pin
+      reads steady when 75 % of its samples agree, the light sensor must change by at least 8 % when covered, and a
+      knob must sweep at least 30 % of its range.
    5. **Find the problem:** if something is wrong: "Houston, we have a problem: D2 reads LOW even with the button
       released — its leg shares row 31 with the GND jumper", with the holes highlighted and the fix. Fix it and run
       the test again.
@@ -131,7 +138,9 @@ How the pieces carry it out:
   (`units.ts`), tries building them as identical copies at a fixed pitch (resistor across the channel, LED from row a
   straight into the GND rail, one Arduino wire per unit into row j), and also tries its general packings. The layout
   that meets every request with the best score wins: fewest wires, no crossings, copies regular and in order, short
-  wires. The choice and why is written to the mission's debug log.
+  wires. The Uno's 5V and GND wires enter the rails at the end hole on the Uno's side and are drawn around the
+  breadboard's edge, so they never cross the part wires; a split-rail bridge hugs the edge too. The choice and why is
+  written to the mission's debug log.
 - **Assembly check (FAO):** an unmet placement request is NO-GO (`PLACEMENT-UNMET`). Parts side by side but in the
   wrong order is the design's to fix (the fix says how, and the agent proposes again); no room means the agent moves
   to the bigger breadboard, uses fewer parts, or relaxes that request and says so; crossing wires (`LAYOUT-CROSSINGS`) and irregular repeats

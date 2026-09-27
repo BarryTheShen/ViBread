@@ -17,7 +17,8 @@ import { sendJson } from "../api/client.js";
 export type WireTarget = { jumper: string; net: string } | { net: string };
 
 function Swatch({ color, size = 14 }: { color: string; size?: number }) {
-  return <Box component="span" sx={{ display: "inline-block", width: size, height: size, borderRadius: "50%", bgcolor: wireCss(color), border: "1px solid", borderColor: "divider", flexShrink: 0 }} />;
+  // text.secondary, not divider: black (GND) on the dark theme and white on the light theme need a visible ring.
+  return <Box component="span" aria-hidden="true" sx={{ display: "inline-block", width: size, height: size, borderRadius: "50%", bgcolor: wireCss(color), border: "1px solid", borderColor: "text.secondary", flexShrink: 0 }} />;
 }
 
 /** "orange–yellow–green = LED1–LED3 (D2–D4)": one line per group of wires doing the same job. */
@@ -26,7 +27,7 @@ export function WireLegend({ wires }: { wires: BuildState["wires"] }) {
   return (
     <Stack direction="row" sx={{ flexWrap: "wrap", columnGap: 2, rowGap: 0.5, mt: 1 }} aria-label="Wire colour legend">
       {wires.legend.map((entry) => (
-        <Stack key={`${entry.label}-${entry.colors.join()}`} direction="row" sx={{ alignItems: "center", gap: 0.5 }}>
+        <Stack key={`${entry.label}-${entry.colors.join()}`} direction="row" sx={{ alignItems: "center", gap: 0.5 }} aria-label={`${entry.colors.join(", ")} = ${entry.label}`} role="group">
           {entry.colors.map((color, index) => (
             <Swatch key={`${color}-${index}`} color={color} />
           ))}
@@ -92,21 +93,21 @@ export function WireColorPicker({
                 aria-label={color}
                 aria-pressed={current === color}
                 onClick={() => pick(color)}
-                sx={{ width: 36, height: 36, borderRadius: "50%", cursor: "pointer", bgcolor: wireCss(color), border: "3px solid", borderColor: current === color ? "primary.main" : "divider" }}
+                sx={{ width: 44, height: 44, borderRadius: "50%", cursor: "pointer", bgcolor: wireCss(color), border: "3px solid", borderColor: current === color ? "primary.main" : "divider" }}
               />
             </Tooltip>
           ))}
         </Box>
         <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
-          <Box component="input" type="color" value={custom} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setCustom(event.target.value)} aria-label="Custom colour" sx={{ width: 40, height: 32, border: 0, p: 0, bgcolor: "transparent" }} />
-          <Button size="small" onClick={() => pick(custom.toLowerCase())}>
+          <Box component="input" type="color" value={custom} onChange={(event: React.ChangeEvent<HTMLInputElement>) => setCustom(event.target.value)} aria-label="Custom colour" sx={{ width: 44, height: 44, border: 0, p: 0, bgcolor: "transparent" }} />
+          <Button size="small" onClick={() => pick(custom.toLowerCase())} sx={{ minHeight: 44 }}>
             Use custom colour
           </Button>
         </Stack>
         {jumper !== undefined && (
-          <FormControlLabel control={<Checkbox size="small" checked={wholeNet} onChange={(event) => setWholeNet(event.target.checked)} />} label={`Apply to every ${target.net} wire`} />
+          <FormControlLabel sx={{ minHeight: 44 }} control={<Checkbox checked={wholeNet} onChange={(event) => setWholeNet(event.target.checked)} />} label={`Apply to every ${target.net} wire`} />
         )}
-        <Button size="small" disabled={!hasOverride} onClick={() => pick(null)}>
+        <Button size="small" disabled={!hasOverride} onClick={() => pick(null)} sx={{ minHeight: 44 }}>
           Back to suggested colour
         </Button>
       </Box>
@@ -123,16 +124,23 @@ export function StepWireChips({ jumpers, layout, wires, onEdit }: { jumpers: str
         const jumper = layout.jumpers.find((entry) => entry.id === id);
         if (!jumper) return null;
         const color = wires.jumpers[id] ?? jumper.color;
+        // Anchor on the chip itself: keyboard activation has no pointer position (clientX/Y are 0).
+        const edit = (event: React.SyntheticEvent) => {
+          const chip = (event.currentTarget as HTMLElement).closest(".MuiChip-root") ?? event.currentTarget;
+          const rect = chip.getBoundingClientRect();
+          onEdit({ jumper: id, net: jumper.net }, { top: rect.bottom, left: rect.left });
+        };
         return (
           <Chip
             key={id}
             variant="outlined"
             icon={<Swatch color={color} size={16} />}
-            deleteIcon={<EditIcon />}
-            onDelete={(event: React.MouseEvent) => onEdit({ jumper: id, net: jumper.net }, { top: event.clientY, left: event.clientX })}
-            onClick={(event) => onEdit({ jumper: id, net: jumper.net }, { top: event.clientY, left: event.clientX })}
+            deleteIcon={<EditIcon aria-hidden="true" />}
+            onDelete={edit}
+            onClick={edit}
             label={`${id} · ${color.startsWith("#") ? "custom" : color}`}
-            aria-label={`Wire ${id} is ${color}; change colour`}
+            aria-label={`Wire ${id} is ${color.startsWith("#") ? "a custom colour" : color}; change colour`}
+            sx={{ height: 44, borderRadius: 22 }}
           />
         );
       })}

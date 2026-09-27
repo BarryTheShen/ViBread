@@ -194,7 +194,9 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
    web button or iMessage `GO`.
    From the sidebar or the mission header's ⋯ menu, rename, duplicate, export, or delete a mission.
 3. **Build Mode on the phone** — scan the QR code in Build steps (`/b/<mission>`): one step at a time, focused picture,
-   exact holes, plug state, "I did this", "Check with camera". After the inventory and the board-orientation steps comes
+   exact holes, the USB plug state (the step where it changes says "Plug the USB cable in now" / "Unplug the USB cable
+   now"), tap the picture to zoom, **Done**, "Check with camera". A checkpoint's **Done** unlocks when its checks pass
+   on the laptop's Bench; **Skip checks and continue** moves on without them. After the inventory and the board-orientation steps comes
    a bare-board check: plug in just the Arduino, connect, flash the safe firmware and check its power before anything
    goes on the breadboard.
 4. **Bench** (the panel's Bench view, `/m/<mission>?panel=bench`; Chrome/Edge) — connect the board, flash safe

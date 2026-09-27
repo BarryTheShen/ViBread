@@ -259,9 +259,12 @@ export function ResultsView({ missionId, revision }: { missionId: string; revisi
         <Typography variant="h6" component="h2" sx={{ flex: 1 }}>
           Bench results
         </Typography>
-        <Button component={RouterLink} to={benchHref} variant="outlined" startIcon={<UsbIcon />}>
-          Open the bench
-        </Button>
+        {/* With no run yet the empty state below carries the only "Open the bench". */}
+        {runs.length > 0 && (
+          <Button component={RouterLink} to={benchHref} variant="outlined" startIcon={<UsbIcon />}>
+            Open the bench
+          </Button>
+        )}
       </Stack>
       <LatestDiagnosis revision={revision} run={latest} benchHref={benchHref} />
       {runs.length > 0 && (

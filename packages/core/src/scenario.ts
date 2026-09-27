@@ -22,7 +22,9 @@ import { z } from "zod";
  *  - `expect-parts` watches several parts over one shared `windowMs` (advancing time once); each check may specify
  *    `state` (as above), `minBrightness`, and/or `maxBrightness` (each bound with ±0.15 slack).
  *  - `expect-pwm` passes when the duty cycle is within `min`−0.10 … `max`+0.10 (clamped to 0…1).
- *  - `expect-tone` passes when the frequency is within `minHz`×0.85 … `maxHz`×1.15.
+ *  - `expect-tone` passes when the part sounds for at least 25 % of `windowMs` (anywhere in it; a late start or an
+ *    on/off beep still counts) and the pitch — from the median spacing of its rising edges — is within
+ *    `minHz`×0.85 … `maxHz`×1.15.
  *  - `expect-serial` passes when serial output since reset contains `contains`, waiting up to
  *    max(2 × `withinMs`, `withinMs` + 500 ms).
  *

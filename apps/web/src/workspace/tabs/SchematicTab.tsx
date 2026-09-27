@@ -115,22 +115,25 @@ export function SchematicTab({ missionId, revision, released }: { missionId: str
         <Typography sx={{ color: "text.secondary" }}>{circuit.summary}</Typography>
       </Box>
       {url ? (
-        <Paper variant="outlined" sx={{ position: "relative", p: 1, bgcolor: "canvas.main", ...(wires ? { "& g.net": { cursor: "pointer" } } : {}) }} onClick={onTap}>
-          <Tooltip title="Enlarge the schematic">
-            <IconButton
-              aria-label="Enlarge the schematic"
-              onClick={(event) => {
-                event.stopPropagation();
-                setEnlarged(true);
-              }}
-              sx={{ position: "absolute", top: 8, right: 8, zIndex: 1, bgcolor: "background.paper", border: 1, borderColor: "divider", "&:hover": { bgcolor: "background.paper" } }}
-            >
-              <OpenInFullIcon fontSize="small" />
-            </IconButton>
-          </Tooltip>
-          <SvgArtifact url={url} label={`Schematic of ${circuit.title}${wires ? ". Tap a wire to change its colour." : ""}`} />
+        <Box>
+          <Paper variant="outlined" sx={{ position: "relative", p: 1, bgcolor: "canvas.main", ...(wires ? { "& g.net": { cursor: "pointer" } } : {}) }} onClick={onTap}>
+            <Tooltip title="Enlarge the schematic">
+              <IconButton
+                aria-label="Enlarge the schematic"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setEnlarged(true);
+                }}
+                sx={{ position: "absolute", top: 8, right: 8, zIndex: 1, bgcolor: "background.paper", border: 1, borderColor: "divider", "&:hover": { bgcolor: "background.paper" } }}
+              >
+                <OpenInFullIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
+            <SvgArtifact url={url} label={`Schematic of ${circuit.title}${wires ? ". Tap a wire to change its colour." : ""}`} />
+          </Paper>
+          {/* Under the canvas, not on it: the canvas is dark in both themes and the legend uses the theme's text colours. */}
           <WireLegend wires={wires} />
-        </Paper>
+        </Box>
       ) : (
         <Alert severity="info">The schematic drawing isn't ready for this design yet.</Alert>
       )}

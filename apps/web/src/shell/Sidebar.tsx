@@ -187,6 +187,8 @@ function MissionItem({ mission, collapsed }: { mission: MissionSummary; collapse
           color: "text.primary",
           "&.Mui-selected": { bgcolor: "action.selected" },
           "&.Mui-selected:hover": { bgcolor: "action.hover" },
+          // text.secondary on the selected tint drops under 4.5:1 at this small size (3.9 light, 4.2 dark).
+          "&.Mui-selected .MuiListItemText-secondary": { color: "text.primary" },
         }}
       >
         <Box component="span" aria-hidden sx={{ color: `${dot.color}.main`, fontSize: 18, lineHeight: 1, width: collapsed ? "auto" : 22, textAlign: "center", flexShrink: 0 }}>

@@ -32,15 +32,21 @@ import { IdentifyHardwareDialog } from "./IdentifyHardwareDialog.js";
 /** Modules with a real choice of physical variant (buzzers are already two part types). */
 const VARIANT_MODULES = [...new Set(PART_VARIANTS.map((variant) => variant.module))].filter((module) => PART_VARIANTS.filter((variant) => variant.module === module).length > 1);
 
-const SOURCE_TEXT: Record<HardwareSource, string> = { saved: "Your pick", inventory: "From your inventory", default: "Not picked yet" };
+const SOURCE_TEXT: Record<HardwareSource, string> = { saved: "Your pick", inventory: "From your inventory", default: "Not picked yet · using the default" };
 
-function Choice({ selected, title, onClick, children }: { selected: boolean; title: string; onClick(): void; children: React.ReactNode }) {
+/**
+ * One card of a picker. `selected` is the one new missions use; with `isDefault` nobody chose it yet, so it gets a
+ * "Default" tag instead of the checkmark (a checkmark next to "Not picked yet" read as a contradiction).
+ */
+function Choice({ selected, isDefault, title, onClick, children }: { selected: boolean; isDefault: boolean; title: string; onClick(): void; children: React.ReactNode }) {
+  const picked = selected && !isDefault;
   return (
-    <Card variant="outlined" sx={{ borderColor: selected ? "primary.main" : "divider", borderWidth: selected ? 2 : 1, height: "100%" }}>
-      <CardActionArea onClick={onClick} aria-pressed={selected} aria-label={title} sx={{ height: "100%", p: 1.25, display: "flex", flexDirection: "column", alignItems: "stretch", justifyContent: "flex-start" }}>
+    <Card variant="outlined" sx={{ borderColor: picked ? "primary.main" : "divider", borderWidth: picked ? 2 : 1, borderStyle: selected && isDefault ? "dashed" : "solid", height: "100%" }}>
+      <CardActionArea onClick={onClick} aria-pressed={picked} aria-label={selected && isDefault ? `${title} (default)` : title} sx={{ height: "100%", p: 1.25, display: "flex", flexDirection: "column", alignItems: "stretch", justifyContent: "flex-start" }}>
         <Stack direction="row" spacing={1} sx={{ alignItems: "center", mb: 0.75 }}>
           <Typography sx={{ fontWeight: 700, flex: 1 }}>{title}</Typography>
-          {selected ? <CheckCircleIcon color="primary" fontSize="small" aria-hidden /> : null}
+          {picked ? <CheckCircleIcon color="primary" fontSize="small" aria-hidden /> : null}
+          {selected && isDefault ? <Chip size="small" label="Default" aria-hidden /> : null}
         </Stack>
         {children}
       </CardActionArea>
@@ -93,7 +99,7 @@ export function HardwareSection({ onCreateType }: { onCreateType(description: st
               {(Object.keys(BREADBOARD_PROFILES) as BreadboardProfileId[]).map((id) => {
                 const profile = BREADBOARD_PROFILES[id];
                 return (
-                  <Choice key={id} selected={hardware.breadboard === id} title={profile.shortName} onClick={() => update({ breadboard: id })}>
+                  <Choice key={id} selected={hardware.breadboard === id} isDefault={source.breadboard === "default"} title={profile.shortName} onClick={() => update({ breadboard: id })}>
                     <BreadboardDrawing profile={id} />
                     <Typography variant="body2" color="text.secondary" sx={{ mt: 0.75 }}>{profile.identify.slice(0, 2).join(" · ")}</Typography>
                   </Choice>
@@ -111,7 +117,7 @@ export function HardwareSection({ onCreateType }: { onCreateType(description: st
               {(Object.keys(BOARD_VARIANTS) as BoardVariantId[]).map((id) => {
                 const variant = BOARD_VARIANTS[id];
                 return (
-                  <Choice key={id} selected={hardware.board === id} title={variant.shortName} onClick={() => update({ board: id })}>
+                  <Choice key={id} selected={hardware.board === id} isDefault={source.board === "default"} title={variant.shortName} onClick={() => update({ board: id })}>
                     <Typography variant="body2">USB chip: {variant.usbChip}</Typography>
                     <Box component="ul" sx={{ m: 0, mt: 0.5, pl: 2.25, color: "text.secondary", typography: "body2" }}>
                       {variant.identify.map((line) => <li key={line}>{line}</li>)}
