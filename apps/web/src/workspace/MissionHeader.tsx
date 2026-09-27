@@ -197,7 +197,9 @@ export function MissionHeader(props: MissionHeaderProps) {
   };
 
   return (
-    <Box component="header" sx={{ borderBottom: 1, borderColor: "divider" }}>
+    // A size container: on a narrow header (1024 px window, open panel) the status chip shrinks to its icon so the
+    // mission title keeps its room.
+    <Box component="header" sx={{ borderBottom: 1, borderColor: "divider", containerType: "inline-size" }}>
       <Stack direction="row" sx={{ alignItems: "center", gap: 1.5, px: 2, py: 1, minHeight: 56 }}>
         <Box sx={{ minWidth: 0, flex: "1 1 auto" }}>
           {editing ? (
@@ -234,17 +236,23 @@ export function MissionHeader(props: MissionHeaderProps) {
         </Box>
         <StatusDots consoles={detail.consoles} onOpen={(console) => onOpenPanel("checks", { console })} />
         {claudeMissing && step.kind !== "working" && (
-          <Chip
-            icon={<LinkOffIcon />}
-            color="warning"
-            variant="outlined"
-            size="small"
-            clickable
-            component={RouterLink}
-            to="/settings"
-            label="Claude not connected"
-            aria-label="Claude not connected: the agent can't reply. Open Settings to connect it."
-          />
+          <Tooltip title="Claude not connected: the agent can't reply. Open Settings to connect it.">
+            <Chip
+              icon={<LinkOffIcon />}
+              color="warning"
+              variant="outlined"
+              size="small"
+              clickable
+              component={RouterLink}
+              to="/settings"
+              label="Claude not connected"
+              aria-label="Claude not connected: the agent can't reply. Open Settings to connect it."
+              sx={{
+                flexShrink: 0,
+                "@container (max-width: 1000px)": { minWidth: 32, "& .MuiChip-label": { display: "none" }, "& .MuiChip-icon": { mx: 0.75 } },
+              }}
+            />
+          </Tooltip>
         )}
         <NextStepButton step={step} props={props} onStop={() => stop.mutate()} stopping={stop.isPending} />
         <IconButton aria-label="More mission actions" onClick={(e) => setMenuAnchor(e.currentTarget)}>

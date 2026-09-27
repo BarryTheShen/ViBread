@@ -3,7 +3,7 @@
  * wins), so they survive reloads and show in the timeline; folded into BuildState and every picture on read.
  */
 import { hashJson, isWireColorValue, type BuildState, type Revision, type TimelineEvent, type WireColorRequest } from "@vibread/core";
-import { buildSteps, jumperColors, netColors, wireLegend, type WireColorOverrides } from "@vibread/assembly/layout";
+import { buildSteps, jumperColors, lineNets, netColors, wireLegend, type WireColorOverrides } from "@vibread/assembly/layout";
 
 export const WIRE_COLOR_EVENT = "build.wire-color";
 
@@ -49,8 +49,13 @@ export function wireColorChange(revision: Revision, body: unknown): { data: Wire
   if (typeof target?.net === "string") {
     const net = revision.circuit.nets.find((entry) => entry.id === target.net);
     if (!net) return { error: `net ${target.net} is not in this design` };
-    // A whole-net change replaces earlier single-wire choices on that net, so "whole net" means every wire of it.
-    const clears = layout.jumpers.filter((jumper) => jumper.net === net.id).map((jumper) => `wire:${jumper.id}`);
+    // A net change recolours its whole line (D5 and L2 behind the resistor): it replaces earlier choices for every
+    // net of that line and for each of their wires.
+    const line = lineNets(revision.circuit, net.id);
+    const clears = [
+      ...line.filter((id) => id !== net.id).map((id) => `net:${id}`),
+      ...layout.jumpers.filter((jumper) => line.includes(jumper.net)).map((jumper) => `wire:${jumper.id}`),
+    ];
     return { data: { key: `net:${net.id}`, color, clears }, text: color === null ? `Net ${net.id} wires back to their suggested colour` : `Net ${net.id} wires set to ${color}` };
   }
   return { error: "target must be { jumper } or { net }" };
@@ -90,9 +95,10 @@ export function withWireColors(
     wires: {
       overrides,
       jumpers,
-      nets: netColors(revision.circuit, overrides),
+      nets: netColors(revision.circuit, overrides, layout),
       legend: wireLegend(revision.circuit, layout, overrides),
       schematicUrl: buildUrl(missionId, "schematic.svg", version),
+      breadboardUrl: buildUrl(missionId, "breadboard.svg", version),
     },
   };
 }

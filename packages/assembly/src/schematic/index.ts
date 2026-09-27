@@ -156,7 +156,7 @@ function sendRender(circuit: Circuit, netColors?: Record<string, string>): Promi
 /**
  * Render ViBread IR as a schematic SVG in the isolated elkjs child process. The result is either a drawing that passed
  * `checkSchematicSvg` (`data-schematic="drawing"`) or the connection table (`data-schematic="connection-table"`).
- * Signal nets are drawn in their build wire colours: `netColors` (from `netColors(circuit, overrides)`), else the
+ * Signal nets are drawn in their build wire colours: `netColors` (from `netColors(circuit, overrides, layout)`), else the
  * suggested ones.
  */
 export async function renderSchematicSvg(circuit: Circuit, options: { netColors?: Record<string, string> } = {}): Promise<string> {

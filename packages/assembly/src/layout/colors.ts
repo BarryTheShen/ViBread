@@ -38,6 +38,12 @@ export function wireColorName(value: string): string {
   return value.startsWith("#") ? `custom-colour (${value.toLowerCase()})` : value;
 }
 
+/** "an orange wire", "a blue wire", "a custom-colour (#12ab34) wire". */
+export function aWire(value: string): string {
+  const name = wireColorName(value);
+  return `${/^[aeiou]/i.test(name) ? "an" : "a"} ${name} wire`;
+}
+
 function boardPinRank(pin: string): number {
   const match = /^([DA])(\d+)$/.exec(pin);
   if (match) return match[1] === "D" ? Number(match[2]) : 100 + Number(match[2]);
@@ -116,19 +122,43 @@ export function defaultNetColors(circuit: Circuit): Record<string, WireColor> {
   return colors;
 }
 
-/** Effective colour of every net: the builder's `net:` override, else the suggestion. */
-export function netColors(circuit: Circuit, overrides: WireColorOverrides = {}): Record<string, string> {
+/** Nets that share a colour with `netId`: its whole line (D5 and L2 behind the resistor), or just itself for 5V/GND. */
+export function lineNets(circuit: Circuit, netId: string): string[] {
+  return lines(circuit).find((line) => line.nets.includes(netId))?.nets ?? [netId];
+}
+
+/**
+ * Effective colour of every net.
+ * 1. A `net:` override recolours the net's whole line (the first overridden net of the line, Arduino side first, wins).
+ * 2. Given the layout, a net whose wires all carry the same `wire:` override takes that colour (overriding the only
+ *    D2 wire makes D2 that colour everywhere, schematic and legend included).
+ * 3. Otherwise the suggestion.
+ */
+export function netColors(circuit: Circuit, overrides: WireColorOverrides = {}, layout?: Layout): Record<string, string> {
   const colors: Record<string, string> = { ...defaultNetColors(circuit) };
-  for (const net of circuit.nets) {
-    const override = overrides[`net:${net.id}`];
-    if (isWireColorValue(override)) colors[net.id] = override;
+  const netOverride = (id: string) => (isWireColorValue(overrides[`net:${id}`]) ? overrides[`net:${id}`] : undefined);
+  const signalLines = lines(circuit);
+  for (const line of signalLines) {
+    const override = line.nets.map(netOverride).find((value) => value !== undefined);
+    if (override) for (const net of line.nets) colors[net] = override;
+  }
+  for (const net of circuit.nets.filter((entry) => entry.kind !== "signal")) {
+    const override = netOverride(net.id);
+    if (override) colors[net.id] = override;
+  }
+  if (layout) {
+    for (const net of circuit.nets) {
+      const wires = layout.jumpers.filter((jumper) => jumper.net === net.id).map((jumper) => overrides[`wire:${jumper.id}`]);
+      const first = wires[0];
+      if (isWireColorValue(first) && wires.every((value) => value === first)) colors[net.id] = first;
+    }
   }
   return colors;
 }
 
 /** Effective colour of every jumper: `wire:` override, else its net's colour. */
 export function jumperColors(circuit: Circuit, layout: Layout, overrides: WireColorOverrides = {}): Record<string, string> {
-  const nets = netColors(circuit, overrides);
+  const nets = netColors(circuit, overrides, layout);
   const colors: Record<string, string> = {};
   for (const jumper of layout.jumpers) {
     const override = overrides[`wire:${jumper.id}`];
@@ -143,7 +173,7 @@ function range(ids: string[]): string {
 
 /** Short legend for the build view: one entry per group of same-role lines, plus 5 V / GND and any one-off wires. */
 export function wireLegend(circuit: Circuit, layout: Layout, overrides: WireColorOverrides = {}): WireLegendEntry[] {
-  const nets = netColors(circuit, overrides);
+  const nets = netColors(circuit, overrides, layout);
   const used = new Set(layout.jumpers.map((jumper) => jumper.net));
   const entries: WireLegendEntry[] = [];
   for (const net of circuit.nets.filter((entry) => entry.kind !== "signal" && used.has(entry.id))) {
@@ -156,7 +186,7 @@ export function wireLegend(circuit: Circuit, layout: Layout, overrides: WireColo
     const pins = group.flatMap((line) => line.boardPins);
     const label = `${parts.length > 0 ? range(parts) : `${role} lines`}${pins.length > 0 ? ` (${range(pins)})` : ""}`;
     entries.push({ colors: group.map((line) => nets[line.nets[0]!]!), label });
-    // A part-to-part net the builder recoloured on its own gets its own entry.
+    // A part-to-part net whose own wires were recoloured gets its own entry.
     for (const line of group) {
       for (const net of line.nets.slice(1)) if (used.has(net) && nets[net] !== nets[line.nets[0]!]) entries.push({ colors: [nets[net]!], label: `net ${net}` });
     }

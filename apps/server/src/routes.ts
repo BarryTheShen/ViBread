@@ -16,12 +16,28 @@ import type { CatalogView, InventoryEntry, InventoryUpsertRequest, PartType, Sca
 import { applyCalibration, compileBenchFirmware, compileSketch, uploadCommand } from "@vibread/firmware";
 import { calibrationMacros, evaluateRun, planSelfTest } from "@vibread/bench";
 import { loadFaultDictionary } from "@vibread/tools";
+import { z } from "zod";
 import { runs } from "./db/schema.js";
 import { SqlApprovalBroker } from "./services/approvals.js";
 import { SqlMissionStore } from "./store/missions.js";
 import { WIRE_COLOR_EVENT, wireColorChange, wireOverrides } from "./services/wire-colors.js";
 import type { AppContext } from "./context.js";
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
+const fieldValueSchema = z.union([z.string(), z.number(), z.boolean()]);
+const inventoryUpsertSchema = z.object({
+  items: z.array(z.object({
+    typeId: z.string().min(1),
+    values: z.record(z.string(), fieldValueSchema),
+    quantity: z.number().int().positive(),
+    mode: z.enum(["add", "replace"]).default("add"),
+    source: z.enum(["scan", "typed", "manual", "preset"]).default("manual"),
+    status: z.enum(["ready", "needs-look"]).optional(),
+    candidates: z.array(z.record(z.string(), fieldValueSchema)).optional(),
+    photoUrl: z.string().optional(),
+    note: z.string().optional(),
+  })).min(1),
+});
+
 interface WebUser {
   id: string;
   name: string;
@@ -97,9 +113,15 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.post("/inventory/items", async (req, res) => {
     const user = actorUser(res, ctx);
-    const body = req.body as InventoryUpsertRequest;
-    if (!body || !Array.isArray(body.items)) throw httpError(400, "INVALID_INVENTORY", "items are required");
-    res.status(201).json(await ctx.inventory.upsert(user.id, body));
+    const parsed = inventoryUpsertSchema.safeParse(req.body ?? {});
+    if (!parsed.success) throw httpError(400, "INVALID_INVENTORY", parsed.error.message);
+    for (const item of parsed.data.items) {
+      const type = await ctx.catalog.get(user.id, item.typeId);
+      if (!type) throw httpError(400, "UNKNOWN_PART_TYPE", `Unknown part type ${item.typeId}`);
+      const unknown = Object.keys(item.values).filter((key) => !type.fields.some((field) => field.key === key));
+      if (unknown.length) throw httpError(400, "UNKNOWN_FIELD", `Unknown field(s) for ${item.typeId}: ${unknown.join(", ")}`);
+    }
+    res.status(201).json(await ctx.inventory.upsert(user.id, parsed.data));
   });
   router.patch("/inventory/items/:id", async (req, res) => {
     const user = actorUser(res, ctx);
@@ -483,10 +505,21 @@ export function mountApi(app: Express, ctx: AppContext): void {
     }
     res.type("image/png").send(Buffer.from(await svgToPng(svg, 1200)));
   });
+  /** The finished board with the builder's wire colours (Try it and the bench's virtual board draw from this). */
+  router.get("/missions/:id/build/breadboard.svg", async (req, res) => {
+    const { revision, overrides } = await buildRevision(String(req.params.id));
+    const { jumperColors, renderBreadboardSvg } = await import("@vibread/assembly");
+    const layout = revision.results.layout!;
+    const svg = renderBreadboardSvg({ circuit: revision.circuit, layout, ...(revision.results.steps ? { steps: revision.results.steps } : {}), wireColors: jumperColors(revision.circuit, layout, overrides) });
+    res.setHeader("X-Content-Type-Options", "nosniff");
+    res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
+    res.setHeader("Cache-Control", "private, no-cache");
+    res.type("image/svg+xml").send(svg);
+  });
   router.get("/missions/:id/build/schematic.svg", async (req, res) => {
     const { revision, overrides } = await buildRevision(String(req.params.id));
     const { netColors, renderSchematicSvg } = await import("@vibread/assembly");
-    const svg = await renderSchematicSvg(revision.circuit, { netColors: netColors(revision.circuit, overrides) });
+    const svg = await renderSchematicSvg(revision.circuit, { netColors: netColors(revision.circuit, overrides, revision.results.layout) });
     res.setHeader("X-Content-Type-Options", "nosniff");
     res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox");
     res.setHeader("Cache-Control", "private, no-cache");

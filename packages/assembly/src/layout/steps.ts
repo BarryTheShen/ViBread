@@ -13,7 +13,7 @@ import {
 } from "@vibread/core";
 
 import { layoutHash } from "./allocator.js";
-import { wireColorName } from "./colors.js";
+import { aWire } from "./colors.js";
 
 function endpointText(endpoint: Jumper["from"]): string {
   if ("board" in endpoint) return `Arduino ${endpoint.board} header pin`;
@@ -84,7 +84,7 @@ function placementText(part: Part, layout: Layout): { text: string; holes: strin
 }
 
 function jumperText(jumper: Jumper, color: string): string {
-  return `Connect a ${wireColorName(color)} wire from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. Check both printed endpoints; color is only a visual aid.`;
+  return `Connect ${aWire(color)} from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. Check both printed endpoints; color is only a visual aid.`;
 }
 
 function countedCallout(group: InventoryGroup): string {
@@ -185,7 +185,7 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
     kind: "rails",
     title: "Connect the top power rails",
     text: rails.length > 0
-      ? `With USB unplugged, ${rails.map((jumper) => `connect a ${wireColorName(colorOf(jumper))} wire from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}`).join("; then ")}. Wire colors are aids; verify the T+ and T− labels.`
+      ? `With USB unplugged, ${rails.map((jumper) => `connect ${aWire(colorOf(jumper))} from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}`).join("; then ")}. Wire colors are aids; verify the T+ and T− labels.`
       : "This build does not use the power rails; nothing to connect yet.",
     plug: "unplugged",
     adds: { parts: [], jumpers: rails.map((jumper) => jumper.id) },

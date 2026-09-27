@@ -89,12 +89,31 @@ describe("wire colour overrides", () => {
     for (const jumper of ground) expect(net.wires?.jumpers[jumper.id]).toBe("blue");
     expect(net.wires?.legend).toContainEqual({ colors: ["blue"], label: "GND (ground)" });
 
-    await setColor(missionId, { revision: 1, target: { net: "D3" }, color: "brown" });
-    const schematic = await (await fetch(`${base}${(await build(missionId)).wires!.schematicUrl}`)).text();
-    expect(schematic.match(/<g class="net" data-net="D3">[\s\S]*?<\/g>/)?.[0]).toContain(`stroke="${KIT_WIRE_CSS.brown}"`);
+    // A net choice recolours the whole line: D3 and L1 behind R1, in state, schematic, and the finished board.
+    const line = (await (await setColor(missionId, { revision: 1, target: { net: "D3" }, color: "brown" })).json()) as BuildState;
+    expect([line.wires?.nets.D3, line.wires?.nets.L1]).toEqual(["brown", "brown"]);
+    for (const jumper of layout.jumpers.filter((entry) => entry.net === "D3" || entry.net === "L1")) expect(line.wires?.jumpers[jumper.id]).toBe("brown");
+    expect(line.wires?.legend).toContainEqual({ colors: ["brown", "green", "blue", "purple"], label: "LED1–LED4 (D3–D6)" });
+    const schematic = await (await fetch(`${base}${line.wires!.schematicUrl}`)).text();
+    for (const net of ["D3", "L1"]) expect(schematic.match(new RegExp(`<g class="net" data-net="${net}">[\\s\\S]*?</g>`))?.[0], net).toContain(`stroke="${KIT_WIRE_CSS.brown}"`);
+    const board = await (await fetch(`${base}${line.wires!.breadboardUrl}`)).text();
+    for (const jumper of layout.jumpers.filter((entry) => entry.net === "L1")) expect(board.match(new RegExp(`<g id="wire-${jumper.id}"[\\s\\S]*?</g>`))?.[0]).toContain(`stroke="${KIT_WIRE_CSS.brown}"`);
 
     const reset = (await (await setColor(missionId, { revision: 1, target: { net: "GND" }, color: null })).json()) as BuildState;
     for (const jumper of ground) expect(reset.wires?.jumpers[jumper.id]).toBe("black");
+  });
+
+  it("colours a net by its only wire's override in the schematic and legend (IQA3-05)", async () => {
+    const missionId = await releasedMission();
+    const layout = (await build(missionId)).layout!;
+    const d2 = layout.jumpers.filter((jumper) => jumper.net === "D2");
+    expect(d2).toHaveLength(1);
+    const state = (await (await setColor(missionId, { revision: 1, target: { jumper: d2[0]!.id }, color: "blue" })).json()) as BuildState;
+    expect(state.wires?.nets.D2).toBe("blue");
+    expect(state.wires?.legend).toContainEqual({ colors: ["blue"], label: "BTN1 (D2)" });
+    expect(state.wires?.legend.some((entry) => entry.label.startsWith(`${d2[0]!.id} `))).toBe(false);
+    const schematic = await (await fetch(`${base}${state.wires!.schematicUrl}`)).text();
+    expect(schematic.match(/<g class="net" data-net="D2">[\s\S]*?<\/g>/)?.[0]).toContain(`stroke="${KIT_WIRE_CSS.blue}"`);
   });
 
   it("rejects unknown wires, colours, and stale revisions", async () => {
