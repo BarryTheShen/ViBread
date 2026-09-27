@@ -44,6 +44,7 @@ import { QuantityStepper } from "./FieldValuesForm.js";
 import { ScanDialog } from "./ScanDialog.js";
 import { TypePartsDialog } from "./TypePartsDialog.js";
 import { formatEntryLabel } from "./forms.js";
+import { HardwareSection } from "./HardwareSection.js";
 
 const FILTERS = ["all", "ready", "needs-look", "in-use", "not-usable"] as const;
 type Filter = (typeof FILTERS)[number];
@@ -93,13 +94,18 @@ function categoryOf(type: PartType | undefined): PartCategory {
 }
 
 function sourceFromScan(item: ScanItem): PartType {
+  return sourceFromDescription(`scan-${item.index}`, item.label);
+}
+
+/** A starting point for the part-type editor from what a photo showed (scan row or "Identify from a photo"). */
+function sourceFromDescription(id: string, label: string): PartType {
   return {
-    id: `scan-${item.index}`,
-    name: item.label || "Unknown scanned part",
+    id,
+    name: label || "Unknown scanned part",
     category: "other",
     aliases: [],
-    photoHint: item.label || "Part from a scan",
-    description: item.label || "A part identified from a scan.",
+    photoHint: label || "Part from a scan",
+    description: label || "A part identified from a scan.",
     fields: [],
     support: "list-only",
     mapping: { kind: "note" },
@@ -226,6 +232,7 @@ export default function InventoryPage() {
         </Stack>
       </Box>
       <Stack spacing={2.5}>
+        <HardwareSection onCreateType={(description) => { setSourceType(sourceFromDescription("photo", description)); setTypeEditorOpen(true); }} />
         {rows.length === 0 ? (
           <Card><CardContent><Stack spacing={1.5} sx={{ alignItems: "flex-start" }}><Typography variant="h2">Your inventory is empty</Typography><Typography color="text.secondary">Scan a pile of parts or type a quick list. You can also add one part at a time.</Typography><Stack direction="row" spacing={1}><Button variant="contained" startIcon={<CameraAltOutlinedIcon />} onClick={() => setScanOpen(true)}>Scan your parts</Button><Button variant="outlined" onClick={() => setTypePartsOpen(true)}>Type parts</Button></Stack></Stack></CardContent></Card>
         ) : grouped.length === 0 ? (

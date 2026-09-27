@@ -71,6 +71,13 @@
       "when": 1790460604262,
       "tag": "0009_dark_silver_samurai",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1790473265840,
+      "tag": "0010_hardware_choices",
+      "breakpoints": true
     }
   ]
 }

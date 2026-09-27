@@ -1,25 +1,43 @@
 import {
+  BREADBOARD_PROFILES,
   MODULES,
+  isRailBridge,
+  powerRails,
   formatOhms,
-  modulePins,
+  parseHole,
+  partVisual,
   resistorBands,
   type Circuit,
   type Jumper,
   type Layout,
   type Part,
   type Step,
+  type StepLandmark,
   type StepList,
   type TestId,
+  type WireEnd,
 } from "@vibread/core";
 
 import { layoutHash } from "./allocator.js";
 import { aWire } from "./colors.js";
+import { earlierItems, headerLandmark, holeLandmark, type Earlier } from "./landmarks.js";
 
 function endpointText(endpoint: Jumper["from"]): string {
-  if ("board" in endpoint) return `Arduino ${endpoint.board} header pin`;
-  if (endpoint.hole.startsWith("T-")) return `hole ${endpoint.hole} on the blue − rail (GND)`;
-  if (endpoint.hole.startsWith("T+")) return `hole ${endpoint.hole} on the red + rail (5 V)`;
+  if ("board" in endpoint) return `Arduino pin ${endpoint.board}`;
+  if (/^[TB]-/.test(endpoint.hole)) return `hole ${endpoint.hole} on the blue − rail (GND)`;
+  if (/^[TB]\+/.test(endpoint.hole)) return `hole ${endpoint.hole} on the red + rail (5 V)`;
   return `hole ${endpoint.hole}`;
+}
+
+/** "short, spans 2 holes" / "long, reaches the Arduino": a rough length for picking a wire out of the kit. */
+function wireLength(jumper: Jumper): string {
+  if ("board" in jumper.from || "board" in jumper.to) return "long, reaches the Arduino";
+  const [a, b] = [parseHole(jumper.from.hole), parseHole(jumper.to.hole)];
+  if (!a || !b) return "";
+  const col = (hole: NonNullable<typeof a>) => (hole.kind === "terminal" ? hole.row : hole.position);
+  const row = (hole: NonNullable<typeof a>) => (hole.kind === "terminal" ? "abcdefghij".indexOf(hole.column) + 2 : hole.rail.startsWith("T") ? (hole.rail === "T-" ? 0 : 1) : 13);
+  const span = Math.max(Math.abs(col(a) - col(b)), Math.abs(row(a) - row(b)));
+  return `${span <= 4 ? "short" : span <= 15 ? "medium" : "long"}, spans ${span} hole${span === 1 ? "" : "s"}`;
 }
 
 function partById(circuit: Circuit): Map<string, Part> {
@@ -59,32 +77,68 @@ function partCallout(part: Part): string {
   return `1× ${MODULES[part.module].name}`;
 }
 
-function placementText(part: Part, layout: Layout): { text: string; holes: string[] } {
-  const placement = layout.placements.find((entry) => entry.part === part.id);
-  if (!placement) return { text: `No placement was generated for ${part.id}.`, holes: [] };
-  const holes = Object.values(placement.pins);
-  let text: string;
+/** "220 Ω resistor R1 (red-red-brown-gold)", "red LED LED1", "push button BTN1". */
+function partName(part: Part): string {
   if (part.module === "resistor") {
     const ohms = Number(part.params.ohms);
-    const bands = resistorBands(ohms, Number(part.params.tolerancePct ?? 5)).join("-");
-    text = `Put the ${formatOhms(ohms)} resistor ${part.id} (${bands}) from hole ${placement.pins["1"]} to hole ${placement.pins["2"]}.`;
-  } else if (part.module === "led") {
-    const color = typeof part.params.color === "string" ? part.params.color : "red";
-    text = `Before inserting, identify the long anode (+) leg. Put the ${color} LED ${part.id} with its anode (+) in hole ${placement.pins.A} and short cathode (−) leg in hole ${placement.pins.K}.`;
-  } else if (part.module === "button") {
-    text = `Put push button ${part.id} across the horizontal centre channel: legs 1–2 go in holes ${placement.pins["1"]} and ${placement.pins["2"]}; legs 3–4 go in holes ${placement.pins["3"]} and ${placement.pins["4"]}.`;
-  } else if (part.module === "photoresistor") {
-    text = `Put the light sensor ${part.id} with its two legs in holes ${placement.pins["1"]} and ${placement.pins["2"]}; either direction is okay.`;
-  } else {
-    const name = MODULES[part.module].name.toLowerCase();
-    const pinText = modulePins(part).map((pin) => `${pin.name} in hole ${placement.pins[pin.id]}`).join(", ");
-    text = `Put the ${name} ${part.id}: ${pinText}.`;
+    return `${formatOhms(ohms)} resistor ${part.id} (${resistorBands(ohms, Number(part.params.tolerancePct ?? 5)).join("-")})`;
   }
-  return { text: `${text} Keep USB unplugged.`, holes };
+  // "yellow LED LED1", or with a catalogue variant "yellow 3 mm LED LED1".
+  if (part.module === "led") return `${typeof part.params.color === "string" ? part.params.color : "red"} ${partVisual(part).name} ${part.id}`;
+  return `${partVisual(part).name.toLowerCase()} ${part.id}`;
 }
 
-function jumperText(jumper: Jumper, color: string): string {
-  return `Connect ${aWire(color)} from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}. Check both printed endpoints; color is only a visual aid.`;
+function capitalize(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/**
+ * One placement step: each leg (named the way the parts panel names it) and its hole, with one landmark after the leg
+ * it describes. Look-alike legs ("either way round") are listed as holes only.
+ */
+function placementText(circuit: Circuit, part: Part, layout: Layout, earlier: Earlier[]): { text: string; holes: string[]; landmarks: StepLandmark[] } {
+  const placement = layout.placements.find((entry) => entry.part === part.id);
+  if (!placement) return { text: `No placement was generated for ${part.id}.`, holes: [], landmarks: [] };
+  const visual = partVisual(part);
+  const legs = visual.legs.filter((leg) => placement.pins[leg.pin] !== undefined);
+  // The strongest landmark over all legs: same strip beats across-the-channel beats nearby.
+  const rank = { "same-strip": 0, "across-channel": 1, near: 2, header: 3 } as const;
+  const found = legs.flatMap((leg) => {
+    const landmark = holeLandmark(layout, placement.pins[leg.pin]!, earlier);
+    return landmark ? [{ leg, landmark }] : [];
+  }).sort((a, b) => rank[a.landmark.kind] - rank[b.landmark.kind])[0];
+  const where = (hole: string) => `hole ${hole}${found && found.landmark.kind !== "header" && found.landmark.hole === hole ? `, ${found.landmark.text}` : ""}`;
+  const holes = legs.map((leg) => placement.pins[leg.pin]!);
+  const name = capitalize(partName(part));
+  let text: string;
+  if (!visual.polarized && legs.length === 2 && legs.every((leg) => leg.length === "equal")) {
+    text = `${name}, either way round: one leg in ${where(holes[0]!)}; the other in ${where(holes[1]!)}.`;
+  } else if (visual.joined && visual.straddlesChannel) {
+    const pairs = visual.joined.map((pair) => `legs ${pair.join("–")} in holes ${pair.map((pin) => placement.pins[pin]).filter(Boolean).map((hole) => (found?.landmark.kind !== "header" && found?.landmark.hole === hole ? `${hole} (${found.landmark.text})` : hole)).join(" and ")}`);
+    text = `${name} goes across the centre channel: ${pairs.join("; ")}.`;
+  } else {
+    // "long leg (+, …)" from the panel's leg names, so the words match the picture.
+    const legText = (leg: (typeof legs)[number]) => {
+      const sign = /^[+−]/.exec(leg.label)?.[0];
+      const flat = leg.howToTell?.includes("flat side") ? ", flat side" : "";
+      return sign && !leg.short.includes(sign) ? `${leg.short} (${sign}${flat})` : leg.short;
+    };
+    text = `${name}: ${legs.map((leg) => `${legText(leg)} in ${where(placement.pins[leg.pin]!)}`).join("; ")}.`;
+  }
+  return { text, holes, landmarks: found ? [found.landmark] : [] };
+}
+
+/** One wire step: colour and length, then both ends by badge number, each with a landmark when there is one. */
+function jumperText(layout: Layout, jumper: Jumper, color: string, earlier: Earlier[]): { text: string; landmarks: StepLandmark[]; ends: [WireEnd, WireEnd] } {
+  const landmarks: StepLandmark[] = [];
+  const describe = (end: Jumper["from"], n: 1 | 2): WireEnd => {
+    const landmark = "board" in end ? headerLandmark(layout, end.board) : holeLandmark(layout, end.hole, earlier);
+    if (landmark) landmarks.push(landmark);
+    return { n, at: "board" in end ? `board:${end.board}` : end.hole, text: `${endpointText(end)}${landmark ? ` (${landmark.text})` : ""}` };
+  };
+  const ends: [WireEnd, WireEnd] = [describe(jumper.from, 1), describe(jumper.to, 2)];
+  const length = wireLength(jumper);
+  return { text: `${capitalize(aWire(color))}${length ? `, ${length}` : ""}. End 1: ${ends[0].text}. End 2: ${ends[1].text}.`, landmarks, ends };
 }
 
 function countedCallout(group: InventoryGroup): string {
@@ -120,14 +174,27 @@ function inventoryCallouts(circuit: Circuit): string[] {
 }
 
 function orientationText(layout: Layout): string {
-  const board = layout.board.includes("nano") ? "Nano across the centre channel" : "Uno beside the breadboard";
-  return `${board}. Rows run left to right. Columns a–e are the five-hole lines above the horizontal centre channel, and f–j are the five-hole lines below it. Top rails are T+ (5 V, red) and T− (GND, black). Read printed hole IDs, never wire color alone.`;
+  const profile = BREADBOARD_PROFILES[layout.breadboard];
+  const board = layout.board.includes("nano") ? "the Nano across its centre channel" : "the Uno below it";
+  const rails = powerRails(profile);
+  const railText = !rails
+    ? "This board has no power rails."
+    : `${rails.plus.startsWith("T") ? "Top" : "Bottom"} rails: ${rails.plus} 5 V (red), ${rails.minus} GND (blue).${profile.railsSplit ? ` Each rail is split in the middle, after column ${profile.railSplitAfter}.` : ""}`;
+  return `Your ${profile.shortName} with ${board}. Columns 1–${profile.rows} run left to right; rows a–e are above the centre channel, f–j below. The 5 holes of one column on one side are joined (a strip). Hole a14 = row a, column 14. ${railText}`;
 }
 
-/** Arduino header → rail wires (the first thing built, before any part). */
+/** Arduino header → rail wires and split-rail bridges: the first things built, before any part. */
 function railJumpers(layout: Layout): Jumper[] {
+  const profile = BREADBOARD_PROFILES[layout.breadboard];
   const onRail = (endpoint: Jumper["from"]) => "hole" in endpoint && /^[TB][+-]/.test(endpoint.hole);
-  return layout.jumpers.filter((jumper) => ("board" in jumper.from && onRail(jumper.to)) || ("board" in jumper.to && onRail(jumper.from)));
+  return layout.jumpers.filter((jumper) => ("board" in jumper.from && onRail(jumper.to)) || ("board" in jumper.to && onRail(jumper.from)) || isRailBridge(profile, jumper));
+}
+
+/** "Join the two halves of the + rail with a short red wire across the gap at T+30–T+32." */
+function bridgeText(jumper: Jumper, color: string): string {
+  const from = "hole" in jumper.from ? jumper.from.hole : "";
+  const to = "hole" in jumper.to ? jumper.to.hole : "";
+  return `Join the two halves of the ${from.includes("+") ? "+" : "−"} rail with a short ${color} wire across the gap: end 1 in hole ${from}, end 2 in hole ${to}.`;
 }
 
 function testsForSubsection(circuit: Circuit): TestId[] {
@@ -180,29 +247,44 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
     callouts: [],
   });
 
+  const profile = BREADBOARD_PROFILES[layout.breadboard];
+  const power = powerRails(profile);
   const rails = railJumpers(layout);
-  const onRail = (jumper: Jumper, prefix: string) => [jumper.from, jumper.to].some((end) => "hole" in end && end.hole.startsWith(prefix));
-  const usesPlus = rails.some((jumper) => onRail(jumper, "T+"));
-  const usesMinus = rails.some((jumper) => onRail(jumper, "T-"));
+  const onRail = (jumper: Jumper, rail: string | undefined) => rail !== undefined && [jumper.from, jumper.to].some((end) => "hole" in end && end.hole.startsWith(rail));
+  const usesPlus = rails.some((jumper) => onRail(jumper, power?.plus));
+  const usesMinus = rails.some((jumper) => onRail(jumper, power?.minus));
+  const side = power?.plus.startsWith("B") ? "bottom" : "top";
   // Say which rails this build uses, so a picture with one wire is never mistaken for a missing one.
   const railsUsed = usesPlus && usesMinus
-    ? "This build uses both top rails: red + (5 V) and blue − (GND)."
+    ? `Both ${side} rails are used.`
     : usesMinus
-      ? "Only the blue − rail (GND) is used in this build; nothing connects to the red + rail, so it gets no wire."
+      ? "Only the blue − rail (GND) is used in this build; the red + rail gets no wire."
       : usesPlus
-        ? "Only the red + rail (5 V) is used in this build; nothing connects to the blue − rail, so it gets no wire."
+        ? "Only the red + rail (5 V) is used in this build; the blue − rail gets no wire."
         : "";
   const railNames = usesPlus && usesMinus ? "the red + and blue − rails" : usesMinus ? "the blue − rail" : "the red + rail";
+  const railEnds: NonNullable<Step["wireEnds"]> = [];
+  const railLandmarks: StepLandmark[] = [];
   push({
     kind: "rails",
-    title: usesPlus && usesMinus ? "Connect the top power rails" : usesMinus ? "Connect the ground rail" : usesPlus ? "Connect the 5 V rail" : "Power rails (not used)",
+    title: !power ? "No power rails on this board" : usesPlus && usesMinus ? `Connect the ${side} power rails` : usesMinus ? "Connect the ground rail" : usesPlus ? "Connect the 5 V rail" : "Power rails (not used)",
     text: rails.length > 0
-      ? `${railsUsed} With USB unplugged, ${rails.map((jumper) => `connect ${aWire(colorOf(jumper))} from ${endpointText(jumper.from)} to ${endpointText(jumper.to)}`).join("; then ")}. Wire colors are aids; verify the T+ and T− labels.`
-      : "This build does not use the power rails; nothing to connect yet.",
+      ? `${railsUsed} ${rails.map((jumper) => {
+          const wire = jumperText(layout, jumper, colorOf(jumper), []);
+          railEnds.push({ jumper: jumper.id, ends: wire.ends });
+          if (isRailBridge(profile, jumper)) return bridgeText(jumper, colorOf(jumper));
+          railLandmarks.push(...wire.landmarks);
+          return `${capitalize(aWire(colorOf(jumper)))}: ${wire.ends[0].text} → ${wire.ends[1].text}.`;
+        }).join(" ")}`
+      : !power
+        ? `Your ${profile.shortName} has no power rails: 5 V and GND reach their strips with wires later.`
+        : "This build does not use the power rails; nothing to connect yet.",
     plug: "unplugged",
     adds: { parts: [], jumpers: rails.map((jumper) => jumper.id) },
     holes: rails.flatMap((jumper) => ["hole" in jumper.from ? jumper.from.hole : "", "hole" in jumper.to ? jumper.to.hole : ""]).filter(Boolean),
     callouts: [],
+    ...(railEnds.length > 0 ? { wireEnds: railEnds } : {}),
+    ...(railLandmarks.length > 0 ? { landmarks: railLandmarks } : {}),
   });
   // rails.vcc reads the Arduino's own supply (USB VCC), not the breadboard rails: claim only that (issues #14, #18).
   const railTest = rails.length > 0
@@ -228,8 +310,17 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
     callouts: [],
   });
 
-  for (const part of [...circuit.parts].sort((a, b) => a.id.localeCompare(b.id))) {
-    const placed = placementText(part, layout);
+  // Parts go in left to right (by their leftmost column), so each one can be placed relative to the ones before it.
+  const leftmost = (part: Part) => Math.min(...Object.values(layout.placements.find((entry) => entry.part === part.id)?.pins ?? {}).map((hole) => {
+    const parsed = parseHole(hole);
+    return parsed?.kind === "terminal" ? parsed.row : 999;
+  }), 999);
+  const placedParts: string[] = [];
+  const placedJumpers: string[] = rails.map((jumper) => jumper.id);
+  const colors = Object.fromEntries(layout.jumpers.map((jumper) => [jumper.id, colorOf(jumper)]));
+  for (const part of [...circuit.parts].sort((a, b) => leftmost(a) - leftmost(b) || a.id.localeCompare(b.id))) {
+    const placed = placementText(circuit, part, layout, earlierItems(circuit, layout, placedParts, placedJumpers, colors));
+    placedParts.push(part.id);
     push({
       kind: "place",
       title: `Insert ${part.id} — ${MODULES[part.module].name}`,
@@ -238,19 +329,24 @@ export function buildSteps(circuit: Circuit, layout: Layout, options: { wireColo
       adds: { parts: [part.id], jumpers: [] },
       holes: placed.holes,
       callouts: [partCallout(part)],
+      ...(placed.landmarks.length > 0 ? { landmarks: placed.landmarks } : {}),
     });
   }
 
   const nonRailJumpers = layout.jumpers.filter((jumper) => !rails.some((rail) => rail.id === jumper.id));
   for (const jumper of nonRailJumpers) {
+    const wire = jumperText(layout, jumper, colorOf(jumper), earlierItems(circuit, layout, placedParts, placedJumpers, colors));
+    placedJumpers.push(jumper.id);
     push({
       kind: "jumper",
       title: `Add ${jumper.id} — ${jumper.net}`,
-      text: `${jumperText(jumper, colorOf(jumper))} Keep USB unplugged.`,
+      text: wire.text,
       plug: "unplugged",
       adds: { parts: [], jumpers: [jumper.id] },
       holes: ["hole" in jumper.from ? jumper.from.hole : "", "hole" in jumper.to ? jumper.to.hole : ""].filter(Boolean),
       callouts: [],
+      wireEnds: [{ jumper: jumper.id, ends: wire.ends }],
+      ...(wire.landmarks.length > 0 ? { landmarks: wire.landmarks } : {}),
     });
   }
 

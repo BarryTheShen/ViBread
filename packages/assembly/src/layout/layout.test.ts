@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { GOLDEN } from "@vibread/fixtures";
 import { CircuitSchema, ENVELOPE, parseCircuit, parseHole, validateCircuit, type Circuit, type Layout } from "@vibread/core";
 
-import { LayoutFitError, assemblyReport, buildSteps, layoutBoard, layoutFailureReport, layoutHash, lvs, placementSummary } from "./index.js";
+import { LayoutFitError, assemblyReport, buildSteps, landmarkHolds, layoutBoard, layoutFailureReport, layoutHash, lvs, placementSummary } from "./index.js";
+import { svgToPng } from "../png.js";
 import { renderBreadboardSvg } from "./svg.js";
 
 function issueKinds(circuit: (typeof GOLDEN)[number]["circuit"], layout: Layout): string[] {
@@ -118,12 +119,12 @@ describe("deterministic breadboard layout", () => {
     expect(steps.steps.at(-1)?.kind).toBe("power-up");
     expect(steps.steps.at(-1)?.plug).toBe("plugged");
 
-    expect(steps.steps[1].text).toContain("Rows run left to right");
+    expect(steps.steps[1].text).toContain("Columns 1–63 run left to right");
     const resistorStep = steps.steps.find((step) => step.title.startsWith("Insert R1"))!;
-    expect(resistorStep.text).toMatch(/220 Ω resistor R1 \(red-red-brown-gold\) from hole [a-j]\d+ to hole [a-j]\d+/);
+    expect(resistorStep.text).toMatch(/220 Ω resistor R1 \(red-red-brown-gold\), either way round: one leg in hole [a-j]\d+[^;]*; the other in hole [a-j]\d+/);
     const a0 = layout.jumpers.find((jumper) => "board" in jumper.from && jumper.from.board === "A0")!;
     const jumperStep = steps.steps.find((step) => step.adds.jumpers.includes(a0.id))!;
-    expect(jumperStep.text).toContain(`from Arduino A0 header pin to hole ${"hole" in a0.to ? a0.to.hole : ""}`);
+    expect(jumperStep.text).toMatch(new RegExp(`End 1: Arduino pin A0 \\(.+\\)\\. End 2: hole ${"hole" in a0.to ? a0.to.hole : ""}\\b`));
     const half = { ...moon, breadboard: { profile: "bb-400" as const } };
     const halfLayout = layoutBoard(half);
     expect(lvs(half, halfLayout).ok).toBe(true);
@@ -578,9 +579,10 @@ describe("rails step and power checkpoint (issue #18)", () => {
     const usesPower = circuit.nets.some((net) => net.kind === "power" && net.pins.some((ref) => ref.part === "board" && ref.pin === "5V") && net.pins.some((ref) => ref.part !== "board"));
     expect(expected.some((jumper) => "hole" in jumper.to && jumper.to.hole.startsWith("T+"))).toBe(usesPower);
     for (const jumper of expected) {
-      expect(rails.text).toContain(`from Arduino ${"board" in jumper.from ? jumper.from.board : ""} header pin to hole ${"hole" in jumper.to ? jumper.to.hole : ""}`);
+      expect(rails.text).toContain(`Arduino pin ${"board" in jumper.from ? jumper.from.board : ""} (`);
+      expect(rails.text).toContain(`→ hole ${"hole" in jumper.to ? jumper.to.hole : ""} on the`);
     }
-    if (usesPower) expect(rails.text).toContain("uses both top rails");
+    if (usesPower) expect(rails.text).toContain("Both top rails are used.");
     else expect(rails.text).toContain("Only the blue − rail (GND) is used in this build");
     // The picture for this step draws each of those wires, and no other.
     const svg = renderBreadboardSvg({ circuit, layout, steps, upToStep: rails.n });
@@ -714,5 +716,169 @@ describe("jumper drawings (issue #19)", () => {
     const hopSteps = buildSteps(circuit, hop);
     const hopStep = hopSteps.steps.find((entry) => entry.adds.jumpers.includes("W98"))!;
     expect(assertJumpersVisible(renderBreadboardSvg({ circuit, layout: hop, steps: hopSteps, upToStep: hopStep.n }), "c40→e40")).toContain("W98");
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Issue #22: LEGO-style steps. Every new part gets a "parts for this step" panel, every wire's two ends are named and
+// badged 1/2, and placements are anchored to something already on the board, each landmark provably true.
+
+describe("LEGO-style build steps (issue #22)", () => {
+  const designs: [string, Circuit][] = [
+    ...GOLDEN.map((design) => [design.key, design.circuit] as [string, Circuit]),
+    ["piano-rev4", piano(false)],
+    ["piano-rev5", piano(true)],
+    ["whack-a-mole", whackAMole({ groups: true })],
+    ["binary-counter", binaryCounter()],
+  ];
+  const endName = (end: Layout["jumpers"][number]["from"]) => ("board" in end ? `Arduino pin ${end.board}` : `hole ${end.hole}`);
+  const endAt = (end: Layout["jumpers"][number]["from"]) => ("board" in end ? `board:${end.board}` : end.hole);
+
+  it.each(designs)("%s: every LED step previews its legs, anode and cathode on the side of their own holes", (key, circuit) => {
+    const layout = layoutBoard(circuit);
+    const steps = buildSteps(circuit, layout);
+    for (const part of circuit.parts.filter((entry) => entry.module === "led")) {
+      const step = steps.steps.find((entry) => entry.adds.parts.includes(part.id))!;
+      const pins = layout.placements.find((entry) => entry.part === part.id)!.pins;
+      for (const focus of [false, true]) {
+        const svg = renderBreadboardSvg({ circuit, layout, steps, upToStep: step.n, focus });
+        const panel = svg.match(new RegExp(`<g data-panel-part="${part.id}">[\\s\\S]*?</g></g>`))?.[0];
+        expect(panel, `${key} ${part.id}${focus ? " focus" : ""}: panel`).toBeDefined();
+        const x = (pattern: string) => Number(panel!.match(new RegExp(`<text x="([\\d.-]+)"[^>]*>${pattern}</text>`))?.[1]);
+        const anodeHole = x(pins.A!);
+        const cathodeHole = x(pins.K!);
+        const middle = (anodeHole + cathodeHole) / 2;
+        for (const value of [anodeHole, cathodeHole, x("\\+ anode"), x("− cathode")]) expect(Number.isFinite(value), `${key} ${part.id}: panel text found`).toBe(true);
+        // The anode's words sit on the anode leg's side, the cathode's on the cathode's, and the long leg is the anode.
+        expect(Math.sign(x("\\+ anode") - middle), `${key} ${part.id}: + anode side`).toBe(Math.sign(anodeHole - middle));
+        expect(Math.sign(x("− cathode") - middle), `${key} ${part.id}: − cathode side`).toBe(Math.sign(cathodeHole - middle));
+        expect(panel).toContain("long leg");
+        expect(panel).toContain("short leg, flat side");
+        // The leg order in the panel matches the board: the leg further left on the board is further left in the panel.
+        const column = (hole: string) => Number(hole.replace(/^\D+/, ""));
+        expect(Math.sign(anodeHole - cathodeHole)).toBe(Math.sign(column(pins.A!) - column(pins.K!)));
+        for (const hole of [pins.A!, pins.K!]) expect(svg, `${key} ${part.id}: arrow to ${hole}`).toContain(`data-arrow-hole="${hole}"`);
+      }
+    }
+  });
+
+  it.each(designs)("%s: every wire step names both ends in the text and badges them 1 and 2 on the picture", (key, circuit) => {
+    const layout = layoutBoard(circuit);
+    const steps = buildSteps(circuit, layout);
+    for (const step of steps.steps.filter((entry) => entry.adds.jumpers.length > 0)) {
+      const svg = renderBreadboardSvg({ circuit, layout, steps, upToStep: step.n, focus: true });
+      expect(step.wireEnds?.map((entry) => entry.jumper), `${key} step ${step.n}`).toEqual(step.adds.jumpers);
+      for (const { jumper: id, ends } of step.wireEnds!) {
+        const jumper = layout.jumpers.find((entry) => entry.id === id)!;
+        expect(ends.map((end) => [end.n, end.at])).toEqual([[1, endAt(jumper.from)], [2, endAt(jumper.to)]]);
+        for (const end of [jumper.from, jumper.to]) expect(step.text, `${key} step ${step.n}: ${id}`).toContain(endName(end));
+        if (step.kind === "jumper") expect(step.text).toMatch(new RegExp(`End 1: ${endName(jumper.from).replace(/[+]/g, "\\+")}[^.]*\\. End 2: ${endName(jumper.to).replace(/[+]/g, "\\+")}`));
+        for (const n of [1, 2]) expect(svg, `${key} step ${step.n}: badge ${id}:${n}`).toContain(`data-wire-end="${id}:${n}"`);
+        // Badge 2 sits exactly on the hole it names (badge 1 on a header pin is checked by the text above).
+        if ("hole" in jumper.to) {
+          const hole = svg.match(new RegExp(`id="hole-${jumper.to.hole.replace(/[+]/g, "\\+")}" cx="([\\d.]+)" cy="([\\d.]+)"`))!;
+          const badge = svg.match(new RegExp(`data-wire-end="${id}:2"><circle cx="([\\d.]+)" cy="([\\d.]+)"`))!;
+          expect(Number(badge[1])).toBeCloseTo(Number(hole[1]), 0);
+          expect(Number(badge[2])).toBeCloseTo(Number(hole[2]), 0);
+        }
+      }
+    }
+  });
+
+  it("every landmark is true, refers to something already built, and is what the text says; ≥90% of placements have one", () => {
+    let placements = 0;
+    let anchored = 0;
+    for (const [key, circuit] of designs) {
+      const layout = layoutBoard(circuit);
+      const steps = buildSteps(circuit, layout);
+      const built = new Set<string>();
+      for (const step of steps.steps) {
+        for (const landmark of step.landmarks ?? []) {
+          expect(landmarkHolds(layout, landmark), `${key} step ${step.n}: ${landmark.text}`).toBe(true);
+          expect(step.text, `${key} step ${step.n}`).toContain(landmark.text);
+          if (landmark.kind !== "header") {
+            const ref = "part" in landmark.ref ? landmark.ref.part : landmark.ref.jumper;
+            expect(built.has(ref), `${key} step ${step.n}: ${ref} built before`).toBe(true);
+          }
+        }
+        if (step.kind === "place" || step.kind === "jumper") {
+          placements += 1;
+          if ((step.landmarks ?? []).some((landmark) => landmark.kind !== "header")) anchored += 1;
+        }
+        for (const id of [...step.adds.parts, ...step.adds.jumpers]) built.add(id);
+      }
+    }
+    expect(anchored / placements).toBeGreaterThanOrEqual(0.9);
+  });
+
+  // resvg panics (SIGABRT, no error) on some drawings, which crashes the pipeline's picture stage and turns FAO NO-GO.
+  it.each(designs)("%s: every step picture, whole and focused, rasterizes to PNG", async (_key, circuit) => {
+    const layout = layoutBoard(circuit);
+    const steps = buildSteps(circuit, layout);
+    for (const step of steps.steps) {
+      const view = { circuit, layout, steps, upToStep: step.n, highlight: { holes: step.holes, parts: step.adds.parts, jumpers: step.adds.jumpers } };
+      for (const focus of [false, true]) {
+        const png = await svgToPng(renderBreadboardSvg({ ...view, focus }), 600);
+        expect(Buffer.from(png.subarray(1, 4)).toString(), `step ${step.n}${focus ? " focus" : ""}`).toBe("PNG");
+      }
+    }
+  }, 60_000);
+
+  it("a landmark that no longer matches the layout is caught", () => {
+    const circuit = GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit;
+    const layout = layoutBoard(circuit);
+    const landmark = buildSteps(circuit, layout).steps.flatMap((step) => step.landmarks ?? []).find((entry): entry is Exclude<typeof entry, { kind: "header" }> => entry.kind === "same-strip")!;
+    expect(landmarkHolds(layout, landmark)).toBe(true);
+    const moved = parseHole(landmark.hole)!;
+    expect(moved.kind).toBe("terminal");
+    if (moved.kind === "terminal") expect(landmarkHolds(layout, { ...landmark, hole: `${moved.column}${moved.row + 1}` })).toBe(false);
+    expect(landmarkHolds(layout, { kind: "header", pin: "D2", neighbours: ["D5"], text: "between D5" })).toBe(false);
+  });
+
+  it("draws new pieces at full strength and earlier ones dimmed", () => {
+    const circuit = GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit;
+    const layout = layoutBoard(circuit);
+    const steps = buildSteps(circuit, layout);
+    const step = steps.steps.filter((entry) => entry.kind === "place")[2]!;
+    const svg = renderBreadboardSvg({ circuit, layout, steps, upToStep: step.n });
+    const earlier = steps.steps.filter((entry) => entry.n < step.n).flatMap((entry) => entry.adds.parts);
+    expect(svg).toMatch(new RegExp(`<g id="part-${step.adds.parts[0]}" class="part vb-new"`));
+    for (const id of earlier) expect(svg).toMatch(new RegExp(`<g id="part-${id}" class="part vb-old"`));
+  });
+
+  it("uses one vocabulary: numbered columns, lettered rows, in the text and the picture key", () => {
+    const circuit = GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit;
+    const layout = layoutBoard(circuit);
+    const steps = buildSteps(circuit, layout);
+    expect(steps.steps[1].text).toContain("Columns 1–63 run left to right; rows a–e are above the centre channel");
+    const svg = renderBreadboardSvg({ circuit, layout, steps, upToStep: 7 });
+    expect(svg).toContain("Columns 1–63 left → right");
+    expect(svg).not.toMatch(/Rows left|Rows run left/);
+  });
+
+  it("draws a mini board without rails and a split-rail board with its gap bridged in the rails step", () => {
+    const moon = GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit;
+    const mini = { ...moon, breadboard: { profile: "bb-170" as const } };
+    const miniLayout = layoutBoard(mini);
+    const miniSteps = buildSteps(mini, miniLayout);
+    expect(miniSteps.steps.find((step) => step.kind === "rails")!.title).toBe("No power rails on this board");
+    expect(miniSteps.steps[1].text).toContain("This board has no power rails.");
+    const miniSvg = renderBreadboardSvg({ circuit: mini, layout: miniLayout, steps: miniSteps });
+    expect(miniSvg).not.toMatch(/class="rail-(plus|minus|hole)/);
+
+    const split = { ...moon, breadboard: { profile: "bb-830-split" as const } };
+    const splitLayout = layoutBoard(split);
+    const splitSteps = buildSteps(split, splitLayout);
+    const rails = splitSteps.steps.find((step) => step.kind === "rails")!;
+    const bridges = splitLayout.jumpers.filter((jumper) => "hole" in jumper.from && "hole" in jumper.to && /^T.30$/.test(jumper.from.hole) && /^T.32$/.test(jumper.to.hole));
+    expect(bridges).toHaveLength(2);
+    for (const bridge of bridges) {
+      expect(rails.adds.jumpers).toContain(bridge.id);
+      expect(rails.text).toContain(`across the gap: end 1 in hole ${"hole" in bridge.from ? bridge.from.hole : ""}, end 2 in hole ${"hole" in bridge.to ? bridge.to.hole : ""}`);
+    }
+    // Only part-and-wire steps come after the rails; no bridge is left for later.
+    expect(splitSteps.steps.filter((step) => step.kind === "jumper").flatMap((step) => step.adds.jumpers)).not.toEqual(expect.arrayContaining(bridges.map((bridge) => bridge.id)));
+    const splitSvg = renderBreadboardSvg({ circuit: split, layout: splitLayout, steps: splitSteps, upToStep: rails.n });
+    expect(splitSvg).toContain('class="rail-gap">gap</text>');
   });
 });

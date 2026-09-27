@@ -2,7 +2,7 @@ import { formatOhms, type FieldValue, type PartField, type PartType, type ScanIt
 
 export type FieldValues = Record<string, FieldValue>;
 
-const OPTION_LABELS: Record<string, string> = { "uno-r3": "Uno R3" };
+const OPTION_LABELS: Record<string, string> = { "uno-r3": "Uno R3", "830-split": "830 (split rails)" };
 
 /** Render a choice's unit and known human label while preserving its raw stored value. */
 export function choiceOptionLabel(field: PartField, option: string): string {

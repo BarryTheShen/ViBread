@@ -27,6 +27,30 @@ export interface Step {
   callouts: string[];
   /** Plugged-in checkpoints run these self-tests. */
   checkpoint?: { tests: TestId[]; text: string };
+  /** Where the new pieces go relative to what is already built (computed from the layout, issue #22). */
+  landmarks?: StepLandmark[];
+  /** Both ends of each wire this step adds, as badged "1" and "2" in the step picture. */
+  wireEnds?: { jumper: string; ends: [WireEnd, WireEnd] }[];
+}
+
+/** An earlier piece a landmark points at: one leg of a placed part, or one end of an earlier wire. */
+export type LandmarkRef = { part: string; pin: string; hole: HoleId } | { jumper: string; hole: HoleId };
+
+/**
+ * A true statement about where a new leg or wire end goes. `hole` is the new hole; for `near`, `columns` is its
+ * numbered-column offset from the reference (positive = to the right). `header` is an Arduino pin and its neighbours.
+ */
+export type StepLandmark =
+  | { kind: "same-strip" | "across-channel"; hole: HoleId; ref: LandmarkRef; text: string }
+  | { kind: "near"; hole: HoleId; ref: LandmarkRef; columns: number; text: string }
+  | { kind: "header"; pin: string; neighbours: string[]; text: string };
+
+export interface WireEnd {
+  n: 1 | 2;
+  /** A breadboard hole ("j16", "T-24") or an Arduino pin ("board:D2"). */
+  at: string;
+  /** "hole j16", "Arduino pin D2". */
+  text: string;
 }
 
 export interface StepList {

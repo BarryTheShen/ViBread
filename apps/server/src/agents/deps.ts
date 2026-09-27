@@ -1,4 +1,4 @@
-import type { ApprovalBroker, InventoryEntry, MissionStore, PartType } from "@vibread/core";
+import type { ApprovalBroker, InventoryEntry, MissionStore, MyHardware, PartType } from "@vibread/core";
 import type { Logger } from "pino";
 import type { ClaudeAccountService } from "../claude/accounts.js";
 import type { ServerConfig } from "../config.js";
@@ -27,6 +27,8 @@ export interface AgentDeps {
   /** Per-user Claude accounts (PLAN §5.11 item 16); models.ts prefers the mission owner's account over the server key. */
   claudeAccounts: ClaudeAccountService;
   inventory: InventoryReader;
+  /** The owner's hardware (issue #23): new missions snapshot it; absent in tests that don't need it. */
+  hardware?: { get(ownerId: string): Promise<{ hardware: MyHardware }> };
   /** Per-mission debug log (ServerCore, services/debug-log.ts): agent runs, model calls, tool calls (trace.ts). */
   debug: DebugLog;
 }

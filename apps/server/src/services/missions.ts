@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
 import {
+  BOARD_VARIANTS,
+  BREADBOARD_PROFILES,
   CONSOLE_IDS,
+  PART_VARIANTS,
   toMissionInventory,
   type Actor,
   type AgentTurnResult,
@@ -8,11 +11,13 @@ import {
   type ApprovalRequest,
   type ApprovalView,
   type BuildState,
+  type InventoryItem,
   type Mission,
   type MissionDetail,
   type MissionRecording,
   type MissionService,
   type MissionSummary,
+  type MyHardware,
   type Revision,
   type RevisionSummary,
 } from "@vibread/core";
@@ -22,6 +27,7 @@ import type { AgentDeps, MissionEvent } from "../agents/deps.js";
 import type { EventBus } from "../agents/events.js";
 import { AgentBusyError, type RunManager } from "../agents/runs.js";
 import { wireOverrides, withWireColors } from "./wire-colors.js";
+import { MISSION_HARDWARE_EVENT } from "./hardware.js";
 
 export class ApprovalNotFoundError extends Error {
   readonly code = "approval_not_found";
@@ -49,6 +55,19 @@ function revisionSummary(revision: Revision): RevisionSummary {
   const verdicts: RevisionSummary["verdicts"] = {};
   for (const r of revision.results.reports) verdicts[r.console] = r.verdict;
   return { n: revision.n, hash: revision.hash, ...(revision.note ? { note: revision.note } : {}), author: revision.author, createdAt: revision.createdAt, verdicts };
+}
+
+function hardwareText(hardware: MyHardware): string {
+  const parts = Object.entries(hardware.parts).flatMap(([module, key]) => PART_VARIANTS.filter((variant) => variant.module === module && variant.variant === key).map((variant) => variant.name));
+  return `Building on your ${BREADBOARD_PROFILES[hardware.breadboard].shortName} with your ${BOARD_VARIANTS[hardware.board].shortName}${parts.length ? ` (${parts.join(", ")})` : ""}.`;
+}
+
+/** Parts of a module whose variant you picked get `params.variant` (an explicit variant already on the item wins). */
+function withHardwareVariants(inventory: InventoryItem[], hardware: MyHardware): InventoryItem[] {
+  return inventory.map((item) => {
+    const variant = hardware.parts[item.module];
+    return variant === undefined || item.params?.variant !== undefined ? item : { ...item, params: { ...item.params, variant } };
+  });
 }
 
 function titleFrom(brief: string): string {
@@ -103,6 +122,10 @@ export function createMissionService(
         inventory = copied.items;
         inventoryNotes = copied.notes.length ? copied.notes : undefined;
       }
+      // Issue #23: the owner's hardware is snapshotted with the mission (the design agent builds for it), and the part
+      // variants they own ride along in the parts' params so the circuit, steps and pictures name them.
+      const hardware = (await deps.hardware?.get(input.owner.id))?.hardware;
+      if (hardware) inventory = withHardwareVariants(inventory, hardware);
       const mission = await store.createMission({
         title: input.title?.trim() || titleFrom(input.brief),
         brief: input.brief,
@@ -111,6 +134,9 @@ export function createMissionService(
         ...(inventoryNotes ? { inventoryNotes } : {}),
       });
       // store.createMission records the "mission.created" timeline event itself (ServerCore's SQL store).
+      if (hardware) {
+        await store.appendEvent({ missionId: mission.id, channel: "system", actor: { kind: "system", id: "inventory", name: "Your hardware", channel: "system" }, kind: MISSION_HARDWARE_EVENT, text: hardwareText(hardware), data: hardware });
+      }
       await deps.sendMachine(mission.id, { type: "BRIEF_RECEIVED" });
       return (await store.getMission(mission.id)) ?? mission;
     },

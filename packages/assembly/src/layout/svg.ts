@@ -1,6 +1,7 @@
 import {
   BOARD_PROFILES,
   BREADBOARD_PROFILES,
+  railBridge,
   COLUMNS,
   MODULES,
   KIT_WIRE_CSS,
@@ -14,6 +15,7 @@ import {
   type Part,
   type StepList,
 } from "@vibread/core";
+import { PANEL_CSS, renderPartsPanel } from "./panel.js";
 
 const DEFAULT_WIDTH = 1200;
 const BOARD_LEFT = 70;
@@ -133,6 +135,14 @@ function boardPinPoints(layout: Pick<Layout, "board" | "boardAnchor" | "breadboa
   return points;
 }
 
+/** Arduino header pins as drawn, one list per header row, left to right (empty for a Nano on the breadboard). */
+export function boardHeaderRows(layout: Pick<Layout, "board" | "boardAnchor" | "breadboard">): string[][] {
+  if (BOARD_PROFILES[layout.board].placement === "straddle") return [];
+  const rows = new Map<number, { pin: string; x: number }[]>();
+  for (const [pin, point] of boardPinPoints(layout)) rows.set(point.y, [...(rows.get(point.y) ?? []), { pin, x: point.x }]);
+  return [...rows.entries()].sort(([a], [b]) => a - b).map(([, pins]) => pins.sort((a, b) => a.x - b.x).map((entry) => entry.pin));
+}
+
 /** Breadboard row drawn straight above an Uno header pin (the allocator puts that pin's circuit there). */
 export function headerRow(breadboard: Layout["breadboard"], board: Layout["board"], pin: string): number | undefined {
   if (BOARD_PROFILES[board].placement === "straddle") return undefined;
@@ -240,6 +250,7 @@ function renderHoles(layout: Layout, highlight: RenderInput["highlight"]): strin
     }
   }
   for (const rail of ["T-", "T+", "B+", "B-"] as const) {
+    if (!profile.railSides.includes(rail.startsWith("T") ? "top" : "bottom")) continue;
     for (const position of profile.railPositions) {
       const hole = `${rail}${position}`;
       const point = holePoint(layout, hole);
@@ -257,7 +268,7 @@ function renderHoles(layout: Layout, highlight: RenderInput["highlight"]): strin
     const minY = Math.min(...highlightedHoles.map((entry) => entry.point.y));
     const maxY = Math.max(...highlightedHoles.map((entry) => entry.point.y));
     const labelY = minY < CHANNEL_Y ? minY - 14 : maxY + 22;
-    chunks.push(`<text x="${x}" y="${labelY}" text-anchor="middle" class="hole-callout">holes ${highlightedHoles.map((entry) => entry.hole).sort().join(" · ")}</text>`);
+    chunks.push(`<text x="${x}" y="${labelY}" text-anchor="middle" class="hole-callout">${highlightedHoles.length === 1 ? "hole" : "holes"} ${highlightedHoles.map((entry) => entry.hole).sort().join(" · ")}</text>`);
   }
   return chunks.join("");
 }
@@ -466,6 +477,13 @@ function jumperGeometry(from: Point, to: Point, labelWidth: number, labelHeight:
   return { path: `M ${from.x} ${from.y} C ${c1.x} ${c1.y}, ${c2.x} ${c2.y}, ${to.x} ${to.y}`, label: { x: point.x + nx * offset, y: point.y + ny * offset } };
 }
 
+/** "1" and "2" badges on a new wire's two ends, matching "End 1" / "End 2" in the step text. */
+function endBadges(jumper: Jumper, from: Point, to: Point, stroke: string): string {
+  return ([[from, 1], [to, 2]] as const)
+    .map(([point, n]) => `<g class="wire-end" data-wire-end="${escapeSvg(jumper.id)}:${n}"><circle cx="${point.x}" cy="${point.y}" r="11" class="end-badge" stroke="${stroke}"/><text x="${point.x}" y="${point.y + 4.5}" text-anchor="middle" class="end-badge-text">${n}</text></g>`)
+    .join("");
+}
+
 /** The wire itself, and (for the step that adds it) its label, drawn in a layer above everything else. */
 function renderJumper(input: RenderInput, jumper: Jumper, pins: Map<string, Point>, state: ViewState): { wire: string; label: string } {
   if (state.visibleJumpers && !state.visibleJumpers.has(jumper.id)) return { wire: "", label: "" };
@@ -479,22 +497,39 @@ function renderJumper(input: RenderInput, jumper: Jumper, pins: Map<string, Poin
   const newItem = state.newJumpers.has(jumper.id);
   const highlighted = isHighlighted("jumper", jumper.id, input.highlight);
   const label = newItem
-    ? `<g class="wire-tag" data-jumper-label="${escapeSvg(jumper.id)}"><rect x="${at.x - labelWidth / 2}" y="${at.y - labelHeight / 2}" width="${labelWidth}" height="${labelHeight}" rx="5" class="wire-bg" stroke="${stroke}"/><text x="${at.x}" y="${at.y + 4}" text-anchor="middle" class="wire-label">${escapeSvg(text)}</text></g>`
+    ? `<g class="wire-tag" data-jumper-label="${escapeSvg(jumper.id)}"><rect x="${at.x - labelWidth / 2}" y="${at.y - labelHeight / 2}" width="${labelWidth}" height="${labelHeight}" rx="5" class="wire-bg" stroke="${stroke}"/><text x="${at.x}" y="${at.y + 4}" text-anchor="middle" class="wire-label">${escapeSvg(text)}</text></g>${endBadges(jumper, from, to, stroke)}`
     : "";
   const wire = `<g id="wire-${escapeSvg(jumper.id)}" data-jumper="${escapeSvg(jumper.id)}" data-net="${escapeSvg(jumper.net)}" class="${classes("wire", highlighted && "vb-hl", newItem && "vb-new", !newItem && !state.final && "vb-old")}" aria-label="${escapeSvg(jumper.id)} ${escapeSvg(jumper.net)}"><title>${escapeSvg(jumper.id)} — ${escapeSvg(jumper.net)}: ${escapeSvg(endpointLabel(jumper.from))} to ${escapeSvg(endpointLabel(jumper.to))}</title><path d="${path}" class="wire-casing"/><path d="${path}" stroke="${stroke}" class="wire-path"/></g>`;
   return { wire, label };
 }
 
+/**
+ * The rail lines, names and 5-hole group ticks, only on the edges this breadboard has rails on (none on a mini board).
+ * Split rails are drawn as two halves with the gap between them marked, since a bridge wire has to join them.
+ */
 function renderRailLabels(layout: Layout): string {
   const profile = BREADBOARD_PROFILES[layout.breadboard];
-  const end = BOARD_RIGHT;
-  const marks: string[] = [`<style>.rail-label{fill:#2B3440;paint-order:stroke;stroke:${BOARD_FILL};stroke-width:3px}</style>`];
-  marks.push(`<line x1="${BOARD_LEFT}" y1="${RAIL_Y["T-"]}" x2="${end}" y2="${RAIL_Y["T-"]}" class="rail-minus"/><line x1="${BOARD_LEFT}" y1="${RAIL_Y["T+"]}" x2="${end}" y2="${RAIL_Y["T+"]}" class="rail-plus"/><line x1="${BOARD_LEFT}" y1="${RAIL_Y["B+"]}" x2="${end}" y2="${RAIL_Y["B+"]}" class="rail-plus"/><line x1="${BOARD_LEFT}" y1="${RAIL_Y["B-"]}" x2="${end}" y2="${RAIL_Y["B-"]}" class="rail-minus"/>`);
-  marks.push(`<text x="${BOARD_LEFT + 5}" y="${RAIL_Y["T-"] - 6}" class="rail-label">T− GND (−)</text><text x="${BOARD_LEFT + 5}" y="${RAIL_Y["T+"] + 15}" class="rail-label">T+ 5V (+)</text><text x="${BOARD_RIGHT - 2}" y="${RAIL_Y["B+"] + 4}" text-anchor="end" class="rail-label">B+ (+)</text><text x="${BOARD_RIGHT - 2}" y="${RAIL_Y["B-"] + 4}" text-anchor="end" class="rail-label">B− (−)</text>`);
-  for (const position of profile.railPositions) {
-    const x = holePoint(layout, `T+${position}`)?.x;
-    if (x === undefined) continue;
-    marks.push(`<line x1="${x}" y1="${RAIL_Y["T-"] - 5}" x2="${x}" y2="${RAIL_Y["T+"] + 5}" class="rail-tick"/><line x1="${x}" y1="${RAIL_Y["B+"] - 5}" x2="${x}" y2="${RAIL_Y["B-"] + 5}" class="rail-tick"/>`);
+  const marks: string[] = [`<style>.rail-label{fill:#2B3440;paint-order:stroke;stroke:${BOARD_FILL};stroke-width:3px}.rail-gap{fill:#C92A2A;font-size:11px;font-weight:700;paint-order:stroke;stroke:${BOARD_FILL};stroke-width:3px}</style>`];
+  const bridge = railBridge(profile, profile.railSides.includes("top") ? "T+" : "B+");
+  const gap = bridge ? [holePoint(layout, bridge[0])!.x + 7, holePoint(layout, bridge[1])!.x - 7] : undefined;
+  const segments: [number, number][] = gap ? [[BOARD_LEFT, gap[0]], [gap[1], BOARD_RIGHT]] : [[BOARD_LEFT, BOARD_RIGHT]];
+  const line = (rail: keyof typeof RAIL_Y) => segments.map(([x1, x2]) => `<line x1="${x1}" y1="${RAIL_Y[rail]}" x2="${x2}" y2="${RAIL_Y[rail]}" class="${rail.endsWith("+") ? "rail-plus" : "rail-minus"}"/>`).join("");
+  const sides = [
+    { side: "top" as const, rails: ["T-", "T+"] as const, labels: `<text x="${BOARD_LEFT + 5}" y="${RAIL_Y["T-"] - 6}" class="rail-label">T− GND (−)</text><text x="${BOARD_LEFT + 5}" y="${RAIL_Y["T+"] + 15}" class="rail-label">T+ 5V (+)</text>` },
+    { side: "bottom" as const, rails: ["B+", "B-"] as const, labels: `<text x="${BOARD_RIGHT - 2}" y="${RAIL_Y["B+"] + 4}" text-anchor="end" class="rail-label">B+ (+)</text><text x="${BOARD_RIGHT - 2}" y="${RAIL_Y["B-"] + 4}" text-anchor="end" class="rail-label">B− (−)</text>` },
+  ].filter((entry) => profile.railSides.includes(entry.side));
+  for (const entry of sides) {
+    marks.push(entry.rails.map(line).join(""), entry.labels);
+    const [first, second] = entry.rails;
+    for (const position of profile.railPositions) {
+      const x = holePoint(layout, `${first}${position}`)?.x;
+      if (x !== undefined) marks.push(`<line x1="${x}" y1="${Math.min(RAIL_Y[first], RAIL_Y[second]) - 5}" x2="${x}" y2="${Math.max(RAIL_Y[first], RAIL_Y[second]) + 5}" class="rail-tick"/>`);
+    }
+    if (gap) {
+      // Beside the rail pair, on the board side, clear of the bridge wire drawn across the gap.
+      const y = first.startsWith("T") ? RAIL_Y["T+"] + 15 : RAIL_Y["B+"] - 8;
+      marks.push(`<text x="${(gap[0] + gap[1]) / 2}" y="${y}" text-anchor="middle" class="rail-gap">gap</text>`);
+    }
   }
   return marks.join("");
 }
@@ -571,26 +606,91 @@ export function renderBreadboardSvg(input: RenderInput): string {
   const state = viewState(input.steps, input.upToStep);
   const pins = boardPinPoints(input.layout);
   const placements = new Map(input.layout.placements.map((placement) => [placement.part, placement]));
+  const focusBox = focusViewBox(input, state, pins);
+  // A focus picture leaves out earlier items that lie wholly outside its crop: they are invisible anyway, and resvg
+  // aborts the process (SIGABRT) on a dimmed (opacity) group that is entirely off-canvas.
+  const onScreen = (points: Point[]): boolean => {
+    if (!focusBox || points.length === 0) return true;
+    const margin = 60;
+    const xs = points.map((point) => point.x);
+    const ys = points.map((point) => point.y);
+    return Math.max(...xs) + margin >= focusBox.x && Math.min(...xs) - margin <= focusBox.x + focusBox.width && Math.max(...ys) + margin >= focusBox.y && Math.min(...ys) - margin <= focusBox.y + focusBox.height;
+  };
+  const endPoint = (end: Jumper["from"]): Point | undefined => ("hole" in end ? holePoint(input.layout, end.hole) : pins.get(end.board));
   const parts = [...input.circuit.parts].sort((a, b) => a.id.localeCompare(b.id)).map((part) => {
     const placement = placements.get(part.id);
-    return placement ? renderPart(input, part, placement, state) : "";
+    if (!placement) return "";
+    if (!state.newParts.has(part.id) && !onScreen(Object.values(placement.pins).flatMap((hole) => holePoint(input.layout, hole) ?? []))) return "";
+    return renderPart(input, part, placement, state);
   }).join("");
-  const drawnJumpers = [...input.layout.jumpers].sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })).map((jumper) => ({ jumper, ...renderJumper(input, jumper, pins, state) }));
+  const drawnJumpers = [...input.layout.jumpers]
+    .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }))
+    .filter((jumper) => state.newJumpers.has(jumper.id) || onScreen([endPoint(jumper.from), endPoint(jumper.to)].filter((point): point is Point => point !== undefined)))
+    .map((jumper) => ({ jumper, ...renderJumper(input, jumper, pins, state) }));
   // Earlier wires sit under the parts; the wires this step adds are drawn over them so they can't be hidden, and
   // their labels over everything.
   const jumpers = drawnJumpers.filter((entry) => !state.newJumpers.has(entry.jumper.id)).map((entry) => entry.wire).join("");
   const newJumpers = drawnJumpers.filter((entry) => state.newJumpers.has(entry.jumper.id)).map((entry) => entry.wire).join("");
   const jumperLabels = drawnJumpers.map((entry) => entry.label).join("");
   const columnLetters = "";
-  const focusBox = focusViewBox(input, state, pins);
   const renderHeight = 700;
   const viewBox = focusBox ? `${focusBox.x} ${focusBox.y} ${focusBox.width} ${focusBox.height}` : `0 0 ${width} 700`;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${renderHeight}" viewBox="${viewBox}" data-vibread="breadboard" role="img" aria-label="ViBread landscape breadboard assembly"><title>${escapeSvg(input.circuit.title)} breadboard</title><desc>Rows run left to right. Columns a through e are above the horizontal channel; f through j are below it. New step items glow; labels are repeated in text instructions.</desc><style>
-svg{font-family:Arial,"DejaVu Sans",sans-serif;background:${CANVAS_FILL}}.board-surface{fill:${BOARD_FILL};stroke:#B8C0C9;stroke-width:2}.channel{fill:#D5DAE0}.hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.rail-hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.row-label,.column-label,.rail-label,.channel-label{fill:#3B4552;font-size:12px;font-weight:700}.column-label{font-size:15px}.column-guide{fill:#3B4552;font-size:13px;font-weight:700}.rail-label{font-size:12px}.rail-plus{stroke:#E03131;stroke-width:3}.rail-minus{stroke:#1C7ED6;stroke-width:3}.rail-tick{stroke:#C3CAD2;stroke-width:1}.lead{stroke:#6C7680;stroke-width:3}.leg{stroke:#8D99AE;stroke-width:3;stroke-linecap:round}.leg-foot{fill:#C9D0D8;stroke:#4A525C;stroke-width:1.5}.led-dome{stroke:#F8FAFC;stroke-width:2}.led-glow{filter:blur(3px)}.resistor-body{fill:#E2C89A;stroke:#7A5A3A;stroke-width:2}.button-body{fill:#2B2F36;stroke:#11151A;stroke-width:2}.button-cap{fill:#C92A2A;stroke:#3B0D0D;stroke-width:2}.sensor-body{fill:#9CA3AF;stroke:#111827;stroke-width:2}.sensor-mark{stroke:#17212B;stroke-width:2}.pot-body{fill:#4F6570;stroke:#EEF2F5;stroke-width:2}.pot-arrow{stroke:#F1C453;stroke-width:4}.pot-arrowhead{fill:#F1C453}.buzzer-body{fill:#212529;stroke:#0B0D10;stroke-width:2}.buzzer-hole{fill:#495057;stroke:#0B0D10;stroke-width:1}.sound-ring{fill:none;stroke:#E8590C;stroke-width:3;stroke-dasharray:6 5}.generic-body{fill:#5F7880;stroke:#E5F2F4;stroke-width:2}.mcu{fill:#1B3339;stroke:#90C5BD;stroke-width:3}.board-title{fill:#F3F7F8;font-weight:700;font-size:15px}.header-label{fill:#90C5BD;font-size:11px;font-weight:700}.header-pin{fill:#F2C94C;stroke:#12181D;stroke-width:2}.pin-label{fill:#F3F7F8;font-size:12px;font-weight:700}.pin-cue{fill:#1B1D2B;font-size:11px;font-weight:700}.part-label{fill:#1B1D2B;font-size:12px;font-weight:700}.label-bg{fill:#FFFFFF;stroke:#8D99AE;stroke-width:1}.leader{stroke:#5C6773;stroke-width:1.5}.wire-casing{fill:none;stroke:#1B1D2B;stroke-width:6.5;stroke-linecap:round;opacity:.55}.wire-path{fill:none;stroke-width:4;stroke-linecap:round}.wire-bg{fill:#1B1D2B}.wire-label{fill:#fff;font-size:11px;font-weight:700}.vb-old{opacity:.48}.part.vb-hl,.wire.vb-hl{filter:drop-shadow(0 0 5px #fff)}.vb-new{filter:drop-shadow(0 0 8px #f7d774)}.hole.vb-hl,.rail-hole.vb-hl{fill:#ffe166;stroke:#111;stroke-width:2}
-</style><rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/><rect x="${BOARD_LEFT - 36}" y="${RAIL_Y["T-"] - 22}" width="${BOARD_RIGHT - BOARD_LEFT + 72}" height="${RAIL_Y["B-"] - RAIL_Y["T-"] + 30}" rx="14" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout)}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}${newJumpers}${jumperLabels}<g class="legend"><rect x="${BOARD_RIGHT - 160}" y="${BOARD_TOP + 5}" width="148" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 150}" y="${BOARD_TOP + 22}" class="part-label">Rows left → right</text><text x="${BOARD_RIGHT - 150}" y="${BOARD_TOP + 38}" class="part-label">a–e top · f–j bottom</text></g></svg>`;
+  const railSides = BREADBOARD_PROFILES[input.layout.breadboard].railSides;
+  const surfaceTop = railSides.includes("top") ? RAIL_Y["T-"] - 22 : 120;
+  const surfaceBottom = railSides.includes("bottom") ? RAIL_Y["B-"] + 8 : 495;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${renderHeight}" viewBox="${viewBox}" data-vibread="breadboard" role="img" aria-label="ViBread landscape breadboard assembly"><title>${escapeSvg(input.circuit.title)} breadboard</title><desc>Numbered columns run left to right. Lettered rows a through e are above the centre channel; f through j are below it. New step items are drawn at full strength; earlier ones are dimmed.</desc><style>
+svg{font-family:Arial,"DejaVu Sans",sans-serif;background:${CANVAS_FILL}}.end-badge{fill:#fff;stroke-width:3}.end-badge-text{fill:#1B1D2B;font-size:13px;font-weight:800}.board-surface{fill:${BOARD_FILL};stroke:#B8C0C9;stroke-width:2}.channel{fill:#D5DAE0}.hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.rail-hole{fill:#39414B;stroke:#AEB6BF;stroke-width:1}.row-label,.column-label,.rail-label,.channel-label{fill:#3B4552;font-size:12px;font-weight:700}.column-label{font-size:15px}.column-guide{fill:#3B4552;font-size:13px;font-weight:700}.rail-label{font-size:12px}.rail-plus{stroke:#E03131;stroke-width:3}.rail-minus{stroke:#1C7ED6;stroke-width:3}.rail-tick{stroke:#C3CAD2;stroke-width:1}.lead{stroke:#6C7680;stroke-width:3}.leg{stroke:#8D99AE;stroke-width:3;stroke-linecap:round}.leg-foot{fill:#C9D0D8;stroke:#4A525C;stroke-width:1.5}.led-dome{stroke:#F8FAFC;stroke-width:2}.led-glow{filter:blur(3px)}.resistor-body{fill:#E2C89A;stroke:#7A5A3A;stroke-width:2}.button-body{fill:#2B2F36;stroke:#11151A;stroke-width:2}.button-cap{fill:#C92A2A;stroke:#3B0D0D;stroke-width:2}.sensor-body{fill:#9CA3AF;stroke:#111827;stroke-width:2}.sensor-mark{stroke:#17212B;stroke-width:2}.pot-body{fill:#4F6570;stroke:#EEF2F5;stroke-width:2}.pot-arrow{stroke:#F1C453;stroke-width:4}.pot-arrowhead{fill:#F1C453}.buzzer-body{fill:#212529;stroke:#0B0D10;stroke-width:2}.buzzer-hole{fill:#495057;stroke:#0B0D10;stroke-width:1}.sound-ring{fill:none;stroke:#E8590C;stroke-width:3;stroke-dasharray:6 5}.generic-body{fill:#5F7880;stroke:#E5F2F4;stroke-width:2}.mcu{fill:#1B3339;stroke:#90C5BD;stroke-width:3}.board-title{fill:#F3F7F8;font-weight:700;font-size:15px}.header-label{fill:#90C5BD;font-size:11px;font-weight:700}.header-pin{fill:#F2C94C;stroke:#12181D;stroke-width:2}.pin-label{fill:#F3F7F8;font-size:12px;font-weight:700}.pin-cue{fill:#1B1D2B;font-size:11px;font-weight:700}.part-label{fill:#1B1D2B;font-size:12px;font-weight:700}.label-bg{fill:#FFFFFF;stroke:#8D99AE;stroke-width:1}.leader{stroke:#5C6773;stroke-width:1.5}.wire-casing{fill:none;stroke:#1B1D2B;stroke-width:6.5;stroke-linecap:round;opacity:.55}.wire-path{fill:none;stroke-width:4;stroke-linecap:round}.wire-bg{fill:#1B1D2B}.wire-label{fill:#fff;font-size:11px;font-weight:700}.vb-old{opacity:.48}.part.vb-hl,.wire.vb-hl{filter:drop-shadow(0 0 5px #fff)}.vb-new{filter:drop-shadow(0 0 8px #f7d774)}.hole.vb-hl,.rail-hole.vb-hl{fill:#ffe166;stroke:#111;stroke-width:2}
+</style><rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/><rect x="${BOARD_LEFT - 36}" y="${surfaceTop}" width="${BOARD_RIGHT - BOARD_LEFT + 72}" height="${surfaceBottom - surfaceTop}" rx="14" class="board-surface"/><rect x="${BOARD_LEFT - 4}" y="${CHANNEL_Y - 24}" width="${BOARD_RIGHT - BOARD_LEFT + 8}" height="48" class="channel"/>${renderRailLabels(input.layout)}${renderRowLabels(input.layout)}${columnLetters}${renderHoles(input.layout, input.highlight)}<g id="board">${renderBoard(input.layout, pins)}</g>${jumpers}${parts}${newJumpers}${jumperLabels}<g class="legend"><rect x="${BOARD_RIGHT - 196}" y="${BOARD_TOP + 5}" width="184" height="42" rx="7" class="label-bg"/><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 22}" class="part-label">Columns 1–${BREADBOARD_PROFILES[input.layout.breadboard].rows} left → right</text><text x="${BOARD_RIGHT - 186}" y="${BOARD_TOP + 38}" class="part-label">Rows a–e top · f–j bottom</text></g></svg>`;
   const scopedSvg = scopeSvgStyles(svg);
   const backgroundSvg = focusBox ? scopedSvg.replace(`<rect x="0" y="0" width="${width}" height="700" fill="${CANVAS_FILL}"/>`, `<rect x="0" y="0" width="${width}" height="700" fill="${BOARD_FILL}"/>`) : scopedSvg;
-  if (!focusBox) return backgroundSvg;
-  const focusedSvg = backgroundSvg.replace(/class="base-row-label row-label"/g, `class="base-row-label row-label" style="display:none"`).replace(/class="base-column-label column-label"/g, `class="base-column-label column-label" style="display:none"`);
-  return focusedSvg.replace(`<g id="focus-labels"></g>`, renderFocusLabels(input.layout, focusBox));
+  const boardSvg = focusBox
+    ? backgroundSvg.replace(/class="base-row-label row-label"/g, `class="base-row-label row-label" style="display:none"`).replace(/class="base-column-label column-label"/g, `class="base-column-label column-label" style="display:none"`).replace(`<g id="focus-labels"></g>`, renderFocusLabels(input.layout, focusBox))
+    : backgroundSvg;
+  return withPartsPanel(input, state, boardSvg, focusBox ?? { x: 0, y: 0, width, height: 700 }, width, focusBox !== undefined);
+}
+
+/** A focus picture is read on a phone: its panel is 1.5× taller, so a lone part is drawn 1.5× larger (1200 × 1470). */
+const FOCUS_PANEL_ZOOM = 1.5;
+
+/**
+ * A step picture with new pieces gets the "parts for this step" panel under the board or crop (issue #22), with dashed
+ * arrows from each drawn leg to its hole. Below rather than beside, so the board keeps its width in the narrow desktop
+ * steps panel and on a portrait phone. Pictures without new pieces (final board, Try it, bench) are unchanged.
+ */
+function withPartsPanel(input: RenderInput, state: ViewState, boardSvg: string, view: ViewBox, width: number, focused: boolean): string {
+  if (!input.steps || input.upToStep === undefined || (state.newParts.size === 0 && state.newJumpers.size === 0)) return boardSvg;
+  const panel = renderPartsPanel({
+    circuit: input.circuit,
+    layout: input.layout,
+    parts: [...state.newParts],
+    jumpers: [...state.newJumpers],
+    wireCss: (jumper) => cssColor(input.wireColors?.[jumper.id] ?? String(jumper.color)),
+    css: cssColor,
+    bandCss: (name) => BAND_COLORS[name] ?? cssColor(name),
+  }, focused ? FOCUS_PANEL_ZOOM : 1);
+  if (!panel) return boardSvg;
+  // Root coordinates stay the board's own (the crop is the root viewBox, as without a panel); the panel, drawn in
+  // 1200-unit picture coordinates, is scaled into the strip below the crop. Scaling the board instead (a transformed
+  // group or nested <svg>) makes resvg panic on some boards.
+  const unit = view.width / panel.width;
+  const panelTop = view.y + view.height;
+  const panelHeight = panel.height * unit;
+  const totalHeight = Math.round((view.height + panelHeight) * (width / view.width));
+  const open = boardSvg.match(/^<svg\b[^>]*>/)![0];
+  const inner = boardSvg.slice(open.length, boardSvg.lastIndexOf("</svg>"));
+  const arrows = panel.anchors.map((anchor) => {
+    const hole = holePoint(input.layout, anchor.hole);
+    if (!hole) return "";
+    const lift = 8 * unit;
+    const head = 7 * unit;
+    // Arrows leave the panel's top edge straight above the leg, so they never cross the panel's own drawing.
+    const start = { x: view.x + anchor.point.x * unit, y: panelTop + 10 * unit };
+    const middle = (start.y + hole.y) / 2;
+    return `<path d="M ${start.x} ${start.y} C ${start.x} ${middle}, ${hole.x} ${middle}, ${hole.x} ${hole.y + lift}" class="panel-arrow" style="stroke-width:${3 * unit}px;stroke-dasharray:${10 * unit} ${7 * unit}" data-arrow-hole="${escapeSvg(anchor.hole)}"/><path d="M ${hole.x - head} ${hole.y + lift + 12 * unit} L ${hole.x} ${hole.y + lift - unit} L ${hole.x + head} ${hole.y + lift + 12 * unit} Z" class="panel-arrow-head"/>`;
+  }).join("");
+  const rootOpen = open
+    .replace(/ height="[^"]*"/, ` height="${totalHeight}"`)
+    .replace(/ viewBox="[^"]*"/, ` viewBox="${view.x} ${view.y} ${view.width} ${view.height + panelHeight}"`);
+  const panelStyle = scopeSvgStyles(`<style>${PANEL_CSS}</style>`);
+  return `${rootOpen}${panelStyle}${inner}<g id="parts-panel" transform="translate(${view.x} ${panelTop}) scale(${unit})"><rect x="0" y="0" width="${panel.width}" height="${panel.height}" fill="${CANVAS_FILL}"/>${panel.svg}</g><g id="panel-arrows">${arrows}</g></svg>`;
 }

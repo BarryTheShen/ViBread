@@ -8,7 +8,10 @@
  * - Missions never read the inventory directly: at creation the usable entries are copied into Mission.inventory
  *   (mission.ts InventoryItem) through the type's mapping, so the design agent and the checks stay unchanged.
  */
+import { BOARD_VARIANT_IDS, BOARD_VARIANTS, type BoardVariantId } from "./boards.js";
+import { BREADBOARD_PROFILE_IDS, BREADBOARD_PROFILES, type BreadboardProfileId } from "./breadboards.js";
 import type { ModuleKey, ModulePin } from "./modules.js";
+import { PART_VARIANTS } from "./variants.js";
 
 /** What ViBread can do with a part type. */
 export const SUPPORT_LEVELS = [
@@ -230,4 +233,118 @@ export interface ScanView {
 /** POST /api/inventory/scans/:id/accept */
 export interface ScanAcceptRequest {
   items: Array<{ index: number; typeId: string; values: Record<string, FieldValue>; quantity: number; mode: "add" | "replace" }>;
+}
+
+// ── Your hardware (issue #23) ─────────────────────────────────────────────────────────────────────────────────────
+
+/** The breadboard, board and part variants you build with. New missions default to them. */
+export interface MyHardware {
+  breadboard: BreadboardProfileId;
+  board: BoardVariantId;
+  /** Module → the variant key you own (`params.variant`, variants.ts), e.g. { led: "3mm", button: "2leg" }. */
+  parts: Partial<Record<ModuleKey, string>>;
+}
+
+/** Where each hardware choice came from: picked on the inventory page, implied by an inventory entry, or the default. */
+export type HardwareSource = "saved" | "inventory" | "default";
+
+/** GET/PUT /api/inventory/hardware */
+export interface HardwareView {
+  hardware: MyHardware;
+  source: { breadboard: HardwareSource; board: HardwareSource };
+  /** Photo identification needs a Claude credential; without one the page offers the manual pickers only. */
+  claude: "connected" | "missing";
+}
+
+export const HARDWARE_KINDS = ["breadboard", "board", "part"] as const;
+export type HardwareKind = (typeof HARDWARE_KINDS)[number];
+
+export const HARDWARE_CONFIDENCES = ["high", "medium", "low"] as const;
+export type HardwareConfidence = (typeof HARDWARE_CONFIDENCES)[number];
+
+/** What the vision model reports for one photo of a breadboard, board or part (observations plus its best match). */
+export interface HardwareAnswer {
+  kind: HardwareKind | "unknown";
+  /** Breadboard profile id, board variant id, or part variant id from the list it was given; null when none fits. */
+  id: string | null;
+  confidence: HardwareConfidence;
+  /** Short observations behind the match ("counted 30 numbered rows", "chip marked CH340G"). */
+  reasons: string[];
+  /** What it is, in plain words (prefills a user-made part type when nothing matches). */
+  description: string;
+  /** Breadboards: numbered rows counted, whether the rail lines break in the middle, whether there are rails at all. */
+  rows?: number;
+  railGap?: boolean;
+  rails?: boolean;
+  /** Printed text read verbatim ("CH340G", "UNO", "B10K"). */
+  printed?: string;
+}
+
+/** POST /api/inventory/hardware/identify → the checked guess the person confirms or replaces. */
+export interface HardwareIdentification {
+  kind: HardwareKind | "unknown";
+  profileOrVariantId: string | null;
+  confidence: HardwareConfidence;
+  reasons: string[];
+  description: string;
+  /** Other catalogue ids of the same kind, for "choose another". */
+  alternatives: string[];
+}
+
+const CONFIDENCE_RANK: Record<HardwareConfidence, number> = { high: 2, medium: 1, low: 0 };
+const lowerOf = (a: HardwareConfidence, b: HardwareConfidence): HardwareConfidence => (CONFIDENCE_RANK[a] <= CONFIDENCE_RANK[b] ? a : b);
+
+/** Catalogue ids per kind (the only ids a guess may name). */
+export function hardwareIds(kind: HardwareKind): string[] {
+  if (kind === "breadboard") return [...BREADBOARD_PROFILE_IDS];
+  if (kind === "board") return [...BOARD_VARIANT_IDS];
+  return PART_VARIANTS.map((variant) => variant.id);
+}
+
+/**
+ * Turns the model's answer into the guess shown to the person. Deterministic checks win over the model's pick:
+ * an id outside the catalogue (or of another kind) becomes null; a counted row number and rail observations pick the
+ * breadboard profile they match; a board a photo can't tell apart (old vs new Nano bootloader) is never "high".
+ * `expected` is the kind the person asked about, when they chose one.
+ */
+export function interpretHardwareAnswer(answer: HardwareAnswer, expected?: HardwareKind): HardwareIdentification {
+  const reasons = [...answer.reasons];
+  let kind = answer.kind;
+  let id = answer.id;
+  let confidence = answer.confidence;
+  if (expected && kind !== expected && kind !== "unknown") {
+    reasons.push(`This looks like a ${kind}, not a ${expected}.`);
+    confidence = "low";
+  }
+  if (kind !== "unknown" && id !== null && !hardwareIds(kind).includes(id)) {
+    reasons.push(`"${id}" isn't in ViBread's catalogue.`);
+    id = null;
+  }
+  if (kind === "breadboard" || (kind === "unknown" && answer.rows !== undefined)) {
+    const byRows = Object.values(BREADBOARD_PROFILES).filter((profile) => answer.rows === undefined || profile.rows === answer.rows);
+    const byRails = byRows.filter((profile) => (answer.rails === false ? profile.railSides.length === 0 : answer.rails === true ? profile.railSides.length > 0 : true) && (answer.railGap === undefined || profile.railsSplit === answer.railGap));
+    if (answer.rows !== undefined && byRows.length === 0) {
+      reasons.push(`No standard breadboard has ${answer.rows} rows.`);
+      confidence = lowerOf(confidence, "low");
+    } else if (byRails.length === 1 && byRails[0]!.id !== id) {
+      const match = byRails[0]!;
+      reasons.push(`${answer.rows !== undefined ? `${answer.rows} rows` : "The rails"}${answer.railGap ? " with a break in the rails" : answer.rails === false ? " and no rails" : ""} match the ${match.shortName}.`);
+      confidence = lowerOf(confidence, "medium");
+      kind = "breadboard";
+      id = match.id;
+    }
+  }
+  if (kind === "board" && id !== null && !BOARD_VARIANTS[id as BoardVariantId].photoDistinct) {
+    reasons.push("A photo can't tell the old and new Nano bootloaders apart: if uploading fails, try the other one.");
+    confidence = lowerOf(confidence, "medium");
+  }
+  if (id === null) confidence = "low";
+  return {
+    kind,
+    profileOrVariantId: id,
+    confidence,
+    reasons,
+    description: answer.description,
+    alternatives: kind === "unknown" ? [] : hardwareIds(kind).filter((candidate) => candidate !== id),
+  };
 }
