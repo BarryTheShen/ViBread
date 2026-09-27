@@ -4,6 +4,7 @@ import Button from "@mui/material/Button";
 import Container from "@mui/material/Container";
 import Typography from "@mui/material/Typography";
 import { Component, type ErrorInfo, type ReactNode } from "react";
+import { DEMO, appPath } from "../demo/demo.js";
 
 const REPORT_PATH = "/api/debug/client-errors";
 const WINDOW_MS = 60_000;
@@ -53,7 +54,7 @@ function detailsFromUnknown(value: unknown): ErrorDetails {
 
 /** Fire-and-forget client diagnostic report with per-error dedupe and a 20/minute cap. */
 export function reportClientError(details: ErrorDetails): void {
-  if (typeof window === "undefined" || typeof navigator === "undefined") return;
+  if (DEMO || typeof window === "undefined" || typeof navigator === "undefined") return;
   const now = Date.now();
   pruneReports(now);
   const message = details.message.trim() || "Unknown client error";
@@ -127,7 +128,7 @@ export class ClientErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoun
         </Alert>
         <Box sx={{ display: "flex", gap: 1, flexWrap: "wrap" }}>
           <Button variant="contained" onClick={() => window.location.reload()}>Reload</Button>
-          <Button variant="outlined" onClick={() => window.location.assign("/settings")}>Open Settings</Button>
+          {!DEMO && <Button variant="outlined" onClick={() => window.location.assign(appPath("/settings"))}>Open Settings</Button>}
         </Box>
       </Container>
     );

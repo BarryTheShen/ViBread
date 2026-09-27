@@ -46,6 +46,7 @@ import ZoomOut from "@mui/icons-material/ZoomOut";
 import WifiOff from "@mui/icons-material/WifiOff";
 import { useNavigate, useParams } from "react-router";
 import { StepWireChips, WireColorPicker, WireLegend, useWireColor, type WireTarget } from "../workspace/WireColors.js";
+import { DEMO, appPath } from "../demo/demo.js";
 import { checkpointChecksForRevision, checkpointChecksPass, checkpointStatusText, describeCheckpointChecks, isFullSelfTestStep, type CheckpointCheck } from "./checkpointChecks.js";
 import { RepeatChecklist } from "./RepeatChecklist.js";
 import { plugInstruction } from "./plugBanner.js";
@@ -752,7 +753,13 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
     setPhotoResult(null);
     photoMutation.mutate({ step: step.n, file });
   };
+  // The read-only demo can't save progress: Done and Skip move on locally, and the last one finishes the walkthrough.
+  const advanceLocally = () => {
+    if (safeActiveStep >= steps.length - 1) setFinished(true);
+    else setActiveStep(safeActiveStep + 1);
+  };
   const handleStepDone = () => {
+    if (DEMO) return advanceLocally();
     if (stepMutation.isPending) return;
     const previousStep = safeActiveStep;
     const nextStep = Math.min(previousStep + 1, steps.length - 1);
@@ -835,7 +842,7 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
           variant="text"
           fullWidth
           disabled={stepMutation.isPending}
-          onClick={() => stepMutation.mutate(step.n)}
+          onClick={() => (DEMO ? advanceLocally() : stepMutation.mutate(step.n))}
           sx={{ minHeight: 44 }}
         >
           Skip checks and continue
@@ -843,6 +850,11 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
       )}
 
       <Divider sx={{ my: 0.5 }} />
+      {DEMO ? (
+        <Typography variant="body2" color="text.secondary" sx={{ textAlign: "center" }}>
+          In ViBread, "Check with camera" has Claude compare a photo of your breadboard with this step. Photos can't be uploaded in the read-only demo.
+        </Typography>
+      ) : (
       <Button
         component="label"
         type="button"
@@ -863,6 +875,7 @@ function BuildChecklist({ missionId, build }: { missionId: string; build: BuildS
           onChange={handlePhotoChange}
         />
       </Button>
+      )}
       {photoResult && photoStep === step.n && (
         <Box ref={photoResultRef}>
           <PhotoResult result={photoResult} />
@@ -927,7 +940,7 @@ function PhoneBuildChooser({
               type="button"
               variant="outlined"
               onClick={() => scanMutation.mutate()}
-              disabled={scanMutation.isPending}
+              disabled={DEMO || scanMutation.isPending}
               aria-busy={scanMutation.isPending}
               sx={{ minHeight: 52, borderRadius: 2.5, fontWeight: 800 }}
             >
@@ -1166,7 +1179,7 @@ function BuildModeScreen({ missionId }: { missionId: string }) {
               <Alert severity="warning" icon={<CloudOffOutlined />}>
                 <AlertTitle>Build unavailable</AlertTitle>
                 This build isn't on this computer any more — scan the QR code on the laptop again.
-                <Link href="/b" underline="hover" sx={{ display: "block", mt: 1.25, width: "fit-content" }}>
+                <Link href={appPath("/b")} underline="hover" sx={{ display: "block", mt: 1.25, width: "fit-content" }}>
                   Back to phone home
                 </Link>
               </Alert>

@@ -22,6 +22,8 @@ import { SchematicTab } from "./tabs/SchematicTab.js";
 import { TestsTab } from "./tabs/TestsTab.js";
 import { TryItTab } from "./tabs/TryItTab.js";
 import { DownloadMenu } from "./DownloadMenu.js";
+import { DEMO, DEMO_NOTES } from "../demo/demo.js";
+import { DemoNote } from "../demo/DemoBanner.js";
 import { BuildStepsView } from "./views/BuildStepsView.js";
 import { ChecksView } from "./views/ChecksView.js";
 import { ResultsView } from "./views/ResultsView.js";
@@ -112,6 +114,8 @@ export function ArtifactPanel({ missionId, detail, view, revision: pickedRevisio
       <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", p: 2 }}>
         {view === "parts" ? (
           <PartsView missionId={missionId} missionParts={detail.mission.inventory} revision={n} />
+        ) : view === "bench" && DEMO ? (
+          <DemoNote>{DEMO_NOTES.bench}</DemoNote>
         ) : view === "bench" ? (
           <Suspense fallback={<LinearProgress />}>
             <BenchView missionId={missionId} />

@@ -1,0 +1,856 @@
+{
+  "version": 1,
+  "missionId": "e45466e6-032c-4325-b85f-906d54e6211c",
+  "entries": {
+    "/api/auth/get-session": {
+      "file": "files/982b6a2c23fef536",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/catalog": {
+      "file": "files/fadf17449530b5e8",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/connections": {
+      "file": "files/0d497425792b1626",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/connections/imessage/settings": {
+      "file": "files/567b2d1f38095a4d",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/inventory": {
+      "file": "files/caa92167223d4645",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/inventory/hardware": {
+      "file": "files/908f0023acdb1f52",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/lan/devices": {
+      "file": "files/1d8309bddfe16568",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/me": {
+      "file": "files/9d0546e5bc40f03f",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions": {
+      "file": "files/8c6e17ea052d4a9e",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c": {
+      "file": "files/52630abf44db1050",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/bench/requests": {
+      "file": "files/104ea6588d5efeec",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build": {
+      "file": "files/31b4a93969aa05b1",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/breadboard.svg?v=5e1c86682caf": {
+      "file": "files/a72dcd3e770289d2",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/schematic.svg?v=5e1c86682caf": {
+      "file": "files/9b611ab7554f9134",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/1.svg?v=5e1c86682caf": {
+      "file": "files/8499dad53c1c532a",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/10.svg?v=5e1c86682caf": {
+      "file": "files/18b0159951991b38",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/11.svg?v=5e1c86682caf": {
+      "file": "files/336f74e298492784",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/12.svg?v=5e1c86682caf": {
+      "file": "files/81a7bab7dee97389",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/13.svg?v=5e1c86682caf": {
+      "file": "files/aa5e1d3a293eadaa",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/14.svg?v=5e1c86682caf": {
+      "file": "files/b2ffeebe9950b330",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/15.svg?v=5e1c86682caf": {
+      "file": "files/f8d2446203d66d14",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/16.svg?v=5e1c86682caf": {
+      "file": "files/bc84a4eb3aa5a53a",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/17.svg?v=5e1c86682caf": {
+      "file": "files/3dd6b81ee1c3966d",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/18.svg?v=5e1c86682caf": {
+      "file": "files/96300eb0de941e9f",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/2.svg?v=5e1c86682caf": {
+      "file": "files/bc3e7a4f10f7b499",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/3.svg?v=5e1c86682caf": {
+      "file": "files/59c9cf61d7d81a8c",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/4.svg?v=5e1c86682caf": {
+      "file": "files/661c00e6aae3d813",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/5.svg?v=5e1c86682caf": {
+      "file": "files/9dbe7ee065cca713",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/6.svg?v=5e1c86682caf": {
+      "file": "files/faeba1640aee3b0b",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/7.svg?v=5e1c86682caf": {
+      "file": "files/d6ca8fcafb0d172b",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/8.svg?v=5e1c86682caf": {
+      "file": "files/3463b77e8a291691",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/build/steps/9.svg?v=5e1c86682caf": {
+      "file": "files/a9f5f16534203940",
+      "type": "image/svg+xml; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/chat": {
+      "file": "files/8bea5f81e053080d",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/project": {
+      "file": "files/0ac725846df44d1f",
+      "type": "application/zip",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions": {
+      "file": "files/5cf5367576622397",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1": {
+      "file": "files/cde1ff42ca021cb8",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/app.hex": {
+      "file": "files/ec0be67b581a461f",
+      "type": "text/plain",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/bench.hex": {
+      "file": "files/e8d93ddec8019fe0",
+      "type": "text/plain",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/breadboard.svg": {
+      "file": "files/8a70b0800a512cef",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/faults.json": {
+      "file": "files/d696829f7aab68d0",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/schematic.png": {
+      "file": "files/5b3ced38f4d03783",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/schematic.svg": {
+      "file": "files/3df23c5503eb5abd",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-1-focus.png": {
+      "file": "files/c2ef801d1010345e",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-1.png": {
+      "file": "files/13be83404ddd883f",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-1.svg": {
+      "file": "files/04db2c0f3c5c1aba",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-10-focus.png": {
+      "file": "files/b5d6f070c7aeb017",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-10.png": {
+      "file": "files/03c8b4792c1d6ff1",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-10.svg": {
+      "file": "files/f3d59a8af5e7e16e",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-11-focus.png": {
+      "file": "files/b1e6399e8eadd730",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-11.png": {
+      "file": "files/bb77eb7fcca1d209",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-11.svg": {
+      "file": "files/307496fc81ae7d15",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-12-focus.png": {
+      "file": "files/ed583ad41ea9198f",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-12.png": {
+      "file": "files/c9f3d33475ae8605",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-12.svg": {
+      "file": "files/799bf96f9beec827",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-13-focus.png": {
+      "file": "files/be3a2cb160143e98",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-13.png": {
+      "file": "files/3c565763b9431cef",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-13.svg": {
+      "file": "files/9baa1b4420cdba22",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-14-focus.png": {
+      "file": "files/f2283a85ff918b20",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-14.png": {
+      "file": "files/0e55371250002420",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-14.svg": {
+      "file": "files/c43b5fcdc7db69a5",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-15-focus.png": {
+      "file": "files/5c627b29d28c5093",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-15.png": {
+      "file": "files/ea16e612123e4d44",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-15.svg": {
+      "file": "files/619a4047d4dd9e1c",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-16-focus.png": {
+      "file": "files/bf904524812383ca",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-16.png": {
+      "file": "files/c448a78e68d75d9d",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-16.svg": {
+      "file": "files/67444f3ad135028e",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-17-focus.png": {
+      "file": "files/d29625067569214e",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-17.png": {
+      "file": "files/bddef383a5af372c",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-17.svg": {
+      "file": "files/7f27146c5a2d71be",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-18-focus.png": {
+      "file": "files/b8b38bccfbc6f1be",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-18.png": {
+      "file": "files/16557d46bf59fd5c",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-18.svg": {
+      "file": "files/95c5be505ffe778a",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-2-focus.png": {
+      "file": "files/657d405773c6007f",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-2.png": {
+      "file": "files/a12994544cd9160a",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-2.svg": {
+      "file": "files/a0905339efed22a8",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-3-focus.png": {
+      "file": "files/60d5d0d5b7d85f27",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-3.png": {
+      "file": "files/f4ee480517efefb1",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-3.svg": {
+      "file": "files/03557237b438c6fd",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-4-focus.png": {
+      "file": "files/71133b213a33da35",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-4.png": {
+      "file": "files/eb6b112290b6fe5e",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-4.svg": {
+      "file": "files/add83f4c0e36a7c3",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-5-focus.png": {
+      "file": "files/01c36109bce3ad8e",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-5.png": {
+      "file": "files/090a7040940f598d",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-5.svg": {
+      "file": "files/256e28c5a8683c84",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-6-focus.png": {
+      "file": "files/126125ca2b1eb81c",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-6.png": {
+      "file": "files/9a563acdd93d1a00",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-6.svg": {
+      "file": "files/4c36afc24c32e992",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-7-focus.png": {
+      "file": "files/dcc716b92db8652a",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-7.png": {
+      "file": "files/e8ab0e783122a49c",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-7.svg": {
+      "file": "files/128091a09b2d41ff",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-8-focus.png": {
+      "file": "files/4d19aab9cc66647f",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-8.png": {
+      "file": "files/6c973d08bf16a741",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-8.svg": {
+      "file": "files/773aebeab1788bd3",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-9-focus.png": {
+      "file": "files/e50efc7bb9a2f50d",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-9.png": {
+      "file": "files/4b03c3817086ad97",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/1/artifacts/step-9.svg": {
+      "file": "files/f32b2d6b71be45b8",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2": {
+      "file": "files/59e850fecf44b191",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/app.hex": {
+      "file": "files/cc77f22c57da9db9",
+      "type": "text/plain",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/bench.hex": {
+      "file": "files/23d66f753035286b",
+      "type": "text/plain",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/breadboard.svg": {
+      "file": "files/bd570d060808745b",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/faults.json": {
+      "file": "files/4ed7db9fd7adaea7",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/schematic.png": {
+      "file": "files/7493a7dbd7b625d5",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/schematic.svg": {
+      "file": "files/4ec3349a47b6e53c",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-1-focus.png": {
+      "file": "files/c1dcb031e1df2270",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-1.png": {
+      "file": "files/25267b6f7d1d8dbb",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-1.svg": {
+      "file": "files/a96bc8c1e2776ebb",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-10-focus.png": {
+      "file": "files/af58d62c73f94e56",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-10.png": {
+      "file": "files/a98a4e058b464ed7",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-10.svg": {
+      "file": "files/47bde15bbb7b06b0",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-11-focus.png": {
+      "file": "files/298ab6a18604e04e",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-11.png": {
+      "file": "files/1b5cb1bd3e22ccc5",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-11.svg": {
+      "file": "files/7900e01c069fdb57",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-12-focus.png": {
+      "file": "files/c28c302c5e20dec1",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-12.png": {
+      "file": "files/755508b21c815835",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-12.svg": {
+      "file": "files/37e96d00dd865592",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-13-focus.png": {
+      "file": "files/ac0ad99ba3d5aa8f",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-13.png": {
+      "file": "files/6e16e4397011ab6e",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-13.svg": {
+      "file": "files/becd1368b6f42bb9",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-14-focus.png": {
+      "file": "files/2df63efd1fe18bac",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-14.png": {
+      "file": "files/13a662a9389f1be5",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-14.svg": {
+      "file": "files/09bc942ef6ad58f6",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-15-focus.png": {
+      "file": "files/5bc7665523860eed",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-15.png": {
+      "file": "files/1b7b003bf0eb07cf",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-15.svg": {
+      "file": "files/52cf4ef39ee24d55",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-16-focus.png": {
+      "file": "files/5e97e45182a90868",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-16.png": {
+      "file": "files/4d96332af90aec47",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-16.svg": {
+      "file": "files/da19f98f8b8e8053",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-17-focus.png": {
+      "file": "files/041676f5ea2013cb",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-17.png": {
+      "file": "files/382d3bb7b6468c90",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-17.svg": {
+      "file": "files/f2ccaf1a7acb9475",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-18-focus.png": {
+      "file": "files/eb3b6d3efd183a58",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-18.png": {
+      "file": "files/626c5d1d08e2b05f",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-18.svg": {
+      "file": "files/f315349a4d12c4d1",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-2-focus.png": {
+      "file": "files/300d313ae18a2870",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-2.png": {
+      "file": "files/0e3284cb6f851425",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-2.svg": {
+      "file": "files/6ab4b10f5c795d16",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-3-focus.png": {
+      "file": "files/8e1e83c4b7e8e2a8",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-3.png": {
+      "file": "files/1fccaafeaaa62aeb",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-3.svg": {
+      "file": "files/928129f0e6a233f6",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-4-focus.png": {
+      "file": "files/60addb9aac018eb8",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-4.png": {
+      "file": "files/d76ab2dae6d13e80",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-4.svg": {
+      "file": "files/4b858861da6b4555",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-5-focus.png": {
+      "file": "files/58c49536f7aa3982",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-5.png": {
+      "file": "files/9a6ce6a3c421811c",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-5.svg": {
+      "file": "files/06a9e4cd3c4701fe",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-6-focus.png": {
+      "file": "files/abfada63e14bf288",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-6.png": {
+      "file": "files/bf09f2aacdd9a258",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-6.svg": {
+      "file": "files/a520aeb13b041f13",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-7-focus.png": {
+      "file": "files/c897d37d668c932a",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-7.png": {
+      "file": "files/8674d4999191c84f",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-7.svg": {
+      "file": "files/985c923bb2c90a35",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-8-focus.png": {
+      "file": "files/c66d87f83caf69cd",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-8.png": {
+      "file": "files/4a7cb003efafe101",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-8.svg": {
+      "file": "files/9f7a951f22f62392",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-9-focus.png": {
+      "file": "files/cee63894286fc98c",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-9.png": {
+      "file": "files/d69235737e1cd110",
+      "type": "image/png",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/step-9.svg": {
+      "file": "files/df9e4fc000d75332",
+      "type": "image/svg+xml",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/trace-T1.json": {
+      "file": "files/93bb1d37fd56e7d1",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/trace-T2.json": {
+      "file": "files/07332768826e12cf",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/trace-T3.json": {
+      "file": "files/1d37ce19927c19e4",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/trace-T4.json": {
+      "file": "files/debf262a5559a476",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/trace-T5.json": {
+      "file": "files/91eb323f11549523",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/trace-T6.json": {
+      "file": "files/cfa0d6f65e692d7d",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/trace-T7.json": {
+      "file": "files/c0a13f5c9a5db55a",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/revisions/2/artifacts/trace-T8.json": {
+      "file": "files/d0b8dfd006f42c62",
+      "type": "application/json",
+      "status": 200
+    },
+    "/api/missions/e45466e6-032c-4325-b85f-906d54e6211c/timeline": {
+      "file": "files/51c932d28e5b4f99",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/modules": {
+      "file": "files/55056bf1ec7e1bff",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/oauth/providers": {
+      "file": "files/e939e3b10899bbe3",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/phone/missions": {
+      "file": "files/cd4bbb41ab3b7e2b",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    },
+    "/api/version": {
+      "file": "files/5694bd8f8cc07635",
+      "type": "application/json; charset=utf-8",
+      "status": 200
+    }
+  }
+}

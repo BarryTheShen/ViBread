@@ -8,6 +8,11 @@ reads LOW even with the button released — its leg shares row 17 with the GND j
 
 **New here? Read [HOW-IT-WORKS.md](HOW-IT-WORKS.md)** — what the app does, step by step, in plain words.
 
+**Try it without installing: [barrytheshen.github.io/ViBread](https://barrytheshen.github.io/ViBread/)**, a read-only
+demo of one recorded project (Moon-Phase Lamp): the design chat, schematic, tests, checks and build steps, and Try it
+running the real sketch in your browser. No Arduino or sign-in needed. It is built with `npm run build:demo -w
+@vibread/web` from recorded server responses (`scripts/capture-demo.mjs` → `apps/web/public/demo-data/`).
+
 Built for the HackWashU Fall Build Challenge (Sep 25–27, 2026; theme "Fly Me to the Moon"). The full plan is in
 [PLAN.md](PLAN.md); research and hands-on library audits are in [research/](research/).
 

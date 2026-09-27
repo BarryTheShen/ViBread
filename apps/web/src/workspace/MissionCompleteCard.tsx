@@ -14,6 +14,8 @@ import { useMemo } from "react";
 import { Link as RouterLink } from "react-router";
 import { HttpError } from "../api/client.js";
 import { useConfirmMission, useRevision } from "../api/hooks.js";
+import { DEMO, DEMO_NOTES } from "../demo/demo.js";
+import { DemoNote } from "../demo/DemoBanner.js";
 import { benchPanelPath } from "./panelUrl.js";
 
 function focusComposer(): void {
@@ -131,14 +133,18 @@ export function MissionCompleteCard({
       <Typography variant="body2" sx={{ color: "text.secondary", mb: 1.5 }}>
         Try it for real: your sketch is running on the board now.
       </Typography>
-      <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
-        <Button variant="contained" color="success" disabled={confirm.isPending} onClick={() => confirm.mutate()}>
-          {confirm.isPending ? "Saving…" : "Yes — mission complete"}
-        </Button>
-        <Button variant="outlined" onClick={onTellAgent}>
-          Not quite — tell the agent
-        </Button>
-      </Stack>
+      {DEMO ? (
+        <DemoNote>{DEMO_NOTES.readOnly}</DemoNote>
+      ) : (
+        <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
+          <Button variant="contained" color="success" disabled={confirm.isPending} onClick={() => confirm.mutate()}>
+            {confirm.isPending ? "Saving…" : "Yes — mission complete"}
+          </Button>
+          <Button variant="outlined" onClick={onTellAgent}>
+            Not quite — tell the agent
+          </Button>
+        </Stack>
+      )}
       {confirm.isError &&
         (confirm.error instanceof HttpError && BENCH_BLOCKERS[confirm.error.code] ? (
           // The server wants a (passing) real bench run first: say so, with its own words, and point at the bench.

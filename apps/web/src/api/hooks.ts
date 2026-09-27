@@ -1,6 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CreateMissionRequest } from "@vibread/core";
 import { api, getJson, getText, HttpError, sendJson } from "./client.js";
+import { DEMO, appPath } from "../demo/demo.js";
 
 export const queryKeys = {
   me: ["me"] as const,
@@ -178,7 +179,9 @@ export function usePhoneBuildLink(missionId: string): string {
   // Read defensively: servers without LAN pairing (and the core type until it lands) don't send the field.
   const pair = typeof data === "object" && data !== null && "phonePairQuery" in data && typeof data.phonePairQuery === "string" ? data.phonePairQuery : "";
   const query = pair.replace(/^\?/, "");
-  return `${origin}/b/${encodeURIComponent(missionId)}${query ? `?${query}` : ""}`;
+  // The demo is one public site: its phone link is this page's own address, never a recorded LAN one.
+  if (DEMO) return `${window.location.origin}${appPath(`/b/${encodeURIComponent(missionId)}`)}`;
+  return `${origin}${appPath(`/b/${encodeURIComponent(missionId)}`)}${query ? `?${query}` : ""}`;
 }
 
 /** A phone paired over the LAN (GET /api/lan/devices; answered only on the laptop itself). */

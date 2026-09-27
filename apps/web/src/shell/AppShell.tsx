@@ -3,6 +3,7 @@ import useMediaQuery from "@mui/material/useMediaQuery";
 import { useEffect, useState } from "react";
 import { Outlet, useLocation } from "react-router";
 import { Sidebar, useSidebarCollapsed } from "./Sidebar.js";
+import { DEMO } from "../demo/demo.js";
 
 /** The desktop shell: a persistent mission navigator and a non-scrolling viewport for each page's own layout. */
 export default function AppShell() {
@@ -16,7 +17,7 @@ export default function AppShell() {
   useEffect(() => setPhoneOpen(false), [pathname]);
   const railOnly = phone ? !phoneOpen : collapsed;
   return (
-    <Box sx={{ display: "flex", width: "100%", height: "100dvh", minHeight: 0, overflow: "hidden", bgcolor: "background.default" }}>
+    <Box sx={{ display: "flex", width: "100%", height: DEMO ? "100%" : "100dvh", minHeight: 0, overflow: "hidden", bgcolor: "background.default" }}>
       <Sidebar collapsed={railOnly} onToggle={() => (phone ? setPhoneOpen(!phoneOpen) : setCollapsed(!collapsed))} />
       <Box component="main" sx={{ flex: 1, minWidth: 0, minHeight: 0, height: "100%", overflow: "auto", display: "flex", flexDirection: "column" }}>
         <Outlet />

@@ -11,6 +11,7 @@ import type { RevisionDetail } from "@vibread/core";
 import { useState } from "react";
 import { SINGLE_FILES, bundlePlan, buildZip, otherFiles, saveFile, sketchName, stepPictureCount, type BundleKind } from "./downloads.js";
 import { downloadProject } from "../project/projectFile.js";
+import { DEMO } from "../demo/demo.js";
 
 /** The panel's ⤓ menu for one design version: sketch and "Everything" first, then single files, then grouped zips. */
 export function DownloadMenu({ missionId, revision, missionTitle }: { missionId: string; revision: RevisionDetail; missionTitle: string }) {
@@ -54,6 +55,29 @@ export function DownloadMenu({ missionId, revision, missionTitle }: { missionId:
     }
   };
 
+  // The demo answers /api from a service worker, which a download link's navigation never reaches: fetch, then save.
+  const downloadSingle = async (file: (typeof SINGLE_FILES)[number]) => {
+    try {
+      const response = await fetch(revision.artifactUrls[file.key], { credentials: "same-origin" });
+      if (!response.ok) throw new Error(`${file.label} couldn't be loaded (${response.status})`);
+      saveFile(await response.blob(), `${name}-r${revision.n}${file.suffix}`, response.headers.get("Content-Type") ?? "application/octet-stream");
+      setAnchor(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const singleRow = (f: (typeof SINGLE_FILES)[number]) =>
+    DEMO ? (
+      <MenuItem key={f.key} disabled={busy !== null} onClick={() => void downloadSingle(f)}>
+        {f.label}
+      </MenuItem>
+    ) : (
+      <MenuItem key={f.key} component="a" href={revision.artifactUrls[f.key]} download={`${name}-r${revision.n}${f.suffix}`} onClick={() => setAnchor(null)}>
+        {f.label}
+      </MenuItem>
+    );
+
   const zipRow = (kind: BundleKind, primary: string, secondary: string) => (
     <MenuItem disabled={busy !== null} onClick={() => void downloadZip(kind)}>
       <ListItemText primary={busy === kind ? "Preparing the zip…" : primary} secondary={secondary} />
@@ -85,19 +109,11 @@ export function DownloadMenu({ missionId, revision, missionTitle }: { missionId:
         {singles.some((f) => f.group === "Compiled") && <ListSubheader>Compiled</ListSubheader>}
         {singles
           .filter((f) => f.group === "Compiled")
-          .map((f) => (
-            <MenuItem key={f.key} component="a" href={revision.artifactUrls[f.key]} download={`${name}-r${revision.n}${f.suffix}`} onClick={() => setAnchor(null)}>
-              {f.label}
-            </MenuItem>
-          ))}
+          .map(singleRow)}
         {(singles.some((f) => f.group === "Pictures") || steps > 0) && <ListSubheader>Pictures</ListSubheader>}
         {singles
           .filter((f) => f.group === "Pictures")
-          .map((f) => (
-            <MenuItem key={f.key} component="a" href={revision.artifactUrls[f.key]} download={`${name}-r${revision.n}${f.suffix}`} onClick={() => setAnchor(null)}>
-              {f.label}
-            </MenuItem>
-          ))}
+          .map(singleRow)}
         {steps > 0 && zipRow("steps", `All ${steps} step pictures (.zip)`, "One picture per build step")}
         {others > 0 && <ListSubheader>For troubleshooting</ListSubheader>}
         {others > 0 && zipRow("other", `Simulation traces and reports (.zip)`, `${others} file${others === 1 ? "" : "s"}`)}
