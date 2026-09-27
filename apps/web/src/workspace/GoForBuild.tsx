@@ -15,35 +15,11 @@ import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import type { MissionDetail } from "@vibread/core";
-import { CONSOLE_LABELS } from "@vibread/core";
 import { useState } from "react";
 import { HttpError } from "../api/client.js";
 import { useConnections, useRelease } from "../api/hooks.js";
 import { releaseReadiness } from "./nextStep.js";
-const OVERRIDE_CODES: Record<string, true> = { not_all_go: true, tests_missing: true, retro_no_go: true, retro_missing: true };
-
-function overrideReasons(detail: MissionDetail, error: HttpError | undefined): string[] {
-  const reasons: string[] = [];
-  if (error?.code === "tests_missing") reasons.push("Simulation tests (FIDO) not written");
-  const serverFidoDetails = (error?.message.match(/(?:failed scenarios|set-aside tests \(warnings only\)):[^.;]+/g) ?? []).join("; ");
-  for (const report of detail.consoles) {
-    if (report.verdict === "GO") continue;
-    const ids = (ruleId?: string) => [...new Set(report.findings.filter((finding) => (ruleId ? finding.ruleId === ruleId : finding.severity === "error")).flatMap((finding) => finding.refs?.scenarios ?? []))];
-    const failing = ids();
-    const setAside = ids("TEST-SET-ASIDE");
-    const found = [...(failing.length > 0 ? [`failing scenarios: ${failing.join(", ")}`] : []), ...(setAside.length > 0 ? [`set-aside tests (warnings only): ${setAside.join(", ")}`] : [])].join("; ");
-    const details = found || (report.console === "FIDO" ? serverFidoDetails : "");
-    const suffix = report.console === "FIDO" && details ? ` — ${details}` : "";
-    if (report.console === "FIDO" && error?.code === "tests_missing") continue;
-    reasons.push(`${CONSOLE_LABELS[report.console]} (${report.console}) ${report.verdict}${suffix}`);
-  }
-  const retro = detail.consoles.find((report) => report.console === "RETRO");
-  if (error?.code === "retro_missing" && retro?.verdict !== "GO") reasons.push("independent review not run");
-  if (error?.code === "retro_no_go" && retro?.verdict === "NO-GO" && !reasons.some((reason) => reason.startsWith("Independent review"))) {
-    reasons.push(`Independent review (RETRO) NO-GO${retro.summary ? ` — ${retro.summary}` : ""}`);
-  }
-  return reasons.length > 0 ? reasons : [error?.message ?? "The release safety gate refused this revision."];
-}
+import { OVERRIDE_CODES, overrideReasons } from "./overrideReasons.js";
 
 /**
  * The header's "GO for build" (the Flight Director's release of a revision as the build target). Same rules as before:
@@ -60,8 +36,7 @@ export function GoForBuildButton({ missionId, detail, onReleased }: { missionId:
   const [understood, setUnderstood] = useState(false);
   const state = releaseReadiness(detail);
   const releaseError = release.error instanceof HttpError ? release.error : undefined;
-  const overrideError = releaseError ?? (confirmOpen && state.retroMissing ? new HttpError(409, "retro_missing", "The independent review hasn't voted GO yet.") : undefined);
-  const bypassed = overrideReasons(detail, overrideError);
+  const bypassed = overrideReasons(detail, releaseError);
 
   const openOverride = () => {
     setConfirmOpen(false);
@@ -154,7 +129,8 @@ export function GoForBuildButton({ missionId, detail, onReleased }: { missionId:
             Nothing touches your board yet: you'll build it step by step, and the bench self-test checks the real wiring.
           </Typography>
         </DialogContent>
-        <DialogActions>
+        {/* Three actions don't fit one row in a small dialog: wrap whole buttons, never their labels ("Not / yet"). */}
+        <DialogActions sx={{ flexWrap: "wrap", gap: 1, "& > :not(style) ~ :not(style)": { ml: 0 }, "& .MuiButton-root": { whiteSpace: "nowrap" } }}>
           <Button onClick={() => setConfirmOpen(false)}>Not yet</Button>
           <Button color="error" variant="outlined" onClick={openOverride}>Override — I know what I'm doing</Button>
           <Button variant="contained" disabled={release.isPending} onClick={() => go(true)}>
@@ -166,7 +142,7 @@ export function GoForBuildButton({ missionId, detail, onReleased }: { missionId:
         <DialogTitle>Override GO for build?</DialogTitle>
         <DialogContent dividers>
           <Typography sx={{ mb: 1 }}>You are choosing to bypass exactly these checks:</Typography>
-          <List dense disablePadding sx={{ mb: 1 }}>
+          <List dense disablePadding sx={{ mb: 1, listStyleType: "disc" }}>
             {bypassed.map((item) => <ListItem key={item} disableGutters sx={{ display: "list-item", ml: 2 }}>{item}</ListItem>)}
           </List>
           {releaseError && <Alert severity="warning" sx={{ mb: 1.5 }}>Server gate: {releaseError.message}</Alert>}

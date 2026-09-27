@@ -1072,7 +1072,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
             <Stack spacing={2} useFlexGap sx={{ justifyContent: "space-between", flexDirection: "column", [WIDE_PANEL]: { flexDirection: "row", alignItems: "center" } }}>
               <Box>
                 <Typography variant="h5" sx={{ fontWeight: 700 }}>Choose your bench</Typography>
-                <Typography color="text.secondary" sx={{ mt: 0.5 }}>Physical actions stay behind an explicit click in this page. "Try without a board" runs the same self-test on a simulated Arduino, so you can practise before plugging anything in.</Typography>
+                <Typography color="text.secondary" sx={{ mt: 0.5 }}>Nothing is sent to a real board until you click a button here. "Try without a board" runs the same self-test on a simulated Arduino, so you can practise before plugging anything in.</Typography>
               </Box>
               <Stack direction="row" spacing={1} useFlexGap sx={{ flexShrink: 0, flexWrap: "wrap" }}>
                 <Button variant={mode === "virtual" ? "contained" : "outlined"} onClick={() => void switchMode("virtual")} disabled={Boolean(busy)} sx={{ ...actionButtonSx, whiteSpace: "nowrap" }}>Try without a board</Button>
@@ -1162,7 +1162,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
               )}
               <Stack direction={{ xs: "column", sm: "row" }} spacing={2} useFlexGap sx={{ mt: 2, alignItems: { sm: "center" }, flexWrap: "wrap" }}>
                 {mode === "physical" && native.ports && <Button variant="contained" onClick={() => void flashNativeFirmware("bench")} disabled={Boolean(busy) || activeStep !== 1 || !native.port} sx={actionButtonSx}>{busy === "native:bench" ? "Flashing with avrdude…" : "Flash with ViBread's uploader (avrdude)"}</Button>}
-                <Button variant={mode === "physical" && native.ports ? "outlined" : "contained"} onClick={() => void flashSafe()} disabled={Boolean(busy) || activeStep !== 1} sx={actionButtonSx}>{mode === "virtual" ? "Skip flash · load virtual HEX" : native.ports ? "Flash in the browser (Web Serial)" : "Flash safe firmware"}</Button>
+                <Button variant={mode === "physical" && native.ports ? "outlined" : "contained"} onClick={() => void flashSafe()} disabled={Boolean(busy) || activeStep !== 1} sx={actionButtonSx}>{mode === "virtual" ? "Load the safe firmware (virtual board)" : native.ports ? "Flash in the browser (Web Serial)" : "Flash safe firmware"}</Button>
                 {busy?.startsWith("native:") && <Box sx={{ minWidth: 230 }}><Typography variant="body2" color="text.secondary">Uploading to {native.port} with avrdude…</Typography><LinearProgress /></Box>}
                 {flashProgress && !busy?.startsWith("native:") && <Box sx={{ minWidth: 230 }}><Typography variant="body2" color="text.secondary">{progressText(flashProgress)}</Typography><LinearProgress variant="determinate" value={flashProgress.percent} /></Box>}
               </Stack>
@@ -1188,7 +1188,7 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
               <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 3 · Check board power</Typography>
               <Typography color="text.secondary" sx={{ mt: 0.5 }}>This confirms the Arduino board is powered (VCC ≈ 5 V). The breadboard rails get tested by the part checks that follow.</Typography>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
-                <Chip label={runnerState?.seenHello ? `Banner: ${runnerState.seenHello.design}` : "Waiting for hello banner"} color={runnerState?.seenHello ? "success" : "default"} />
+                <Chip label={runnerState?.seenHello ? `Board answered · design ${runnerState.seenHello.design}` : "Waiting for the board to answer"} color={runnerState?.seenHello ? "success" : "default"} />
                 <Chip label={runnerState?.seenVcc ? `VCC ${runnerState.seenVcc.mv} mV` : "Waiting for VCC"} color={runnerState?.seenVcc ? "success" : "default"} />
               </Stack>
               <Button variant="contained" onClick={() => void startRail()} disabled={Boolean(busy) || activeStep !== 2} sx={{ ...actionButtonSx, mt: 2 }}>{busy === "rail" ? "Checking…" : "Check board power"}</Button>
@@ -1276,8 +1276,13 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
         )}
         {activeStep >= 6 && (
           <Paper sx={{ p: { xs: 3, md: 6 }, textAlign: "center", overflow: "hidden", position: "relative", "@keyframes vb-liftoff": { from: { transform: "translateY(20px)", opacity: 0 }, to: { transform: "translateY(0)", opacity: 1 } }, animation: reducedMotion ? "none" : "vb-liftoff .8s ease-out" }}>
-            <Typography variant="h2" sx={{ fontWeight: 900 }}>Mission verified</Typography>
-            <Typography variant="h6" color="text.secondary" sx={{ mt: 1 }}>The bench telemetry agrees with the design. ViBread is GO for launch.</Typography>
+            {/* A virtual pass is practice: the mission is verified only by the real board (the header then asks for it). */}
+            <Typography variant="h2" sx={{ fontWeight: 900 }}>{mode === "virtual" ? "Practice run passed" : "Mission verified"}</Typography>
+            <Typography variant="h6" color="text.secondary" sx={{ mt: 1 }}>
+              {mode === "virtual"
+                ? "The virtual board passed the same self-test your real board will run. Build it, then test it with your Arduino to verify the mission."
+                : "The bench telemetry agrees with the design. ViBread is GO for launch."}
+            </Typography>
             {mode === "physical" && hasLightSensor && appCalibration === "default" && <Alert severity="warning" sx={{ mt: 2, textAlign: "left" }}>App firmware is running with default light-sensor calibration. No accepted real-board calibration was available, so retest the light sensor on the assembled board before relying on its threshold.</Alert>}
             {mode === "virtual" && <><Typography variant="body2" sx={{ mt: 2 }}>Your project firmware is running on the virtual board.</Typography><DecoratedBoard svg={loaded.boardSvg} highlight={highlight} telemetry={telemetry} sx={{ maxWidth: 720, mx: "auto", mt: 2, "& svg": { display: "block", width: "100%", height: "auto" } }} /></>}
           </Paper>

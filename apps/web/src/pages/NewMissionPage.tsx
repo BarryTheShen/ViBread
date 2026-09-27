@@ -6,7 +6,7 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import { useEffect, useRef, useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router";
-import { useCreateMission } from "../api/hooks.js";
+import { useConnections, useCreateMission } from "../api/hooks.js";
 import { useInventory } from "../api/inventory.js";
 import { Composer } from "../chat/Composer.js";
 import { CHAT_MAX_WIDTH } from "../chat/MissionChat.js";
@@ -36,6 +36,8 @@ export default function NewMissionPage() {
   const navigate = useNavigate();
   const create = useCreateMission();
   const inventory = useInventory();
+  const connections = useConnections();
+  const claudeMissing = connections.data?.claude.using === "none";
   // The draft survives a sign-in round trip (Sign in → provider → back here): kept in this tab's sessionStorage.
   const [brief, setBrief] = useState(() => sessionStorage.getItem(DRAFT_BRIEF) ?? "");
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -87,6 +89,20 @@ export default function NewMissionPage() {
                 Couldn't start the mission: {create.error.message}
               </Alert>
             </ErrorOrSignIn>
+          )}
+          {claudeMissing && (
+            // Said before sending: otherwise the first thing a new maker sees is a mission whose only reply is an error.
+            <Alert
+              severity="info"
+              sx={{ mt: 1.5 }}
+              action={
+                <Button component={RouterLink} to="/settings" color="inherit" size="small">
+                  Connect
+                </Button>
+              }
+            >
+              Claude isn't connected yet, so it can't design a new mission. Connect it in Settings, or open a ready-made mission in the sidebar to try the checks, simulator and build steps.
+            </Alert>
           )}
           <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap", justifyContent: "center", mt: 2 }} aria-label="Ideas to start from">
             {SUGGESTIONS.map((s) => (

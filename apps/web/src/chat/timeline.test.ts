@@ -51,6 +51,11 @@ describe("groupTimeline", () => {
     expect(describeItem(items[3])).toMatchObject({ title: "Photo check · step 3", view: "photos" });
   });
 
+  it("hides a run that couldn't start: its reason is already Claude's saved reply in the chat", () => {
+    const items = groupTimeline([report(1, 1, "EECOM", "GO"), ev("agent.error", 2, { text: "Claude is not connected" }), ev("revision.released", 3, { revision: 1 })]);
+    expect(items.map((i) => i.events.map((e) => e.kind))).toEqual([["console.report"], ["revision.released"]]);
+  });
+
   it("words gaps in step ranges and counts a console that reported twice once", () => {
     const [steps] = groupTimeline([step(1, 1), step(2, 2), step(3, 4)]);
     expect(describeItem(steps).title).toBe("Steps 1–2, 4 done");

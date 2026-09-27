@@ -12,6 +12,14 @@ export function isStoppedReply(metadata: unknown): boolean {
   return isRecord(metadata) && isRecord(metadata.vibread) && metadata.vibread.stopped === true;
 }
 
+/**
+ * Mark on the reply the server saves when a run couldn't start (`metadata.vibread.error`, e.g. Claude not connected):
+ * its text is the reason, so it is shown as the error itself, never next to a second copy of it.
+ */
+export function isErrorReply(metadata: unknown): boolean {
+  return isRecord(metadata) && isRecord(metadata.vibread) && metadata.vibread.error === true;
+}
+
 /** One-line result the agent tools always include (`{ summary }`). */
 export function toolSummaryOf(output: unknown): string | undefined {
   return isRecord(output) && typeof output.summary === "string" ? output.summary : undefined;

@@ -36,7 +36,7 @@ import { createMissionTransport, fetchChatHistory } from "./missionTransport.js"
 import { placeTimeline, type ChatTimeline } from "./timeline.js";
 import { TimelineRows } from "./TimelineRow.js";
 import { ToolRow } from "./ToolRow.js";
-import { isStoppedReply, recordedLabelOf } from "./uiMessages.js";
+import { isErrorReply, isStoppedReply, recordedLabelOf } from "./uiMessages.js";
 
 /** Width of the conversation column (plan §3.2). */
 export const CHAT_MAX_WIDTH = 760;
@@ -216,16 +216,28 @@ function AssistantMessage() {
   const recorded = useRecordedLabel();
   const { chat, stoppedHere } = useThread();
   const id = useAuiState((s) => s.message.id);
-  const stopped = stoppedHere.has(id) || isStoppedReply(chat.messages.find((m) => m.id === id)?.metadata);
+  const metadata = chat.messages.find((m) => m.id === id)?.metadata;
+  const stopped = stoppedHere.has(id) || isStoppedReply(metadata);
+  // The server's saved "couldn't start" reply is the error: one alert, not its text plus the send error's copy of it.
+  const failedStart = isErrorReply(metadata);
+  const parts = (
+    <MessagePrimitive.GroupedParts groupBy={groupTools} indicator="empty">
+      {renderAssistantPart}
+    </MessagePrimitive.GroupedParts>
+  );
   return (
     <MessagePrimitive.Root>
       <Box sx={{ my: 1.5 }} data-role="assistant">
         <Typography variant="caption" sx={{ color: "text.secondary", fontFamily: INTER_FONT, px: 0 }}>
           Claude
         </Typography>
-        <MessagePrimitive.GroupedParts groupBy={groupTools} indicator="empty">
-          {renderAssistantPart}
-        </MessagePrimitive.GroupedParts>
+        {failedStart ? (
+          <Alert severity="error" sx={{ mt: 0.5, "& p": { m: 0 } }}>
+            {parts}
+          </Alert>
+        ) : (
+          parts
+        )}
         {stopped && (
           <Stack direction="row" sx={{ alignItems: "center", gap: 0.5, mt: 0.5, color: "text.secondary", fontFamily: INTER_FONT }}>
             <StopCircleOutlinedIcon sx={{ fontSize: 16 }} />
@@ -234,9 +246,11 @@ function AssistantMessage() {
             </Typography>
           </Stack>
         )}
-        <MessagePrimitive.Error>
-          <MessageErrorText />
-        </MessagePrimitive.Error>
+        {!failedStart && (
+          <MessagePrimitive.Error>
+            <MessageErrorText />
+          </MessagePrimitive.Error>
+        )}
         {recorded && (
           <Box sx={{ mt: 0.5 }}>
             <RecordedChip label={recorded} />

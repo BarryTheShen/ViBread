@@ -50,6 +50,8 @@ const HIDDEN_KINDS: Record<string, true> = {
   "agent.asked": true,
   "agent.ask.answered": true,
   "agent.run.finished": true,
+  // A run that couldn't start: the server saves the reason as Claude's reply too, and the chat shows it there.
+  "agent.error": true,
 };
 
 /** Machine phase events worth a row; the rest duplicate another row (RELEASED ↔ revision.released, BUILD_STEP ↔ build.step …). */

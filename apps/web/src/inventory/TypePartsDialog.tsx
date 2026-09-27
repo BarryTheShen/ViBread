@@ -168,7 +168,7 @@ export function TypePartsDialog({ open, catalog, onClose, onSaved }: TypePartsDi
               })}
             </Stack>
           ) : null}
-          {unknownCount > 0 ? <Alert severity="warning">{unknownCount} row{unknownCount === 1 ? "" : "s"} still need a part type. Choose a type or remove the row before saving.</Alert> : null}
+          {unknownCount > 0 ? <Alert severity="warning">{unknownCount === 1 ? "1 row still needs" : `${unknownCount} rows still need`} a part type. Choose a type or remove the row before saving.</Alert> : null}
         </Stack>
       </DialogContent>
       <DialogActions>

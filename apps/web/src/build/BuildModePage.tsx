@@ -43,6 +43,7 @@ import WifiOff from "@mui/icons-material/WifiOff";
 import { useNavigate, useParams } from "react-router";
 import { StepWireChips, WireColorPicker, WireLegend, useWireColor, type WireTarget } from "../workspace/WireColors.js";
 import { checkpointChecksForRevision, checkpointChecksPass, checkpointStatusText, describeCheckpointChecks, isFullSelfTestStep, type CheckpointCheck } from "./checkpointChecks.js";
+import { RepeatChecklist } from "./RepeatChecklist.js";
 import {
   BuildApiError,
   createInventoryScan,
@@ -408,6 +409,7 @@ function StepCard({ step, total, reducedMotion, wires, checkpointChecks }: { ste
           {step.text}
         </Typography>
         {wires}
+        <RepeatChecklist key={step.n} step={step} />
 
         {step.holes.length > 0 && (
           <Box sx={{ mt: 2 }}>
