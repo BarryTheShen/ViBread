@@ -146,7 +146,7 @@ Check the install: `npm test` (~30 s; compiles firmware, runs the simulator, the
 | Schematic tab says the drawing isn't ready | Re-run `npm install` (its postinstall installs `packages/assembly/schematic-runtime`, including elkjs) |
 | Compile errors mentioning `arduino-cli` / missing core | Re-run `npm run setup:toolchain` |
 | Bench can't see the board | Use Chrome/Edge on `localhost`; try another USB cable (charge-only cables have no data); close the Arduino IDE serial monitor; on Linux add yourself to the `dialout` group |
-| Flashing from the browser fails | Copy the command the bench page shows under *Laptop fallback* (it has the right paths and board), e.g. `.toolchain/bin/arduino-cli --config-file .toolchain/arduino/arduino-cli.yaml upload --fqbn arduino:avr:uno --port <port> --input-file <hex>` |
+| Flashing from the browser fails | When the browser runs on the computer the board is plugged into (the desktop app, or `npm start` there), the bench's Step 2 offers **Flash with ViBread's uploader (avrdude)**: pick the port and the server uploads with its bundled arduino-cli, the same avrdude upload the Arduino IDE does. The uploader's lines go to Settings → Diagnostics. Otherwise copy the command under *Laptop fallback*, e.g. `.toolchain/bin/arduino-cli --config-file .toolchain/arduino/arduino-cli.yaml upload --fqbn arduino:avr:uno --port <port> --input-file <hex>` |
 | Start over with fresh demo data | Stop the server, `rm -rf data`, `npm run seed`, `npm start` |
 
 ## Inventory, interface, and diagnostics

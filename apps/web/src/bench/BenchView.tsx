@@ -43,6 +43,7 @@ import { approvalGate } from "./approval.js";
 import { MONO_FONT } from "../theme.js";
 import { SerialMonitor } from "../components/SerialMonitor.js";
 import { parseBenchQuery, testLabel } from "./query.js";
+import { nativeFlash, useBenchPorts } from "./nativeFlash.js";
 
 const STEPS = ["Connect your board", "Make it safe", "Check power", "Test each part", "Find the problem", "Run your project", "Celebrate"];
 const BOARD_LOST_POWER = "The board lost power or stopped answering when you plugged in — unplug now and check for a short between the red + and blue − rails, or a part bridging them.";
@@ -239,6 +240,13 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
   const [technicalError, setTechnicalError] = useState<string>();
   /** A failure that retrying the same step can't fix: a new flash ("Flash again") or a new port ("Choose the port again"). */
   const [errorFix, setErrorFix] = useState<"flash" | "reconnect">();
+  /** Native flashing (the ViBread server's arduino-cli/avrdude on this computer): ports, the chosen one, its output. */
+  const native = useBenchPorts(mode === "physical", connection?.port.getInfo());
+  const [nativeOutput, setNativeOutput] = useState<string>();
+  /** After a native flash the Web Serial port didn't come back: a click (a user gesture) picks it again. */
+  const [needsReconnect, setNeedsReconnect] = useState(false);
+  /** The last native flash failed: the error's retry repeats it with avrdude, not the browser flash. */
+  const [nativeFailed, setNativeFailed] = useState<{ which: "bench" | "app"; message: string }>();
   const lastRunnerError = useRef<string | undefined>(undefined);
   const benchLog = useMemo(() => createBenchLog(missionId), [missionId]);
   const log = benchLog.log;
@@ -675,6 +683,91 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
     }
   }, [loaded, log, missionId, mode]);
 
+  /** Give the port back to Web Serial after avrdude used it; the runner keeps listening across close/open. */
+  const reopenWebSerial = useCallback(async (selected: BoardPortConnection | undefined): Promise<boolean> => {
+    if (!selected || selected.transport.disconnected) return false;
+    if (selected.transport.isOpen) return true;
+    try {
+      await selected.transport.open(TELEMETRY_BAUD);
+      log("info", `native flash: Web Serial reopened at ${TELEMETRY_BAUD} baud`);
+      return true;
+    } catch (reason: unknown) {
+      log("warn", "native flash: Web Serial did not reopen", { error: classifySerialError(reason).technical });
+      return false;
+    }
+  }, [log]);
+
+  /**
+   * Flash with ViBread's own uploader (issue #20): the server on this computer runs arduino-cli → avrdude, the same
+   * upload the Arduino IDE does. avrdude needs the port, so Web Serial closes first and reopens afterwards.
+   */
+  const flashNativeFirmware = useCallback(async (which: "bench" | "app"): Promise<void> => {
+    const port = native.port;
+    if (!loaded || !missionId || !port) return;
+    setBusy(`native:${which}`);
+    setError(undefined);
+    setTechnicalError(undefined);
+    setErrorFix(undefined);
+    setFlashProgress(undefined);
+    setNativeOutput(undefined);
+    setNeedsReconnect(false);
+    setNativeFailed(undefined);
+    const selected = connectionRef.current;
+    try {
+      if (selected?.transport.isOpen) {
+        log("info", `native flash: closing Web Serial so avrdude can open ${port}`);
+        await selected.transport.close();
+      }
+      log("info", `native flash: ${which} firmware → ${port} with ViBread's uploader (arduino-cli / avrdude)`);
+      const result = await nativeFlash(missionId, { port, which, ...(boardProfileChoice === "auto" ? {} : { board: boardProfileChoice }) });
+      setNativeOutput(result.output || undefined);
+      if (!result.ok) {
+        log("error", `native flash: failed — ${result.error.code}`, { error: result.error.message });
+        const message = result.error.hint ? `${result.error.message} ${result.error.hint}` : result.error.message;
+        setError(message);
+        setNativeFailed({ which, message });
+        setTechnicalError(result.output.split(/\r?\n/).filter((line) => line.trim()).slice(-12).join("\n") || undefined);
+        // Nothing was written: hand the port back so the browser path and the checks stay usable.
+        await reopenWebSerial(selected);
+        return;
+      }
+      log("info", `native flash: done in ${result.durationMs} ms (${result.fqbn}); waiting for the new firmware's hello`);
+      runnerRef.current?.markFlashBoundary();
+      setFlashProgress({ stage: "Flashed ✓ (avrdude)", percent: 100 });
+      const reopened = await reopenWebSerial(selected);
+      if (which === "bench") {
+        setNeedsReconnect(!reopened);
+        setRailRequestAt(undefined);
+        setActiveStep(2);
+      } else {
+        setActiveStep(6);
+      }
+    } catch (reason: unknown) {
+      const message = reason instanceof Error ? reason.message : String(reason);
+      log("error", "native flash: request failed", { error: message });
+      setError(`ViBread's uploader could not run: ${message}`);
+      setNativeFailed({ which, message: `ViBread's uploader could not run: ${message}` });
+      await reopenWebSerial(selected);
+    } finally {
+      setBusy(undefined);
+    }
+  }, [boardProfileChoice, loaded, log, missionId, native.port, reopenWebSerial]);
+
+  /** Pick the board's port again after a native flash (the chooser needs this click); stays on the current step. */
+  const reconnectAfterNativeFlash = useCallback(async (): Promise<void> => {
+    const step = activeStep;
+    runnerRef.current?.dispose();
+    runnerRef.current = undefined;
+    void connectionRef.current?.transport.close().catch(() => undefined);
+    connectionRef.current = undefined;
+    setConnection(undefined);
+    await connectPhysical();
+    if (!connectionRef.current) return;
+    setNeedsReconnect(false);
+    setRailRequestAt(undefined);
+    setActiveStep(step);
+  }, [activeStep, connectPhysical]);
+
   const runApproval = useCallback(async (request: BenchApprovalRequest): Promise<void> => {
     const gate = approvalGate(request.action, {
       connected: runner !== undefined,
@@ -914,7 +1007,12 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
           </CardContent>
         </Card>
 
-        {error && <Alert severity="error" onClose={() => { setError(undefined); setTechnicalError(undefined); }} action={<Button color="inherit" size="small" onClick={retryCurrentStep}>{retryLabel}</Button>}>{error}{technicalError && <Box component="details" sx={{ mt: 1 }}><Box component="summary" sx={{ cursor: "pointer" }}>Technical details</Box><Box component="code" sx={{ display: "block", mt: 1, fontFamily: MONO_FONT, whiteSpace: "pre-wrap" }}>{technicalError}</Box></Box>}</Alert>}
+        {error && <Alert severity="error" onClose={() => { setError(undefined); setTechnicalError(undefined); setNativeFailed(undefined); }} action={nativeFailed?.message === error ? <Button color="inherit" size="small" onClick={() => void flashNativeFirmware(nativeFailed.which)} disabled={Boolean(busy) || !native.port}>Retry with avrdude</Button> : <Button color="inherit" size="small" onClick={retryCurrentStep}>{retryLabel}</Button>}>{error}{technicalError && <Box component="details" sx={{ mt: 1 }}><Box component="summary" sx={{ cursor: "pointer" }}>Technical details</Box><Box component="code" sx={{ display: "block", mt: 1, fontFamily: MONO_FONT, whiteSpace: "pre-wrap" }}>{technicalError}</Box></Box>}</Alert>}
+        {needsReconnect && mode === "physical" && (
+          <Alert severity="warning" action={<Button color="inherit" size="small" onClick={() => void reconnectAfterNativeFlash()} disabled={Boolean(busy)}>Reconnect to run the checks</Button>}>
+            Flashed ✓ (avrdude). The browser didn't get the board's port back by itself: reconnect it to run the checks.
+          </Alert>
+        )}
         {requests.map((request) => {
           const gate = approvalGate(request.action, { connected: runner !== undefined, safeReady: activeStep >= 2, railsReady: Boolean(runner?.state.seenHello && runner.state.seenVcc), passed: run?.verdict === "pass", loadedRevision: loaded.revision.n, requestRevision: request.revision });
           return <Card key={request.id} variant="outlined">
@@ -937,10 +1035,25 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
               <Typography variant="h5" sx={{ fontWeight: 700 }}>Step 2 · Make it safe</Typography>
               <Typography color="text.secondary" sx={{ mt: 0.5 }}>ViBread puts every pin in a safe listening mode before it tests your parts. This check belongs to design <strong>{loaded.revision.hash.slice(0, 12)}</strong>.</Typography>
               {currentProfile && connection && <Chip label={describePort(connection)} size="small" sx={{ mt: 1 }} />}
-              <Stack direction={{ xs: "column", sm: "row" }} spacing={2} sx={{ mt: 2, alignItems: { sm: "center" } }}>
-                <Button variant="contained" onClick={() => void flashSafe()} disabled={Boolean(busy) || activeStep !== 1} sx={actionButtonSx}>{mode === "virtual" ? "Skip flash · load virtual HEX" : "Flash safe firmware"}</Button>
-                {flashProgress && <Box sx={{ minWidth: 230 }}><Typography variant="body2" color="text.secondary">{progressText(flashProgress)}</Typography><LinearProgress variant="determinate" value={flashProgress.percent} /></Box>}
+              {mode === "physical" && native.ports && (
+                <Stack direction={{ xs: "column", sm: "row" }} spacing={1} useFlexGap sx={{ mt: 2, alignItems: { sm: "center" } }}>
+                  <FormControl size="small" sx={{ minWidth: "min(300px, 100%)" }}>
+                    <InputLabel id="native-port-label">Board port (ViBread's uploader)</InputLabel>
+                    <Select labelId="native-port-label" label="Board port (ViBread's uploader)" value={native.port ?? ""} onChange={(event) => native.setPort(String(event.target.value))}>
+                      {native.ports.map((candidate) => <MenuItem key={candidate.port} value={candidate.port}>{candidate.label}</MenuItem>)}
+                    </Select>
+                  </FormControl>
+                  <Button variant="text" size="small" onClick={() => void native.refresh()} disabled={native.refreshing || Boolean(busy)}>{native.refreshing ? "Looking…" : "Refresh ports"}</Button>
+                  {native.ports.length === 0 && <Typography variant="body2" color="text.secondary">No Arduino port found on this computer yet. Plug the board in and refresh.</Typography>}
+                </Stack>
+              )}
+              <Stack direction={{ xs: "column", sm: "row" }} spacing={2} useFlexGap sx={{ mt: 2, alignItems: { sm: "center" }, flexWrap: "wrap" }}>
+                {mode === "physical" && native.ports && <Button variant="contained" onClick={() => void flashNativeFirmware("bench")} disabled={Boolean(busy) || activeStep !== 1 || !native.port} sx={actionButtonSx}>{busy === "native:bench" ? "Flashing with avrdude…" : "Flash with ViBread's uploader (avrdude)"}</Button>}
+                <Button variant={mode === "physical" && native.ports ? "outlined" : "contained"} onClick={() => void flashSafe()} disabled={Boolean(busy) || activeStep !== 1} sx={actionButtonSx}>{mode === "virtual" ? "Skip flash · load virtual HEX" : native.ports ? "Flash in the browser (Web Serial)" : "Flash safe firmware"}</Button>
+                {busy?.startsWith("native:") && <Box sx={{ minWidth: 230 }}><Typography variant="body2" color="text.secondary">Uploading to {native.port} with avrdude…</Typography><LinearProgress /></Box>}
+                {flashProgress && !busy?.startsWith("native:") && <Box sx={{ minWidth: 230 }}><Typography variant="body2" color="text.secondary">{progressText(flashProgress)}</Typography><LinearProgress variant="determinate" value={flashProgress.percent} /></Box>}
               </Stack>
+              {nativeOutput && <Box component="details" sx={{ mt: 1 }}><Box component="summary" sx={{ cursor: "pointer", color: "text.secondary", typography: "body2" }}>Uploader output</Box><Box component="code" sx={{ display: "block", mt: 1, fontFamily: MONO_FONT, fontSize: 12, whiteSpace: "pre-wrap", maxHeight: 220, overflowY: "auto" }}>{nativeOutput}</Box></Box>}
               {alreadyFlashed && connectHello && (
                 <Alert severity="success" sx={{ mt: 2 }} action={<Button color="inherit" size="small" onClick={skipFlash} disabled={Boolean(busy)}>Skip to power check</Button>}>
                   This board already runs the safe firmware for this design (design {connectHello.design.slice(0, 12)}, {Object.values(BOARD_PROFILES).find((profile) => profile.id === connectHello.board)?.name ?? connectHello.board}). You can skip the flash.
@@ -1038,7 +1151,8 @@ export function BenchView({ missionId }: { missionId: string }): ReactElement | 
               </Stack>
               <Stack direction={{ xs: "column", sm: "row" }} spacing={1} sx={{ mt: 2 }}>
                 <Button variant="outlined" onClick={restartSelfTest} disabled={Boolean(busy)} sx={actionButtonSx}>{run.verdict === "pass" ? "Run the self-test again" : "Fix wiring and rerun"}</Button>
-                {run.verdict === "pass" && <Button variant="contained" onClick={() => void flashApp()} disabled={Boolean(busy)} sx={actionButtonSx}>{mode === "virtual" ? "Continue to celebration" : "Flash app firmware with calibration"}</Button>}
+                {run.verdict === "pass" && mode === "physical" && native.ports && <Button variant="contained" onClick={() => void flashNativeFirmware("app")} disabled={Boolean(busy) || !native.port} sx={actionButtonSx}>{busy === "native:app" ? "Flashing with avrdude…" : "Flash app firmware with ViBread's uploader (avrdude)"}</Button>}
+                {run.verdict === "pass" && <Button variant={mode === "physical" && native.ports ? "outlined" : "contained"} onClick={() => void flashApp()} disabled={Boolean(busy)} sx={actionButtonSx}>{mode === "virtual" ? "Continue to celebration" : native.ports ? "Flash app firmware in the browser (Web Serial)" : "Flash app firmware with calibration"}</Button>}
               </Stack>
             </CardContent>
           </Card>
