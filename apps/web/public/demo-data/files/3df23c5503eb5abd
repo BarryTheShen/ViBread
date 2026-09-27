@@ -1,0 +1,236 @@
+<svg xmlns="http://www.w3.org/2000/svg" data-schematic="drawing" width="934" height="580" viewBox="0 0 934 580" font-family="DejaVu Sans, Verdana, Arial, Helvetica, sans-serif">
+<title>Schematic: Moon-Phase Lamp</title>
+<rect class="background" x="0" y="0" width="934" height="580" fill="#0b1220"/>
+<g class="net" data-net="A0">
+<polyline class="wire" points="219,230 275,230" fill="none" stroke="#f4f6f8" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="219,230 275,230" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+<polyline class="wire" points="219,314 239,314 239,230 275,230" fill="none" stroke="#f4f6f8" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="219,314 239,314 239,230 275,230" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+<circle class="junction" cx="239" cy="230" r="4" fill="#f4f6f8"/>
+</g>
+<g class="net" data-net="D7">
+<polyline class="wire" points="219,83 239,83 239,196 275,196" fill="none" stroke="#9b6bdb" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="219,83 239,83 239,196 275,196" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+</g>
+<g class="net" data-net="D2">
+<polyline class="wire" points="500,196 520,196 520,89 556,89" fill="none" stroke="#f08c2e" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="500,196 520,196 520,89 556,89" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+</g>
+<g class="net" data-net="L1">
+<polyline class="wire" points="646,89 702,89" fill="none" stroke="#f08c2e" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="646,89 702,89" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+</g>
+<g class="net" data-net="D3">
+<polyline class="wire" points="500,230 556,230" fill="none" stroke="#f2c94c" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="500,230 556,230" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+</g>
+<g class="net" data-net="L2">
+<polyline class="wire" points="646,230 702,230" fill="none" stroke="#f2c94c" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="646,230 702,230" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+</g>
+<g class="net" data-net="D4">
+<polyline class="wire" points="500,264 534,264 534,371 556,371" fill="none" stroke="#2fbf71" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="500,264 534,264 534,371 556,371" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+</g>
+<g class="net" data-net="L3">
+<polyline class="wire" points="646,371 702,371" fill="none" stroke="#2fbf71" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="646,371 702,371" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+</g>
+<g class="net" data-net="D5">
+<polyline class="wire" points="500,298 520,298 520,512 556,512" fill="none" stroke="#3d8bfd" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="500,298 520,298 520,512 556,512" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+</g>
+<g class="net" data-net="L4">
+<polyline class="wire" points="646,512 702,512" fill="none" stroke="#3d8bfd" stroke-width="2" stroke-linejoin="round"/>
+<polyline class="wire-hit" points="646,512 702,512" fill="none" stroke="transparent" stroke-width="14" stroke-linejoin="round"/>
+</g>
+<g class="part" data-part="BTN1">
+<circle cx="170" cy="83" r="2.5" fill="none" stroke="#93c5fd" stroke-width="2"/>
+<circle cx="144" cy="83" r="2.5" fill="none" stroke="#93c5fd" stroke-width="2"/>
+<line x1="172" y1="75" x2="142" y2="75" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<line x1="157" y1="75" x2="157" y2="67" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<line x1="163" y1="67" x2="151" y2="67" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<text x="101" y="58.9" font-size="12" text-anchor="start" fill="#94a3b8">Next-day button</text>
+<text x="129.5" y="43.3" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">BTN1</text>
+<line class="lead" data-pin="BTN1.3" x1="141.5" y1="83" x2="125.5" y2="83" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="BTN1.1" x1="172.5" y1="83" x2="219" y2="83" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="power" data-net="GND" data-pin="BTN1.3">
+<line class="stub" x1="125.5" y1="83" x2="125.5" y2="95" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="115.5" y1="95" x2="135.5" y2="95" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="119.5" y1="99" x2="131.5" y2="99" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="123.5" y1="103" x2="127.5" y2="103" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<text x="125.5" y="117" font-size="12" text-anchor="middle" fill="#fda4af">GND</text>
+</g>
+<g class="part" data-part="LDR1">
+<polyline points="117,230 119.5,223 124.5,237 129.5,223 134.5,237 139.5,223 144.5,237 149.5,223 154.5,237 157,230" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="125" y1="206" x2="132" y2="219" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<polyline points="132,215 132,219 128.6,216.8" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="135" y1="206" x2="142" y2="219" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<polyline points="142,215 142,219 138.6,216.8" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="73.6" y="197.9" font-size="12" text-anchor="start" fill="#94a3b8">Room light sensor</text>
+<text x="61.3" y="182.3" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">LDR1</text>
+<text x="123.4" y="182.3" font-size="13" text-anchor="start" fill="#fde68a">light sensor</text>
+<line class="lead" data-pin="LDR1.1" x1="117" y1="230" x2="40.8" y2="230" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="LDR1.2" x1="157" y1="230" x2="219" y2="230" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="power" data-net="5V" data-pin="LDR1.1">
+<line class="stub" x1="40.8" y1="230" x2="40.8" y2="218" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="31.8" y1="218" x2="49.8" y2="218" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<text x="40.8" y="212" font-size="12" text-anchor="middle" font-weight="bold" fill="#fda4af">5V</text>
+</g>
+<g class="part" data-part="R5">
+<polyline points="194,314 191.5,307 186.5,321 181.5,307 176.5,321 171.5,307 166.5,321 161.5,307 156.5,321 154,314" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="135.8" y="298.1" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">R5</text>
+<text x="169.1" y="298.1" font-size="13" text-anchor="start" fill="#fde68a">10 kΩ</text>
+<line class="lead" data-pin="R5.2" x1="154" y1="314" x2="138" y2="314" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="R5.1" x1="194" y1="314" x2="219" y2="314" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="power" data-net="GND" data-pin="R5.2">
+<line class="stub" x1="138" y1="314" x2="138" y2="326" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="128" y1="326" x2="148" y2="326" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="132" y1="330" x2="144" y2="330" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="136" y1="334" x2="140" y2="334" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<text x="138" y="348" font-size="12" text-anchor="middle" fill="#fda4af">GND</text>
+</g>
+<g class="part" data-part="board">
+<rect x="289" y="114" width="197" height="224" rx="3" fill="#172033" stroke="#93c5fd" stroke-width="2"/>
+<text x="387.5" y="166" font-size="16" text-anchor="middle" font-weight="bold" fill="#a7f3d0">Arduino Uno R3</text>
+<text x="298" y="200.5" font-size="13" text-anchor="start" font-weight="bold" fill="#a7f3d0">D7</text>
+<text x="298" y="234.5" font-size="13" text-anchor="start" font-weight="bold" fill="#a7f3d0">A0</text>
+<text x="477" y="200.5" font-size="13" text-anchor="end" font-weight="bold" fill="#a7f3d0">D2</text>
+<text x="477" y="234.5" font-size="13" text-anchor="end" font-weight="bold" fill="#a7f3d0">D3</text>
+<text x="477" y="268.5" font-size="13" text-anchor="end" font-weight="bold" fill="#a7f3d0">D4</text>
+<text x="477" y="302.5" font-size="13" text-anchor="end" font-weight="bold" fill="#a7f3d0">D5</text>
+<text x="387.5" y="132" font-size="13" text-anchor="middle" font-weight="bold" fill="#a7f3d0">5V</text>
+<line class="lead" data-pin="board.5V" x1="387.5" y1="114" x2="387.5" y2="98" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<text x="387.5" y="328" font-size="13" text-anchor="middle" font-weight="bold" fill="#a7f3d0">GND</text>
+<line class="lead" data-pin="board.GND" x1="387.5" y1="338" x2="387.5" y2="354" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="board.D7" x1="289" y1="196" x2="275" y2="196" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="board.A0" x1="289" y1="230" x2="275" y2="230" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="board.D2" x1="486" y1="196" x2="500" y2="196" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="board.D3" x1="486" y1="230" x2="500" y2="230" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="board.D4" x1="486" y1="264" x2="500" y2="264" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="board.D5" x1="486" y1="298" x2="500" y2="298" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="power" data-net="5V" data-pin="board.5V">
+<line class="stub" x1="387.5" y1="98" x2="387.5" y2="86" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="378.5" y1="86" x2="396.5" y2="86" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<text x="387.5" y="80" font-size="12" text-anchor="middle" font-weight="bold" fill="#fda4af">5V</text>
+</g>
+<g class="power" data-net="GND" data-pin="board.GND">
+<line class="stub" x1="387.5" y1="354" x2="387.5" y2="366" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="377.5" y1="366" x2="397.5" y2="366" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="381.5" y1="370" x2="393.5" y2="370" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="385.5" y1="374" x2="389.5" y2="374" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<text x="387.5" y="388" font-size="12" text-anchor="middle" fill="#fda4af">GND</text>
+</g>
+<g class="part" data-part="R1">
+<polyline points="581,89 583.5,82 588.5,96 593.5,82 598.5,96 603.5,82 608.5,96 613.5,82 618.5,96 621,89" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="562.7" y="73.1" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">R1</text>
+<text x="596" y="73.1" font-size="13" text-anchor="start" fill="#fde68a">220 Ω</text>
+<line class="lead" data-pin="R1.1" x1="581" y1="89" x2="556" y2="89" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="R1.2" x1="621" y1="89" x2="646" y2="89" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="part" data-part="LED1">
+<polygon points="771,80 771,98 787,89" fill="#facc15" fill-opacity="0.45" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="787" y1="80" x2="787" y2="98" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<line x1="778" y1="78" x2="785" y2="71" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<polyline points="781.2,72.1 785,71 783.9,74.8" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="784" y1="78" x2="791" y2="71" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<polyline points="787.2,72.1 791,71 789.9,74.8" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="708.6" y="62.9" font-size="12" text-anchor="start" fill="#94a3b8">Leftmost moon light</text>
+<text x="723.8" y="47.3" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">LED1</text>
+<text x="785.8" y="47.3" font-size="13" text-anchor="start" fill="#fde68a">yellow</text>
+<line class="lead" data-pin="LED1.K" x1="787" y1="89" x2="803" y2="89" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="LED1.A" x1="771" y1="89" x2="702" y2="89" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="power" data-net="GND" data-pin="LED1.K">
+<line class="stub" x1="803" y1="89" x2="803" y2="101" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="793" y1="101" x2="813" y2="101" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="797" y1="105" x2="809" y2="105" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="801" y1="109" x2="805" y2="109" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<text x="803" y="123" font-size="12" text-anchor="middle" fill="#fda4af">GND</text>
+</g>
+<g class="part" data-part="R2">
+<polyline points="581,230 583.5,223 588.5,237 593.5,223 598.5,237 603.5,223 608.5,237 613.5,223 618.5,237 621,230" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="562.7" y="214.1" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">R2</text>
+<text x="596" y="214.1" font-size="13" text-anchor="start" fill="#fde68a">220 Ω</text>
+<line class="lead" data-pin="R2.1" x1="581" y1="230" x2="556" y2="230" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="R2.2" x1="621" y1="230" x2="646" y2="230" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="part" data-part="LED2">
+<polygon points="797,221 797,239 813,230" fill="#facc15" fill-opacity="0.45" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="813" y1="221" x2="813" y2="239" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<line x1="804" y1="219" x2="811" y2="212" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<polyline points="807.2,213.1 811,212 809.9,215.8" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="810" y1="219" x2="817" y2="212" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<polyline points="813.2,213.1 817,212 815.9,215.8" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="708.7" y="203.9" font-size="12" text-anchor="start" fill="#94a3b8">Second moon light from left</text>
+<text x="749.8" y="188.3" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">LED2</text>
+<text x="811.8" y="188.3" font-size="13" text-anchor="start" fill="#fde68a">yellow</text>
+<line class="lead" data-pin="LED2.K" x1="813" y1="230" x2="829" y2="230" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="LED2.A" x1="797" y1="230" x2="702" y2="230" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="power" data-net="GND" data-pin="LED2.K">
+<line class="stub" x1="829" y1="230" x2="829" y2="242" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="819" y1="242" x2="839" y2="242" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="823" y1="246" x2="835" y2="246" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="827" y1="250" x2="831" y2="250" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<text x="829" y="264" font-size="12" text-anchor="middle" fill="#fda4af">GND</text>
+</g>
+<g class="part" data-part="R3">
+<polyline points="581,371 583.5,364 588.5,378 593.5,364 598.5,378 603.5,364 608.5,378 613.5,364 618.5,378 621,371" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="562.7" y="355.1" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">R3</text>
+<text x="596" y="355.1" font-size="13" text-anchor="start" fill="#fde68a">220 Ω</text>
+<line class="lead" data-pin="R3.1" x1="581" y1="371" x2="556" y2="371" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="R3.2" x1="621" y1="371" x2="646" y2="371" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="part" data-part="LED3">
+<polygon points="789,362 789,380 805,371" fill="#facc15" fill-opacity="0.45" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="805" y1="362" x2="805" y2="380" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<line x1="796" y1="360" x2="803" y2="353" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<polyline points="799.2,354.1 803,353 801.9,356.8" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="802" y1="360" x2="809" y2="353" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<polyline points="805.2,354.1 809,353 807.9,356.8" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="708.3" y="344.9" font-size="12" text-anchor="start" fill="#94a3b8">Third moon light from left</text>
+<text x="741.8" y="329.3" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">LED3</text>
+<text x="803.8" y="329.3" font-size="13" text-anchor="start" fill="#fde68a">yellow</text>
+<line class="lead" data-pin="LED3.K" x1="805" y1="371" x2="821" y2="371" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="LED3.A" x1="789" y1="371" x2="702" y2="371" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="power" data-net="GND" data-pin="LED3.K">
+<line class="stub" x1="821" y1="371" x2="821" y2="383" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="811" y1="383" x2="831" y2="383" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="815" y1="387" x2="827" y2="387" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="819" y1="391" x2="823" y2="391" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<text x="821" y="405" font-size="12" text-anchor="middle" fill="#fda4af">GND</text>
+</g>
+<g class="part" data-part="R4">
+<polyline points="581,512 583.5,505 588.5,519 593.5,505 598.5,519 603.5,505 608.5,519 613.5,505 618.5,519 621,512" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="562.7" y="496.1" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">R4</text>
+<text x="596" y="496.1" font-size="13" text-anchor="start" fill="#fde68a">220 Ω</text>
+<line class="lead" data-pin="R4.1" x1="581" y1="512" x2="556" y2="512" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="R4.2" x1="621" y1="512" x2="646" y2="512" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="part" data-part="LED4">
+<polygon points="774,503 774,521 790,512" fill="#facc15" fill-opacity="0.45" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="790" y1="503" x2="790" y2="521" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<line x1="781" y1="501" x2="788" y2="494" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<polyline points="784.2,495.1 788,494 786.9,497.8" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="787" y1="501" x2="794" y2="494" stroke="#93c5fd" stroke-width="2" stroke-linecap="round"/>
+<polyline points="790.2,495.1 794,494 792.9,497.8" fill="none" stroke="#93c5fd" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<text x="708.1" y="485.9" font-size="12" text-anchor="start" fill="#94a3b8">Rightmost moon light</text>
+<text x="726.8" y="470.3" font-size="15" text-anchor="start" font-weight="bold" fill="#f8fafc">LED4</text>
+<text x="788.8" y="470.3" font-size="13" text-anchor="start" fill="#fde68a">yellow</text>
+<line class="lead" data-pin="LED4.K" x1="790" y1="512" x2="806" y2="512" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+<line class="lead" data-pin="LED4.A" x1="774" y1="512" x2="702" y2="512" stroke="#5eead4" stroke-width="2" stroke-linecap="round"/>
+</g>
+<g class="power" data-net="GND" data-pin="LED4.K">
+<line class="stub" x1="806" y1="512" x2="806" y2="524" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="796" y1="524" x2="816" y2="524" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="800" y1="528" x2="812" y2="528" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<line x1="804" y1="532" x2="808" y2="532" stroke="#fda4af" stroke-width="2" stroke-linecap="round"/>
+<text x="806" y="546" font-size="12" text-anchor="middle" fill="#fda4af">GND</text>
+</g>
+</svg>

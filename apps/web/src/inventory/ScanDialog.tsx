@@ -18,6 +18,7 @@ import type { CatalogView, ScanItem } from "@vibread/core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { isCameraContextAvailable, isCameraSecure, useCamera } from "./useCamera.js";
 import { useConnections } from "../api/hooks.js";
+import { appPath } from "../demo/demo.js";
 import { useAcceptScan, useAnalyzeScan, useCreateScan, useScan, useUploadScanPhoto } from "../api/inventory.js";
 import { cameraErrorMessage, scanErrorMessage, scanViewErrorMessage } from "./scanErrors.js";
 import { ScanReview } from "./ScanReview.js";
@@ -41,7 +42,7 @@ export function phoneLink(phoneUrl: string | undefined, scanId: string, pairing:
     }
   }
   const query = [pairing?.replace(/^\?/, ""), extra ? new URLSearchParams(extra).toString() : ""].filter(Boolean).join("&");
-  return `${origin}/scan/${encodeURIComponent(scanId)}${query ? `?${query}` : ""}`;
+  return `${origin}${appPath(`/scan/${encodeURIComponent(scanId)}`)}${query ? `?${query}` : ""}`;
 }
 
 /** The pairing query the server hands out for phone links (older servers send none). */

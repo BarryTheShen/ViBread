@@ -31,6 +31,7 @@ import { RepeatChecklist } from "../../build/RepeatChecklist.js";
 import { plugInstruction } from "../../build/plugBanner.js";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
 import { PhoneQr } from "../PhoneLink.js";
+import { DEMO } from "../../demo/demo.js";
 import { StepWireChips, WireColorPicker, WireLegend, useWireColor, type WireTarget } from "../WireColors.js";
 
 const buildKey = (missionId: string) => ["mission", missionId, "build"] as const;
@@ -62,7 +63,7 @@ function GatherParts({ revision, inventory }: { revision: RevisionDetail; invent
           severity="warning"
           sx={{ mt: 1 }}
           action={
-            <Button
+            DEMO ? undefined : <Button
               size="small"
               sx={{ whiteSpace: "nowrap" }}
               onClick={() =>
@@ -175,6 +176,8 @@ export function BuildStepsView({
     stepNav.current?.scrollIntoView({ block: "nearest" });
   }, [step?.n]);
 
+  // The read-only demo can't save progress: Done and Skip just move on to the next step.
+  const markStep = (n: number) => (DEMO ? setIndex((i) => Math.min(i + 1, steps.length - 1)) : didThis.mutate(n));
   const didThis = useMutation({
     mutationFn: (n: number) => sendJson<BuildState>("POST", `/api/missions/${encodeURIComponent(missionId)}/build/step`, { n }),
     // Optimistic: move the builder on at once; the server answer (or the next poll) is the truth.
@@ -299,12 +302,12 @@ export function BuildStepsView({
               variant="contained"
               startIcon={<CheckIcon />}
               disabled={didThis.isPending || !checksPassed}
-              onClick={() => didThis.mutate(step.n)}
+              onClick={() => markStep(step.n)}
             >
               Done
             </Button>
             {step.checkpoint && (
-              <Button variant="text" disabled={didThis.isPending} onClick={() => didThis.mutate(step.n)}>
+              <Button variant="text" disabled={didThis.isPending} onClick={() => markStep(step.n)}>
                 Skip checks and continue
               </Button>
             )}

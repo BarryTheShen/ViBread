@@ -28,6 +28,7 @@ import { ProjectImportButton } from "../project/ProjectImportButton.js";
 import { WEB_VERSION } from "../version.js";
 import { useConnections, useMissions } from "../api/hooks.js";
 import { isSignInRequired } from "../components/SignIn.js";
+import { DEMO } from "../demo/demo.js";
 import { MissionActions, normalizeMissionTitle, useMissionActions, validateMissionTitle } from "../workspace/MissionActions.js";
 const COLLAPSED_KEY = "vibread.sidebar.collapsed";
 const SIDEBAR_WIDTH = 260;
@@ -206,7 +207,7 @@ function MissionItem({ mission, collapsed }: { mission: MissionSummary; collapse
       </ListItemButton>
       {/* The rail is navigation only: its 56px row can't fit the ⋯ next to the status dot (it covered it, always on
           touch screens), and renaming needs the full width. The mission header has the same actions. */}
-      {!collapsed && (
+      {!collapsed && !DEMO && (
         <MissionActions
           missionId={mission.id}
           title={mission.title}
@@ -265,6 +266,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      if (DEMO) return;
       if ((isMac ? event.metaKey : event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         navigate("/");
@@ -281,7 +283,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       sx={{
         width: collapsed ? COLLAPSED_WIDTH : SIDEBAR_WIDTH,
         flexShrink: 0,
-        minHeight: "100dvh",
+        minHeight: DEMO ? 0 : "100dvh",
         display: "flex",
         flexDirection: "column",
         borderRight: 1,
@@ -300,6 +302,10 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
         </Tooltip>
       </Stack>
 
+      {DEMO ? (
+        !collapsed && <Typography variant="body2" sx={{ px: 2, pb: 1.25, color: "text.secondary" }}>One example project · read-only</Typography>
+      ) : (
+      <>
       <Box sx={{ px: collapsed ? 1 : 1.25, pb: 1.25 }}>
         {collapsed ? (
           <Tooltip title="New mission" placement="right">
@@ -312,6 +318,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       <Box sx={{ mt: 0.25, px: collapsed ? 1 : 1.25 }}>
         <ProjectImportButton collapsed={collapsed} />
       </Box>
+      </>
+      )}
 
       <List disablePadding sx={{ px: collapsed ? 1 : 1.25, display: "grid", gap: 0.25 }}>
         <SidebarButton collapsed={collapsed} label="Inventory" icon={<Inventory2OutlinedIcon />} to="/inventory" active={location.pathname.startsWith("/inventory")} badge={inventoryCount(inventory.data)} />
@@ -346,7 +354,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
       </Box>
 
       <Box sx={{ px: collapsed ? 1 : 1.25, pb: 1.25, display: "grid", gap: 0.5 }}>
-        {claudeReady === undefined ? (
+        {DEMO ? null : claudeReady === undefined ? (
           <Skeleton variant="rounded" height={30} sx={{ width: "100%" }} aria-label="Loading Claude connection" />
         ) : (
           <Tooltip title={claudeReady ? "Claude ready" : "Claude not connected · Connect"} placement={collapsed ? "right" : "top"}>
@@ -363,8 +371,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
             />
           </Tooltip>
         )}
-        <SidebarButton collapsed={collapsed} label="Settings" icon={<SettingsOutlinedIcon />} to="/settings" active={location.pathname === "/settings"} />
-        {!collapsed && <Typography variant="caption" sx={{ px: 1, color: "text.secondary" }}>{newMissionShortcut} new mission · v{WEB_VERSION.version}</Typography>}
+        {!DEMO && <SidebarButton collapsed={collapsed} label="Settings" icon={<SettingsOutlinedIcon />} to="/settings" active={location.pathname === "/settings"} />}
+        {!collapsed && !DEMO && <Typography variant="caption" sx={{ px: 1, color: "text.secondary" }}>{newMissionShortcut} new mission · v{WEB_VERSION.version}</Typography>}
       </Box>
     </Box>
   );

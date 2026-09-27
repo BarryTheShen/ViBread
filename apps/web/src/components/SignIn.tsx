@@ -9,6 +9,7 @@ import { Link as RouterLink, useLocation } from "react-router";
 import { authClient } from "../api/auth.js";
 import { HttpError } from "../api/client.js";
 import { oauthProviders, type OAuthProvider } from "../pages/oauth.js";
+import { DEMO } from "../demo/demo.js";
 
 export const PROVIDER_LABEL: Record<OAuthProvider, string> = { google: "Google", github: "GitHub" };
 
@@ -19,7 +20,8 @@ export function useProviders() {
 
 /** A 401 from the ViBread API: the person isn't signed in (multi-user servers only). */
 export function isSignInRequired(error: unknown): boolean {
-  return error instanceof HttpError && error.status === 401;
+  // The read-only demo has no accounts: never offer a sign-in.
+  return !DEMO && error instanceof HttpError && error.status === 401;
 }
 
 /** Link to the plain /login page that comes back to the current page after signing in. */

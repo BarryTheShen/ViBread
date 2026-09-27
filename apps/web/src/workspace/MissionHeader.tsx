@@ -22,6 +22,7 @@ import ListItemIcon from "@mui/material/ListItemIcon";
 import MenuItem from "@mui/material/MenuItem";
 import ListItemText from "@mui/material/ListItemText";
 import Stack from "@mui/material/Stack";
+import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { CONSOLE_IDS, CONSOLE_LABELS, type ConsoleId, type ConsoleReport } from "@vibread/core";
@@ -35,6 +36,7 @@ import { nextStepOf } from "./nextStep.js";
 import { GoForBuildButton } from "./GoForBuild.js";
 import { MissionActions, useMissionActions, validateMissionTitle } from "./MissionActions.js";
 import { PhoneLinkDialog } from "./PhoneLink.js";
+import { DEMO, DEMO_NOTES } from "../demo/demo.js";
 
 /** Short names for the five status dots (the Apollo console name is in the tooltip). */
 const DOT_LABEL: Record<ConsoleId, string> = {
@@ -111,6 +113,15 @@ function NextStepButton({ step, props, onStop, stopping }: { step: NextStep; pro
         </Button>
       );
     case "go":
+      if (DEMO) {
+        return (
+          <Tooltip title={DEMO_NOTES.readOnly}>
+            <span>
+              <Button variant="contained" disabled sx={{ whiteSpace: "nowrap" }}>GO for build</Button>
+            </span>
+          </Tooltip>
+        );
+      }
       return <GoForBuildButton missionId={missionId} detail={detail} onReleased={(n) => { setJustReleased(true); onOpenPanel("steps", { revision: n }); }} />;
     case "build":
       return (
@@ -182,7 +193,11 @@ export function MissionHeader(props: MissionHeaderProps) {
     <Box component="header" sx={{ borderBottom: 1, borderColor: "divider", containerType: "inline-size" }}>
       <Stack direction="row" sx={{ alignItems: "center", gap: 1.5, px: 2, py: 1, minHeight: 56 }}>
         <Box sx={{ minWidth: 0, flex: "1 1 auto" }}>
-          {editing ? (
+          {DEMO ? (
+            <Typography variant="h6" component="h1" noWrap>
+              {m.title}
+            </Typography>
+          ) : editing ? (
             <InputBase
               autoFocus
               value={title}
@@ -215,7 +230,7 @@ export function MissionHeader(props: MissionHeaderProps) {
           )}
         </Box>
         <StatusDots consoles={detail.consoles} onOpen={(console) => onOpenPanel("checks", { console })} />
-        {claudeMissing && step.kind !== "working" && (
+        {!DEMO && claudeMissing && step.kind !== "working" && (
           <Tooltip title="Claude not connected: the agent can't reply. Open Settings to connect it.">
             <Chip
               icon={<LinkOffIcon />}
@@ -240,6 +255,13 @@ export function MissionHeader(props: MissionHeaderProps) {
           </Tooltip>
         )}
         <NextStepButton step={step} props={props} onStop={() => stop.mutate()} stopping={stop.isPending} />
+        {DEMO ? (
+          <Tooltip title="Phone link: QR code for Build Mode">
+            <IconButton aria-label="Phone link" onClick={() => setPhoneOpen(true)}>
+              <PhoneIphoneIcon />
+            </IconButton>
+          </Tooltip>
+        ) : (
         <MissionActions
           missionId={missionId}
           title={m.title}
@@ -262,6 +284,7 @@ export function MissionHeader(props: MissionHeaderProps) {
             </>
           )}
         />
+        )}
       </Stack>
       {actions.rename.isError && (
         <Alert severity="error" sx={{ mx: 2, mb: 1 }} onClose={() => actions.rename.reset()}>

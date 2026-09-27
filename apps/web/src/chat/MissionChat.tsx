@@ -31,6 +31,8 @@ import { RecordedChip } from "../components/RecordedChip.js";
 import { INTER_FONT, LORA_FONT, MONO_FONT } from "../theme.js";
 import { AskUserCard } from "./AskUserCard.js";
 import { COMPOSER_FRAME_SX, SEND_BUTTON_SX, STOP_BUTTON_SX } from "./Composer.js";
+import { DEMO, DEMO_NOTES } from "../demo/demo.js";
+import { DemoNote } from "../demo/DemoBanner.js";
 import { useMissionShell } from "./missionShell.js";
 import { createMissionTransport, fetchChatHistory } from "./missionTransport.js";
 import { placeTimeline, type ChatTimeline } from "./timeline.js";
@@ -281,7 +283,9 @@ function MessageErrorText() {
 function DesignOriginNotice({ channel, canChat }: { channel?: Channel; canChat: boolean }) {
   const origin = channel === "mcp" ? "Claude Code designed this over MCP." : channel === "a2a" ? "Another agent designed this." : undefined;
   // Without a Claude credential the agent can't answer, so never invite questions it can't take.
-  const text = !canChat
+  const text = DEMO
+    ? "This design is part of the read-only demo."
+    : !canChat
     ? "Its checks, tests and build steps are ready — connect Claude in Settings to ask about it."
     : channel === "mcp"
       ? "Claude Code designed this over MCP — ask Claude anything about it here, or keep working from Claude Code."
@@ -327,6 +331,13 @@ function ThreadComposer() {
   const lastIsAssistant = useAuiState((s) => s.thread.messages.at(-1)?.role === "assistant");
   const streaming = chat.status === "submitted" || chat.status === "streaming";
   const running = streaming || detail.agentBusy;
+  if (DEMO) {
+    return (
+      <Box sx={{ maxWidth: CHAT_MAX_WIDTH, mx: "auto", width: "100%", px: 2, pb: 2, boxSizing: "border-box", bgcolor: "background.default", fontFamily: INTER_FONT }}>
+        <DemoNote>{DEMO_NOTES.chat}</DemoNote>
+      </Box>
+    );
+  }
   const disabledReason = canChat ? undefined : "Claude isn't connected, so it can't reply. Connect it in Settings — checks, tests and building still work.";
   const stop = () => {
     if (streaming) {

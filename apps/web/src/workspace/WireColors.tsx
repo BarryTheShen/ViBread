@@ -12,6 +12,7 @@ import { useMutation, useQueryClient, type QueryKey } from "@tanstack/react-quer
 import { KIT_WIRE_COLORS, wireCss, type BuildState, type WireColorRequest } from "@vibread/core";
 import { useState } from "react";
 import { sendJson } from "../api/client.js";
+import { DEMO } from "../demo/demo.js";
 
 /** What a picker recolours: one wire (its net shown for "whole net"), or a whole net (schematic taps). */
 export type WireTarget = { jumper: string; net: string } | { net: string };
@@ -75,6 +76,15 @@ export function WireColorPicker({
   const netOnly = jumper === undefined || wholeNet;
   const current = jumper !== undefined && !wholeNet ? wires.jumpers[jumper] : wires.nets[target.net];
   const hasOverride = netOnly ? wires.overrides[`net:${target.net}`] !== undefined : wires.overrides[`wire:${jumper}`] !== undefined;
+  if (DEMO) {
+    return (
+      <Popover open={Boolean(anchor)} anchorReference="anchorPosition" anchorPosition={anchor ?? undefined} onClose={onClose}>
+        <Typography variant="body2" sx={{ p: 1.5, maxWidth: 280 }}>
+          Wire colours can't be changed in the read-only demo. In ViBread you pick the colours of the jumpers in your kit.
+        </Typography>
+      </Popover>
+    );
+  }
   const pick = (color: string | null) => {
     onPick({ revision, target: netOnly ? { net: target.net } : { jumper: jumper! }, color });
     setWholeNet(false);

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "build": "vite build",
+    "build:demo": "VITE_DEMO=1 VITE_BASE=/ViBread/ vite build --outDir dist-demo && node scripts/finish-demo.mjs dist-demo",
     "preview": "vite preview --host 0.0.0.0",
     "typecheck": "tsc -p tsconfig.json"
   },
