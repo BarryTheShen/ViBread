@@ -420,7 +420,7 @@ describe("allocator realizes every net (issue #13)", () => {
       const layout = layoutBoard(circuit);
       expect(lvs(circuit, layout).issues.filter((issue) => issue.severity === "error"), `seed ${seed}`).toEqual([]);
     }
-  }, 240_000); // 40 full allocator runs: ~30 s alone, over 60 s when other suites share the CPU.
+  }, 240_000); // 40 full allocator runs: ~7 s alone, ~25 s when other suites share the CPU.
 
   it("reports a circuit that cannot physically fit as a tool-side finding", () => {
     const keys = ["D2", "D3", "D4", "D5", "D6", "D7", "D8", "D9", "D10", "D11", "D12", "D13", "A0", "A1"];

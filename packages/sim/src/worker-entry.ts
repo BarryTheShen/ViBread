@@ -9,7 +9,8 @@ interface WorkerRequest {
 }
 
 if (!parentPort) throw new Error("simulation worker requires a parent port");
-parentPort.once("message", (request: WorkerRequest) => {
+// One scenario per message; the pool keeps an idle worker for the next suite (pool.ts).
+parentPort.on("message", (request: WorkerRequest) => {
   const result = executeScenario(request);
   parentPort?.postMessage({ result });
 });

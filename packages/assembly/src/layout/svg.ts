@@ -175,10 +175,13 @@ function cross(o: Point, a: Point, b: Point): number {
   return (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
 }
 
+function nearPoint(p: Point, q: Point): boolean {
+  return Math.abs(p.x - q.x) < 0.5 && Math.abs(p.y - q.y) < 0.5;
+}
+
 /** Proper intersection of two segments (touching ends or sharing an end do not count). */
 export function segmentsCross(a: [Point, Point], b: [Point, Point]): boolean {
-  const near = (p: Point, q: Point) => Math.abs(p.x - q.x) < 0.5 && Math.abs(p.y - q.y) < 0.5;
-  if (near(a[0], b[0]) || near(a[0], b[1]) || near(a[1], b[0]) || near(a[1], b[1])) return false;
+  if (nearPoint(a[0], b[0]) || nearPoint(a[0], b[1]) || nearPoint(a[1], b[0]) || nearPoint(a[1], b[1])) return false;
   const d1 = cross(b[0], b[1], a[0]);
   const d2 = cross(b[0], b[1], a[1]);
   const d3 = cross(a[0], a[1], b[0]);
@@ -258,12 +261,34 @@ function edgeRoute(layout: RouteLayout, jumper: Pick<Jumper, "from" | "to">, pin
     }
   }
   const routeFor = (exitX: number) => [pin, { x: exitX, y: pin.y + 10 }, { x: exitX, y: lane.under }, { x: sideX, y: lane.under }, { x: sideX, y: hole.y }, hole];
-  const crossings = (points: Point[]) => obstacles.reduce((sum, line) => sum + points.slice(1).filter((point, index) => line.slice(1).some((end, at) => segmentsCross([points[index]!, point], [line[at]!, end]))).length, 0);
-  const scored = exits.map((exitX) => {
-    const route = routeFor(exitX);
-    return { route, crossings: crossings(route) };
-  });
-  const route = (scored.find((entry) => entry.crossings === 0) ?? [...scored].sort((a, b) => a.crossings - b.crossings)[0]!).route;
+  // Route segments crossing an obstacle, summed over the obstacles; stops counting once it reaches `limit`.
+  const crossings = (points: Point[], limit: number) => {
+    let sum = 0;
+    for (const line of obstacles) {
+      for (let index = 1; index < points.length; index += 1) {
+        for (let at = 1; at < line.length; at += 1) {
+          if (segmentsCross([points[index - 1]!, points[index]!], [line[at - 1]!, line[at]!])) {
+            sum += 1;
+            break;
+          }
+        }
+      }
+      if (sum >= limit) return sum;
+    }
+    return sum;
+  };
+  // The nearest exit whose route crosses nothing, else the first of those crossing the fewest wires.
+  let route: Point[] = [];
+  let fewest = Infinity;
+  for (const exitX of exits) {
+    const candidate = routeFor(exitX);
+    const count = crossings(candidate, fewest);
+    if (count < fewest) {
+      fewest = count;
+      route = candidate;
+      if (count === 0) break;
+    }
+  }
   return {
     points: boardFirst ? route : route.reverse(),
     // Just inside the side lanes, beside the centre channel (no holes there): the + feed's label above the − feed's.

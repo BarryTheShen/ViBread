@@ -13,6 +13,7 @@ import {
   type Revision,
   type RevisionResults,
   type StepList,
+  hashJson,
 } from "@vibread/core";
 import type * as AssemblyLib from "@vibread/assembly";
 import { SYSTEM_ACTOR, crashFinding, report, statusReport, withFindings } from "./common.js";
@@ -56,6 +57,35 @@ async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<v
     while (next < items.length) await fn(items[next++]!);
   });
   await Promise.all(workers);
+}
+
+/**
+ * Compiles by what was compiled. arduino-cli output depends only on the source, the board and the toolchain, so
+ * re-evaluating a revision whose sketch didn't change (a test review, a re-derive on start, a wiring-only revision)
+ * reuses the HEX instead of spending a second or more in the compiler, and evaluations running at once share one
+ * compile. Failures leave the cache once settled: a timeout under load or a crashed compiler must be retried.
+ */
+const COMPILE_CACHE_LIMIT = 64;
+const compileCache = new Map<string, Promise<CompileResult>>();
+
+async function cachedCompile(input: unknown, compile: () => Promise<CompileResult>): Promise<CompileResult> {
+  const key = hashJson({ input, toolchain: [process.env.VIBREAD_ARDUINO_CLI ?? null, process.env.VIBREAD_ARDUINO_CONFIG ?? null] });
+  let pending = compileCache.get(key);
+  if (pending) {
+    // Most recently used last, so the oldest entry is the one dropped.
+    compileCache.delete(key);
+    compileCache.set(key, pending);
+  } else {
+    const started = compile();
+    pending = started;
+    compileCache.set(key, started);
+    if (compileCache.size > COMPILE_CACHE_LIMIT) compileCache.delete(compileCache.keys().next().value!);
+    const forget = () => {
+      if (compileCache.get(key) === started) compileCache.delete(key);
+    };
+    started.then((result) => (result.ok ? undefined : forget()), forget);
+  }
+  return structuredClone(await pending);
 }
 
 /** Per-evaluation state shared by the branches: timings, artifact keys, the results patch, extra findings. */
@@ -145,8 +175,10 @@ export function createPipeline(deps: {
 
   async function firmwareBranch(run: Run, circuit: Circuit): Promise<void> {
     const { hash, revision } = run;
-    const compiled = await run.stage("compile", async () =>
-      (await import("@vibread/firmware")).compileSketch({ source: circuit.sketch.source, board: circuit.board.profile }),
+    const compiled = await run.stage("compile", () =>
+      cachedCompile({ sketch: circuit.sketch.source, board: circuit.board.profile }, async () =>
+        (await import("@vibread/firmware")).compileSketch({ source: circuit.sketch.source, board: circuit.board.profile }),
+      ),
     );
     if (!compiled.ok) {
       run.reports.set("GUIDO", report("GUIDO", [crashFinding("GUIDO", "compile", compiled.error)], "The compiler crashed.", hash));
@@ -286,7 +318,7 @@ export function createPipeline(deps: {
     }
     const plan = planned.value;
     run.patch.selftest = plan;
-    const bench = await run.stage("benchFirmware", async () => (await import("@vibread/firmware")).compileBenchFirmware(plan));
+    const bench = await run.stage("benchFirmware", () => cachedCompile({ bench: plan }, async () => (await import("@vibread/firmware")).compileBenchFirmware(plan)));
     if (!bench.ok) run.extra.GUIDO.push(crashFinding("GUIDO", "self-test firmware build", bench.error));
     else if (!bench.value.ok || !bench.value.hex) {
       run.extra.GUIDO.push({
