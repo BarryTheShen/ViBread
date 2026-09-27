@@ -86,7 +86,7 @@ function renderThread(chat: Chat<UIMessage>): string {
 }
 
 function missionChat(messages: UIMessage[] = []): Chat<UIMessage> {
-  return new Chat<UIMessage>({ id: "m1", transport: createMissionTransport("m1"), messages });
+  return new Chat<UIMessage>({ id: "m1", transport: createMissionTransport("m1", new QueryClient()), messages });
 }
 
 function expectQuestionCard(html: string) {
