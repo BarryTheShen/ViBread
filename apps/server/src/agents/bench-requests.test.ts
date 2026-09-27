@@ -246,7 +246,7 @@ describe("bench requests from agents reach the bench", () => {
     const missionId = await missionWithRevision({ released: false });
     await expect(
       invokeTool({ registry: ctx.tools, broker: ctx.broker, store: ctx.store, ctx: { missionId, actor: CLAUDE_CODE }, name: "request_bench_action", args: { action: "run-selftest" } }),
-    ).rejects.toThrow("Nothing is released for the bench yet — press GO for build first.");
+    ).rejects.toThrow("Nothing is released for the bench yet. Only the person can press GO for build: ask them to, then request the bench action again.");
     expect(await listed(missionId)).toEqual([]);
     expect(await ctx.broker.listPending(missionId)).toEqual([]);
   });

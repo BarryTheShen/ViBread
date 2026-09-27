@@ -24,7 +24,7 @@ export async function fileBenchRequest(input: { broker: ApprovalBroker; store: M
   const action = brokerAction(def, args);
   const released = (await store.getMission(ctx.missionId))?.releasedRevision;
   const revision = released === undefined ? null : await store.getRevision(ctx.missionId, released);
-  if (!revision) throw new ToolInputError("Nothing is released for the bench yet — press GO for build first.");
+  if (!revision) throw new ToolInputError("Nothing is released for the bench yet. Only the person can press GO for build: ask them to, then request the bench action again.");
   return broker.requestBench({
     missionId: ctx.missionId,
     action,

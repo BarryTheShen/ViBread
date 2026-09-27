@@ -244,11 +244,16 @@ export function createToolRegistry(deps: {
 
         let suite: TestSuite | undefined;
         let testsNote: string | undefined;
+        // Why no suite: without a Claude connection a retry can't help, so the fix says what the person can do instead.
+        let testsNeedClaude = false;
         try {
           // Keeps the previous suite's scenarios for unchanged clauses; asks the author only for changed ones.
           suite = await ops.suiteFor(mission, circuit, ctx.signal, previous);
         } catch (error) {
-          testsNote = `The independent test writer's answer couldn't be used: ${errorMessage(error)}`;
+          testsNeedClaude = error instanceof TestsNotWrittenError;
+          testsNote = testsNeedClaude
+            ? "The independent test writer runs on ViBread's own Claude connection, and none is connected."
+            : `The independent test writer's answer couldn't be used: ${errorMessage(error)}`;
         }
 
         const revision = await store.createRevision(ctx.missionId, {
@@ -274,8 +279,17 @@ export function createToolRegistry(deps: {
           // No suite: FIDO says why instead of waiting silently for tests that won't come.
           const fido = report(
             "FIDO",
-            [{ console: "FIDO", ruleId: "TESTS-NOT-WRITTEN", severity: "error", title: "The simulation tests couldn't be written, so nothing was simulated.", detail: testsNote, fix: "Propose the same design again to retry the test writer." }],
-            "NO-GO: the independent test writer's answer couldn't be used.",
+            [{
+              console: "FIDO",
+              ruleId: "TESTS-NOT-WRITTEN",
+              severity: "error",
+              title: "The simulation tests couldn't be written, so nothing was simulated.",
+              detail: testsNote,
+              fix: testsNeedClaude
+                ? "Don't propose again for this: it can't succeed until Claude is connected. Tell the person the design passed the other checks, and that they can connect Claude in ViBread's Settings (or set ANTHROPIC_API_KEY) to write the tests, or press GO for build with the override."
+                : "Propose the same design again to retry the test writer.",
+            }],
+            testsNeedClaude ? "NO-GO: no simulation tests yet, because Claude isn't connected." : "NO-GO: the independent test writer's answer couldn't be used.",
             revision.hash,
           );
           evaluated = await store.saveResults(ctx.missionId, revision.n, { reports: evaluated.results.reports.map((r) => (r.console === "FIDO" ? fido : r)) });
@@ -593,7 +607,7 @@ export function createToolRegistry(deps: {
         const mission = await requireMission(store, ctx.missionId);
         // The bench runs the released revision (the build target); a request is bound to its hash (gate.ts).
         const n = mission.releasedRevision;
-        if (n === undefined) throw new ToolInputError("Nothing is released for the bench yet — press GO for build first.");
+        if (n === undefined) throw new ToolInputError("Nothing is released for the bench yet. Only the person can press GO for build: ask them to, then request the bench action again.");
         if (input.revision !== undefined && input.revision !== n) {
           throw new ToolInputError(`The bench runs the released revision (${n}), not revision ${input.revision}. Release revision ${input.revision} first (GO for build).`);
         }

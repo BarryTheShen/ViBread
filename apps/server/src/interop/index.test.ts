@@ -113,7 +113,7 @@ function testContext() {
   };
 }
 
-async function openServer(): Promise<TestServer> {
+async function openServer(say?: (missionId: string, text: string) => Promise<unknown>): Promise<TestServer> {
   const app = express();
   const server = createServer(app);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -122,6 +122,7 @@ async function openServer(): Promise<TestServer> {
   const baseUrl = `http://127.0.0.1:${address.port}`;
   const context = testContext();
   context.config.publicUrl = baseUrl;
+  if (say) Object.assign(context.missions, { say });
   mountMcp(app, context as never);
   mountA2a(app, context as never);
   const opened = { server, baseUrl };
@@ -207,7 +208,7 @@ describe("MCP and A2A mounts", () => {
     expect(cardJson.securitySchemes.Bearer.scheme.value.scheme).toBe("bearer");
     const readRejected = await fetch(`${baseUrl}/a2a`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer read" }, body: JSON.stringify({ jsonrpc: "2.0", id: 7, method: "message/send", params: {} }) });
     expect(readRejected.status).toBe(403);
-    expect(await readRejected.json()).toMatchObject({ error: { message: "insufficient_scope" } });
+    expect(await readRejected.json()).toMatchObject({ jsonrpc: "2.0", id: 7, error: { code: -32003 } });
     for (const method of ["SendStreamingMessage", "message/stream", "tasks/pushNotificationConfig/set", "SetTaskPushNotificationConfig", "made-up-method"]) {
       const rejected = await fetch(`${baseUrl}/a2a`, { method: "POST", headers: { "content-type": "application/json", authorization: "Bearer read" }, body: JSON.stringify({ jsonrpc: "2.0", id: 8, method, params: {} }) });
       expect(rejected.status).toBe(403);
@@ -255,5 +256,32 @@ describe("MCP and A2A mounts", () => {
     const second = asTask(await client.sendMessage(continuation));
     expect(second.status?.state).toBe(TaskState.TASK_STATE_COMPLETED);
     expect(second.artifacts[0]?.parts[0]?.content).toEqual({ $case: "text", value: expect.stringContaining("Revision summary") });
+  });
+
+  it("shows a running A2A task and keeps it canceled after ViBread's turn ends", async () => {
+    let started!: () => void;
+    let finish!: () => void;
+    const turnStarted = new Promise<void>((resolve) => (started = resolve));
+    const turnDone = new Promise<void>((resolve) => (finish = resolve));
+    const { baseUrl } = await openServer(async () => {
+      started();
+      await turnDone;
+      return { text: "Designed it", revision: 1, pendingApprovals: [] };
+    });
+    const rpc = async (token: string, method: string, params: unknown) => {
+      const response = await fetch(`${baseUrl}/a2a`, { method: "POST", headers: { "content-type": "application/json", "a2a-version": "1.0", authorization: `Bearer ${token}` }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }) });
+      return (await response.json()) as { result?: { id?: string; contextId?: string; status?: { state?: string }; tasks?: { id: string; contextId: string; status: { state: string } }[] }; error?: unknown };
+    };
+    const sent = rpc("write", "SendMessage", { message: { messageId: "m-cancel", role: "ROLE_USER", parts: [{ text: "Build a moon-phase lamp" }] } });
+    await turnStarted;
+    const listed = await rpc("read", "ListTasks", {});
+    const running = listed.result?.tasks?.[0];
+    expect(running?.status.state).toBe("TASK_STATE_WORKING");
+    const canceled = await rpc("write", "CancelTask", { id: running!.id });
+    expect(canceled.result).toMatchObject({ id: running!.id, contextId: running!.contextId, status: { state: "TASK_STATE_CANCELED" } });
+    finish();
+    await sent;
+    const after = await rpc("read", "GetTask", { id: running!.id });
+    expect(after.result?.status?.state).toBe("TASK_STATE_CANCELED");
   });
 });

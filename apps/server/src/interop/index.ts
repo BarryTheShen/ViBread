@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import express, { type Express, type Request, type RequestHandler, type Response } from "express";
+import express, { type ErrorRequestHandler, type Express, type Request, type RequestHandler, type Response } from "express";
 import { z } from "zod";
 import { A2A_PROTOCOL_VERSION, Role, TaskState, type AgentCard, type Artifact, type Message, type Task } from "@a2a-js/sdk";
 import { AgentEvent, DefaultRequestHandler, InMemoryTaskStore, type AgentExecutor, type ExecutionEventBus, RequestContext } from "@a2a-js/sdk/server";
@@ -9,17 +9,35 @@ import type { Auth, BetterAuthOptions } from "better-auth";
 import { fromNodeHeaders } from "better-auth/node";
 import { eq } from "drizzle-orm";
 import { InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
+import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import type { AgentTurnResult, Actor, ApprovalRequest, InventoryItem, MissionDetail, ToolDef } from "@vibread/core";
+import { MODULE_KEYS, type AgentTurnResult, type Actor, type ApprovalRequest, type InventoryItem, type MissionDetail, type ToolDef } from "@vibread/core";
 import { createUserTools, invokeTool } from "@vibread/tools";
 import type { AppContext } from "../context.js";
 import { oauthClient } from "../db/schema.js";
 
+declare global {
+  // Express request augmentation, as the MCP SDK's bearer middleware declares it.
+  namespace Express {
+    interface Request {
+      /** Set by the /mcp and /a2a auth middleware; the MCP transport hands it to tool handlers. */
+      auth?: AuthInfo;
+    }
+  }
+}
+
 const MCP_VERSION = "1.0.0";
 const MCP_PATH = "/mcp";
 const A2A_PATH = "/a2a";
+/** Same limits as the web composer (4000) and mission name field (80). */
+const MAX_TEXT = 4000;
+const MAX_TITLE = 80;
+/** Matches the server-wide express.json limit in main.ts. */
+const BODY_LIMIT = "2mb";
+const ALL_SCOPES = ["circuits:read", "circuits:write", "bench:request"] as const;
+const TOKEN_HELP =
+  'Mint a new token in ViBread Settings → Connect Claude Code and send it as "Authorization: Bearer vb_…", or connect without that header to sign in with OAuth.';
 
 interface AuthInfoLike {
   token: string;
@@ -68,6 +86,73 @@ function tokenVerifier(ctx: AppContext) {
 function authUserId(request: Request): string {
   const extra = request.auth?.extra?.userId;
   return typeof extra === "string" && extra.length > 0 ? extra : request.auth?.clientId ?? "remote-agent";
+}
+
+function sendJsonRpcError(response: Response, status: number, code: number, message: string, id: unknown = null): void {
+  response.status(status).json({ jsonrpc: "2.0", error: { code, message }, id });
+}
+
+/** The JSON-RPC id of the request being rejected, so the client can match the error to its call. */
+function requestId(request: Request): unknown {
+  const body: unknown = request.body;
+  return body && typeof body === "object" && "id" in body ? body.id ?? null : null;
+}
+
+/**
+ * Bearer auth for ViBread `vb_` tokens (Settings → Connect Claude Code). Failures keep the RFC 6750 status and
+ * WWW-Authenticate challenge but answer with a JSON-RPC error that tells the remote agent how to get a working token.
+ */
+function bearerAuth(ctx: AppContext, oauth: boolean): RequestHandler {
+  const verifier = tokenVerifier(ctx);
+  const metadata = oauth ? `, resource_metadata="${ctx.config.publicUrl.replace(/\/$/, "")}/.well-known/oauth-protected-resource${MCP_PATH}"` : "";
+  return async (request, response, next) => {
+    const match = /^Bearer\s+(\S+)\s*$/i.exec(request.header("authorization") ?? "");
+    if (!match?.[1]) {
+      response.setHeader("WWW-Authenticate", `Bearer error="invalid_request", error_description="Missing access token"${metadata}`);
+      sendJsonRpcError(response, 401, -32000, `ViBread needs an access token. ${TOKEN_HELP}`, requestId(request));
+      return;
+    }
+    try {
+      request.auth = await verifier.verifyAccessToken(match[1]);
+    } catch (error) {
+      if (!(error instanceof InvalidTokenError)) {
+        next(error);
+        return;
+      }
+      response.setHeader("WWW-Authenticate", `Bearer error="invalid_token", error_description="${error.message}"${metadata}`);
+      sendJsonRpcError(response, 401, -32000, `ViBread rejected the access token: ${error.message}. ${TOKEN_HELP}`, requestId(request));
+      return;
+    }
+    next();
+  };
+}
+
+/** Body-parser failures (bad JSON, too large) and unexpected errors on /mcp and /a2a as JSON-RPC errors, not REST JSON. */
+function jsonRpcErrorHandler(ctx: AppContext): ErrorRequestHandler {
+  return (error: unknown, request, response, next) => {
+    if (response.headersSent) {
+      next(error);
+      return;
+    }
+    const fields: object = error && typeof error === "object" ? error : {};
+    const type = "type" in fields ? fields.type : undefined;
+    const status = "status" in fields ? fields.status : undefined;
+    const detail = "message" in fields && typeof fields.message === "string" ? fields.message : String(error);
+    if (type === "entity.parse.failed") {
+      sendJsonRpcError(response, 400, -32700, `Parse error: the request body isn't valid JSON (${detail}).`);
+      return;
+    }
+    if (type === "entity.too.large") {
+      sendJsonRpcError(response, 413, -32600, `Request too large: ViBread accepts JSON-RPC bodies up to ${BODY_LIMIT}. Send smaller arguments.`, requestId(request));
+      return;
+    }
+    if (typeof status === "number" && status >= 400 && status < 500 && "expose" in fields && fields.expose === true) {
+      sendJsonRpcError(response, status, -32600, `Invalid request: ${detail}`, requestId(request));
+      return;
+    }
+    ctx.log.error({ err: error, path: request.originalUrl }, "interop request failed");
+    sendJsonRpcError(response, 500, -32603, "Internal error in ViBread. Retry the call; if it keeps failing, check the ViBread server log.", requestId(request));
+  };
 }
 
 function requestedScopes(request: Request): string[] {
@@ -135,9 +220,17 @@ function mcpToolShape(def: ToolDef): Record<string, z.ZodType<unknown>> {
   };
 }
 
+/** A missing and a foreign mission read the same, so mission IDs can't be probed across users. */
 async function ownedMission(ctx: AppContext, missionId: string, request: Request): Promise<MissionDetail> {
-  const detail = await ctx.missions.detail(missionId);
-  if (detail.mission.ownerId !== authUserId(request)) throw new Error("Mission not found");
+  const notFound = `Mission ${missionId} not found. Call vibread_list_missions for the IDs of your missions.`;
+  let detail: MissionDetail;
+  try {
+    detail = await ctx.missions.detail(missionId);
+  } catch (error) {
+    if (error instanceof Error && "status" in error && error.status === 404) throw new Error(notFound);
+    throw error;
+  }
+  if (detail.mission.ownerId !== authUserId(request)) throw new Error(notFound);
   return detail;
 }
 
@@ -176,13 +269,15 @@ async function callTool(def: ToolDef, args: Record<string, unknown>, request: Re
   }
 }
 
+const missionIdArg = z.string().min(1).describe("ViBread mission ID (from vibread_list_missions or vibread_create_mission)");
+
 function registerMissionTools(server: McpServer, ctx: AppContext, request: Request, scopes: string[]): void {
   if (hasScope(scopes, "circuits:read")) {
     server.registerTool(
       "vibread_list_missions",
       {
         title: "List ViBread missions",
-        description: "List missions owned by the authenticated caller.",
+        description: "List the missions you own: id, title, brief, phase. Use an id as missionId in the other tools.",
         inputSchema: {},
       },
       async () => {
@@ -194,8 +289,9 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
       "vibread_status",
       {
         title: "Mission status",
-        description: "Read the current mission phase, revision, consoles, and pending approvals.",
-        inputSchema: { missionId: z.string() },
+        description:
+          "Read a mission: phase, latest and released revision, every console's Go/No-Go verdict with its findings, and pending bench requests.",
+        inputSchema: { missionId: missionIdArg },
       },
       async ({ missionId }) => toolCallResult(await ownedMission(ctx, missionId, request)),
     );
@@ -206,18 +302,23 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
       "vibread_create_mission",
       {
         title: "Create a ViBread mission",
-        description: "Create a mission from a natural-language circuit brief.",
+        description:
+          "Create a mission from a plain-language brief of what the circuit should do. Returns the mission (use its id as missionId). Then call propose_design with a complete circuit; there is no separate clarify step for you.",
         inputSchema: {
-          brief: z.string().min(1),
-          title: z.string().optional(),
-          inventory: z.array(
-            z.object({
-              module: z.string(),
-              count: z.number().int().nonnegative(),
-              params: z.record(z.string(), z.unknown()).optional(),
-              note: z.string().optional(),
-            }),
-          ).optional(),
+          brief: z.string().min(1).max(MAX_TEXT).describe("What the circuit should do, in plain words."),
+          title: z.string().min(1).max(MAX_TITLE).optional().describe("Mission name; derived from the brief when omitted."),
+          inventory: z
+            .array(
+              z.object({
+                module: z.enum(MODULE_KEYS).describe("Module key, see list_modules."),
+                count: z.number().int().nonnegative(),
+                params: z.record(z.string(), z.unknown()).optional().describe('Narrows the module, e.g. { "color": "red" } or { "ohms": 220 }.'),
+                note: z.string().max(200).optional(),
+              }),
+            )
+            .max(50)
+            .optional()
+            .describe("Parts the design may use. Omit to copy the parts the user keeps in ViBread (vibread_get_inventory)."),
         },
       },
       async ({ brief, title, inventory }) => {
@@ -227,7 +328,7 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
           title,
           owner: actor,
           // No parts given → MissionService copies the owner's inventory (plan §5.4).
-          ...(inventory ? { inventory: inventory as InventoryItem[] } : {}),
+          ...(inventory ? { inventory: inventory satisfies InventoryItem[] } : {}),
         });
         return toolCallResult(mission);
       },
@@ -235,9 +336,10 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
     server.registerTool(
       "vibread_say",
       {
-        title: "Talk to the ViBread agent",
-        description: "Send a natural-language turn to a mission agent.",
-        inputSchema: { missionId: z.string(), text: z.string().min(1) },
+        title: "Talk to ViBread's own agent",
+        description:
+          "Send a plain-language turn to ViBread's built-in design agent, which runs on the Claude account connected in ViBread. You don't need it to design: call propose_design and the check tools yourself.",
+        inputSchema: { missionId: missionIdArg, text: z.string().min(1).max(MAX_TEXT) },
       },
       async ({ missionId, text }) => {
         await ownedMission(ctx, missionId, request);
@@ -249,8 +351,8 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
       "vibread_continue_task",
       {
         title: "Continue an ask-back task",
-        description: "Answer the last question from ViBread and continue the mission turn.",
-        inputSchema: { missionId: z.string(), answer: z.string().min(1) },
+        description: "Answer the last question ViBread's built-in agent asked (see vibread_say) and continue its turn.",
+        inputSchema: { missionId: missionIdArg, answer: z.string().min(1).max(MAX_TEXT) },
       },
       async ({ missionId, answer }) => {
         await ownedMission(ctx, missionId, request);
@@ -301,11 +403,15 @@ function registerUserTools(server: McpServer, ctx: AppContext, request: Request,
 }
 
 function createMcpServer(ctx: AppContext, request: Request): McpServer {
-  const server = new McpServer(
-    { name: "vibread", version: MCP_VERSION },
-    { instructions: "Mission Control for your breadboard. Physical actions always require a bench click." },
-  );
   const scopes = requestedScopes(request);
+  const missing = ALL_SCOPES.filter((scope) => !scopes.includes(scope));
+  const instructions = [
+    "ViBread is Mission Control for an Arduino breadboard. Create a mission (vibread_create_mission), then propose_design with a complete circuit: it saves a revision and runs every Go/No-Go console. Fix the findings it returns and propose again.",
+    "GO for build (releasing a revision to the bench) is human-only: when every console is GO, ask the person to press GO for build in ViBread (web) or reply GO in iMessage. request_bench_action only queues a physical action; it runs when the person clicks Start at the bench.",
+    `This connection's scopes: ${scopes.join(", ") || "none"}.`,
+    ...(missing.length > 0 ? [`Tools that need ${missing.join(", ")} are not listed; mint a token with those scopes in ViBread Settings → Connect Claude Code to use them.`] : []),
+  ].join("\n");
+  const server = new McpServer({ name: "vibread", version: MCP_VERSION }, { instructions });
   registerToolDefs(server, ctx, request, scopes);
   registerMissionTools(server, ctx, request, scopes);
   registerUserTools(server, ctx, request, scopes);
@@ -321,13 +427,6 @@ function webRequestFor(request: Request): globalThis.Request {
   const init: RequestInit = { method: request.method, headers };
   if (request.method !== "GET" && request.method !== "HEAD" && request.body !== undefined) init.body = JSON.stringify(request.body);
   return new globalThis.Request(url, init);
-}
-
-async function sendWebResponse(response: Response, result: globalThis.Response): Promise<void> {
-  result.headers.forEach((value, name) => response.setHeader(name, value));
-  response.status(result.status);
-  const body = await result.arrayBuffer();
-  response.end(Buffer.from(body));
 }
 
 function oauthMiddleware(auth: Auth<BetterAuthOptions>, ctx: AppContext, bearer: RequestHandler): RequestHandler {
@@ -348,11 +447,16 @@ function oauthMiddleware(auth: Auth<BetterAuthOptions>, ctx: AppContext, bearer:
     );
     const result = await verify(webRequestFor(request));
     if (result.status !== 204) {
-      await sendWebResponse(response, result);
+      // Keep Better Auth's status and WWW-Authenticate challenge (OAuth discovery); replace its body with an actionable JSON-RPC error.
+      result.headers.forEach((value, name) => {
+        if (name !== "content-type" && name !== "content-length") response.setHeader(name, value);
+      });
+      const problem = result.status !== 401 ? `ViBread refused the request (HTTP ${result.status}).` : authorization ? "ViBread rejected the access token (invalid or expired)." : "ViBread needs an access token.";
+      sendJsonRpcError(response, result.status, -32000, `${problem} ${TOKEN_HELP}`, requestId(request));
       return;
     }
     if (!oauthClaims) {
-      response.status(401).json({ error: "OAuth claims missing" });
+      sendJsonRpcError(response, 401, -32000, `ViBread couldn't read the OAuth token's claims. ${TOKEN_HELP}`, requestId(request));
       return;
     }
     const token = authorization.replace(/^Bearer\s+/i, "");
@@ -464,22 +568,18 @@ function mountOAuthApi(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOpti
 
 /** Mount the scoped Streamable HTTP MCP server at `/mcp`. */
 export function mountMcp(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
-  const verifier = tokenVerifier(ctx);
   const sessions = new Map<string, McpSession>();
-  const bearer = requireBearerAuth({ verifier });
+  const bearer = bearerAuth(ctx, Boolean(auth));
   const hybridAuth = auth ? oauthMiddleware(auth, ctx, bearer) : bearer;
   mountOAuthApi(app, ctx, auth);
-  app.use(MCP_PATH, express.json(), hybridAuth, async (request, response) => {
+  app.use(MCP_PATH, express.json({ limit: BODY_LIMIT }), hybridAuth, async (request, response) => {
     const userId = authUserId(request);
     const scopes = requestedScopes(request);
     const sessionIdHeader = request.header("Mcp-Session-Id");
     const existing = sessionIdHeader ? sessions.get(sessionIdHeader) : undefined;
-    if (sessionIdHeader && !existing) {
-      response.status(404).json({ error: "Unknown MCP session" });
-      return;
-    }
-    if (existing && (existing.userId !== userId || existing.scopes.some((scope) => !scopes.includes(scope)) || scopes.some((scope) => !existing.scopes.includes(scope)))) {
-      response.status(404).json({ error: "Unknown MCP session" });
+    // Unknown, ended, or another token's session: 404 tells a spec-compliant client to start a new session.
+    if (sessionIdHeader && (!existing || existing.userId !== userId || existing.scopes.some((scope) => !scopes.includes(scope)) || scopes.some((scope) => !existing.scopes.includes(scope)))) {
+      sendJsonRpcError(response, 404, -32001, "MCP session not found (it ended, ViBread restarted, or it belongs to another token). Start a new session: send initialize without an Mcp-Session-Id header.", requestId(request));
       return;
     }
 
@@ -500,6 +600,7 @@ export function mountMcp(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOp
     await session.transport.handleRequest(request, response, request.body);
     if (!existing && session.transport.sessionId) sessions.set(session.transport.sessionId, session);
   });
+  app.use(MCP_PATH, jsonRpcErrorHandler(ctx));
 }
 
 function textOf(message: Message): string {
@@ -554,31 +655,37 @@ function artifactForResult(taskId: string, contextId: string, result: AgentTurnR
 }
 
 function createA2aExecutor(ctx: AppContext): AgentExecutor {
+  /** Tasks whose turn is still running, with the context their cancel event must carry. */
+  const running = new Map<string, { contextId: string; canceled: boolean }>();
   return {
     async execute(requestContext: RequestContext, eventBus: ExecutionEventBus): Promise<void> {
       const incoming = a2aUserMessage(requestContext);
+      const text = textOf(incoming).trim();
+      if (text.length === 0) throw new Error("Send the request as a text part, e.g. \"Build a moon-phase lamp\".");
+      if (text.length > MAX_TEXT) throw new Error(`The message is ${text.length} characters; ViBread accepts up to ${MAX_TEXT}. Send a shorter message.`);
       const actor = a2aActor(requestContext);
-      const existingMissionId = missionIdFromTask(requestContext.task);
-      let missionId = existingMissionId;
-      let result: AgentTurnResult;
-
-      if (!missionId) {
-        const mission = await ctx.missions.create({ brief: textOf(incoming), owner: actor });
-        missionId = mission.id;
-      }
-      result = await ctx.missions.say(missionId, textOf(incoming), actor);
-
-      const history = [...(requestContext.task?.history ?? []), incoming];
+      const missionId = missionIdFromTask(requestContext.task) ?? (await ctx.missions.create({ brief: text, owner: actor })).id;
       const task: Task = {
         id: requestContext.task?.id ?? requestContext.taskId,
         contextId: requestContext.task?.contextId ?? requestContext.contextId,
-        status: taskStatus(TaskState.TASK_STATE_SUBMITTED, undefined),
+        status: taskStatus(TaskState.TASK_STATE_WORKING, undefined),
         artifacts: requestContext.task?.artifacts ?? [],
-        history,
+        history: [...(requestContext.task?.history ?? []), incoming],
         metadata: { ...(requestContext.task?.metadata ?? {}), missionId },
       };
-      // A2A requires a task/message event before any status or artifact event, including continuations.
+      // A2A requires a task/message event before any status or artifact event, including continuations. Publishing it
+      // before the turn makes the task visible to GetTask and CancelTask while ViBread works.
       eventBus.publish(AgentEvent.task(task));
+      const run = { contextId: task.contextId, canceled: false };
+      running.set(task.id, run);
+      let result: AgentTurnResult;
+      try {
+        result = await ctx.missions.say(missionId, text, actor);
+      } finally {
+        running.delete(task.id);
+      }
+      // Canceled mid-turn: the mission keeps the turn's outcome, but the canceled task must not flip back to done.
+      if (run.canceled) return;
 
       const question = result.question ?? (result.pendingApprovals.length > 0
         ? result.pendingApprovals.map((approval) => approval.summary).join("\n")
@@ -617,11 +724,14 @@ function createA2aExecutor(ctx: AppContext): AgentExecutor {
     },
 
     async cancelTask(taskId: string, eventBus: ExecutionEventBus): Promise<void> {
+      const run = running.get(taskId);
+      if (!run) return;
+      run.canceled = true;
       eventBus.publish(
         AgentEvent.statusUpdate({
           taskId,
-          contextId: taskId,
-          status: taskStatus(TaskState.TASK_STATE_CANCELED, a2aAgentMessage(taskId, taskId, "Task canceled.")),
+          contextId: run.contextId,
+          status: taskStatus(TaskState.TASK_STATE_CANCELED, a2aAgentMessage(run.contextId, taskId, "Task canceled. The ViBread mission keeps whatever this turn already changed.")),
           metadata: undefined,
         }),
       );
@@ -705,7 +815,7 @@ function a2aScopeMiddleware(request: Request, response: Response, next: () => vo
   const required = readMethods.has(method) ? "circuits:read" : "circuits:write";
   if (!requestedScopes(request).includes(required)) {
     response.setHeader("WWW-Authenticate", `Bearer error="insufficient_scope", scope="${required}"`);
-    response.status(403).json({ jsonrpc: "2.0", id: body.id ?? null, error: { code: -32003, message: "insufficient_scope" } });
+    sendJsonRpcError(response, 403, -32003, `insufficient_scope: ${method || "this request"} needs the ${required} scope. Mint a token with ${required} in ViBread Settings → Connect Claude Code.`, requestId(request));
     return;
   }
   next();
@@ -715,14 +825,15 @@ function a2aScopeMiddleware(request: Request, response: Response, next: () => vo
 export function mountA2a(app: Express, ctx: AppContext, auth?: Auth<BetterAuthOptions>): void {
   const card = makeAgentCard(ctx);
   const requestHandler = new DefaultRequestHandler(card, new InMemoryTaskStore(), createA2aExecutor(ctx));
-  const bearer = requireBearerAuth({ verifier: tokenVerifier(ctx) });
+  const bearer = bearerAuth(ctx, Boolean(auth));
   const hybridAuth = auth ? oauthMiddleware(auth, ctx, bearer) : bearer;
   app.use("/.well-known/agent-card.json", agentCardHandler({ agentCardProvider: requestHandler }));
   app.use(
     A2A_PATH,
-    express.json(),
+    express.json({ limit: BODY_LIMIT }),
     hybridAuth,
     a2aScopeMiddleware,
     jsonRpcHandler({ requestHandler, userBuilder: a2aUserBuilder() }),
   );
+  app.use(A2A_PATH, jsonRpcErrorHandler(ctx));
 }
