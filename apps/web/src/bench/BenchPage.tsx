@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useParams, useSearchParams } from "react-router";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -22,13 +22,16 @@ import Typography from "@mui/material/Typography";
 import type { BenchRunResult, BoardProfileId, BuildState, Circuit, DeviceLine, Layout, MissionDetail, RevisionDetail, SelfTestPlan } from "@vibread/core";
 import { BOARD_PROFILES, revisionHash } from "@vibread/core";
 import { FAULTS, evaluateRun, planSelfTest, promptFor } from "@vibread/bench";
-import { BenchRunner, type BenchRunnerState } from "./runner.js";
+import { BenchRunner, BoardCheckError, type BenchRunnerState } from "./runner.js";
+import { createBenchLog } from "./benchLog.js";
 import { applyBrowserFault, circuitWithFault } from "./faults.js";
 import { decorateBreadboardSvg, fallbackBreadboardSvg, candidateHighlight, type SvgHighlight } from "./svg.js";
 import {
+  classifySerialError,
   describePort,
   flashHex,
   requestBoardPort,
+  TELEMETRY_BAUD,
   UnsupportedWebSerialError,
   type BoardPortConnection,
   type FlashProgress,
@@ -38,6 +41,7 @@ import { BenchAskBridge, type RemoteAskStatus } from "./askBridge.js";
 import { approvalGate } from "./approval.js";
 import { MONO_FONT } from "../theme.js";
 import { SerialMonitor } from "../components/SerialMonitor.js";
+import { parseBenchQuery, testLabel } from "./query.js";
 
 const STEPS = ["Connect your board", "Make it safe", "Check power", "Test each part", "Find the problem", "Run your project", "Celebrate"];
 const BOARD_LOST_POWER = "The board lost power or stopped answering when you plugged in — unplug now and check for a short between the red + and blue − rails, or a part bridging them.";
@@ -134,9 +138,9 @@ function fallbackCommand(upload: { command: string; args: string[] }): string {
   return [shellQuote(upload.command), ...upload.args.map(shellQuote)].join(" ");
 }
 
-function isLostPowerError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /disconnect|serial|power|banner|timeout|port/i.test(message);
+function serialPresentation(error: unknown): { message: string; technical: string } {
+  const failure = classifySerialError(error);
+  return { message: failure.kind === "disconnect" ? BOARD_LOST_POWER : failure.message, technical: failure.technical };
 }
 function virtualPromptHint(ask: Extract<DeviceLine, { t: "ask" }>): string | undefined {
   const part = ask.part ?? "that part";
@@ -193,6 +197,9 @@ const actionButtonSx = { minHeight: 46, borderRadius: 2 } as const;
 
 export default function BenchPage(): ReactElement | null {
   const { missionId = "" } = useParams<{ missionId: string }>();
+  const [searchParams] = useSearchParams();
+  const benchQuery = useMemo(() => parseBenchQuery(searchParams.toString()), [searchParams]);
+  const subsetTests = benchQuery.tests;
   const [loaded, setLoaded] = useState<LoadedBench | undefined>();
   const [loadError, setLoadError] = useState<string>();
   const [authRequired, setAuthRequired] = useState(false);
@@ -212,6 +219,13 @@ export default function BenchPage(): ReactElement | null {
   const [highlight, setHighlight] = useState<SvgHighlight>({ holes: [], parts: [], jumpers: [] });
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  const [technicalError, setTechnicalError] = useState<string>();
+  /** A failure that retrying the same step can't fix: a new flash ("Flash again") or a new port ("Choose the port again"). */
+  const [errorFix, setErrorFix] = useState<"flash" | "reconnect">();
+  const lastRunnerError = useRef<string | undefined>(undefined);
+  const benchLog = useMemo(() => createBenchLog(missionId), [missionId]);
+  const log = benchLog.log;
+  useEffect(() => () => void benchLog.flush(), [benchLog]);
   const [remoteAnswer, setRemoteAnswer] = useState<{ id: string; value: string; by: string }>();
   const [requests, setRequests] = useState<BenchApprovalRequest[]>([]);
   const askBridgeRef = useRef<Map<string, BenchAskBridge>>(new Map());
@@ -331,8 +345,9 @@ export default function BenchPage(): ReactElement | null {
     const timer = window.setTimeout(() => {
       const current = runnerRef.current?.state;
       if (!current?.seenHello || !current.seenVcc) {
-        current && runnerRef.current?.fail(BOARD_LOST_POWER);
-        setError(BOARD_LOST_POWER);
+        const message = current?.seenHello ? "The board did not report VCC. Check the board power and retry." : "The board did not answer the power check. Check the cable and retry.";
+        current && runnerRef.current?.fail(message);
+        setError(message);
       }
     }, 5000);
     return () => window.clearTimeout(timer);
@@ -350,41 +365,69 @@ export default function BenchPage(): ReactElement | null {
 
   const attachRunner = useCallback((nextTransport: BoardPortConnection["transport"] | VirtualBenchTransport, plan: SelfTestPlan, circuit: Circuit, revision: number): BenchRunner => {
     runnerRef.current?.dispose();
+    const virtual = nextTransport instanceof VirtualBenchTransport;
     const nextRunner = new BenchRunner({
       plan,
       circuit,
       revision,
-      runId: nextTransport instanceof VirtualBenchTransport ? `virtual-${Date.now().toString(36)}` : undefined,
+      runId: virtual ? `virtual-${Date.now().toString(36)}` : undefined,
       transport: nextTransport,
+      ...(virtual ? {} : { log }),
       onState: (next) => {
         setRunnerState({ ...next });
-        if (next.error) setError(isLostPowerError(next.error) ? BOARD_LOST_POWER : next.error);
+        // Only a new runner error is shown; later lines must not bring back an alert the person closed.
+        if (next.error !== lastRunnerError.current && next.error) {
+          const presented = serialPresentation(next.error);
+          setError(presented.message);
+          setTechnicalError(presented.technical);
+        }
+        lastRunnerError.current = next.error;
       },
     });
     runnerRef.current = nextRunner;
     setRunner(nextRunner);
     setRunnerState(nextRunner.state);
     return nextRunner;
-  }, []);
+  }, [log]);
 
   const connectPhysical = useCallback(async (): Promise<void> => {
     if (!loaded || !missionId) return;
     setBusy("connect");
     setError(undefined);
+    setTechnicalError(undefined);
     try {
-      const picked = await requestBoardPort();
+      const picked = await requestBoardPort({
+        onDisconnect: () => {
+          log("error", "serial: port disconnected (USB unplugged or the board reset its USB bridge)");
+          runnerRef.current?.fail("The board connection was lost.");
+          setError(BOARD_LOST_POWER);
+          setTechnicalError("The serial port fired 'disconnect': the board's USB connection dropped (unplugged, or a short made the board reset its USB bridge).");
+          setErrorFix("reconnect");
+        },
+      });
       const selected = boardProfileChoice === "auto" ? picked : { ...picked, profile: BOARD_PROFILES[boardProfileChoice] };
       connectionRef.current = selected;
       setConnection(selected);
       attachRunner(selected.transport, loaded.plan, loaded.revision.circuit, loaded.revision.n);
       setActiveStep(1);
+      // Listen at the bench firmware's speed right away: a board that already runs this design's safe firmware (flashed
+      // earlier, or with the Arduino IDE / arduino-cli fallback) says hello within a couple of seconds.
+      log("info", `connect: ${describePort(selected)} (profile ${selected.profile.id}, bootloader ${selected.profile.flash.baud}); open port at ${TELEMETRY_BAUD} baud`);
+      try {
+        await selected.transport.open(TELEMETRY_BAUD);
+      } catch (reason: unknown) {
+        const failure = classifySerialError(reason);
+        log("error", `connect: open failed — ${failure.kind}`, { error: failure.technical });
+        setError(failure.message);
+        setTechnicalError(failure.technical);
+      }
     } catch (reason: unknown) {
       if (reason instanceof UnsupportedWebSerialError) setError("Web Serial is unavailable. Use Chrome or Edge on the laptop; Firefox is not supported here.");
       else setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusy(undefined);
     }
-  }, [attachRunner, boardProfileChoice, loaded, missionId]);
+  }, [attachRunner, boardProfileChoice, loaded, log, missionId]);
 
   const connectVirtual = useCallback(async (): Promise<void> => {
     if (!loaded || !missionId) return;
@@ -421,6 +464,8 @@ export default function BenchPage(): ReactElement | null {
     if (!loaded || !missionId || !runner) return;
     setBusy("safe");
     setError(undefined);
+    setTechnicalError(undefined);
+    setErrorFix(undefined);
     setFlashProgress(undefined);
     try {
       const firmware = benchHex ? { hex: benchHex, fallbackUpload } : await firmwareFor(missionId, "bench");
@@ -429,32 +474,56 @@ export default function BenchPage(): ReactElement | null {
       if (mode === "physical") {
         const selected = connectionRef.current;
         if (!selected) throw new Error("Connect the board before flashing safe firmware.");
-        await flashHex({ connection: selected, hex: firmware.hex, onProgress: setFlashProgress });
+        log("info", `flash: safe firmware for design ${loaded.plan.design} on ${selected.profile.name}`);
+        const flashed = await flashHex({ connection: selected, hex: firmware.hex, onProgress: setFlashProgress, onBoundary: () => runnerRef.current?.markFlashBoundary(), log });
+        log("info", `flash: done — ${flashed.bytes} bytes at ${flashed.baud} baud; waiting for the new firmware's hello`);
+        setFlashProgress({ stage: `Flashed and verified ✓ (${flashed.bytes.toLocaleString()} bytes at ${flashed.baud})`, percent: 100 });
+      } else {
+        setFlashProgress({ stage: "Virtual flash skipped", percent: 100 });
       }
-      setFlashProgress({ stage: mode === "virtual" ? "Virtual flash skipped" : "verified", percent: 100 });
       setActiveStep(2);
     } catch (reason: unknown) {
-      const message = isLostPowerError(reason) ? BOARD_LOST_POWER : reason instanceof Error ? reason.message : String(reason);
-      setError(message);
+      const failure = classifySerialError(reason);
+      log("error", `flash: failed — ${failure.kind}`, { error: failure.technical });
+      setError(failure.kind === "disconnect" ? BOARD_LOST_POWER : failure.message);
+      setTechnicalError(failure.technical);
+      if (failure.kind === "disconnect") setErrorFix("reconnect");
     } finally {
       setBusy(undefined);
     }
-  }, [benchHex, connection, fallbackUpload, loaded, missionId, mode, runner]);
+  }, [benchHex, fallbackUpload, loaded, log, missionId, mode, runner]);
+
+  /** The board already says hello for this design at connect: its safe firmware is on it, so the flash is optional. */
+  const skipFlash = useCallback((): void => {
+    const hello = runnerRef.current?.matchingHello;
+    if (!hello) return;
+    log("info", `flash: skipped — board already runs design ${hello.design} (${hello.board})`);
+    setError(undefined);
+    setTechnicalError(undefined);
+    setFlashProgress({ stage: "Already running this design's safe firmware — flash skipped", percent: 100 });
+    setActiveStep(2);
+  }, [log]);
 
   const startRail = useCallback(async (): Promise<void> => {
     if (!runner) return;
     setBusy("rail");
     setError(undefined);
+    setTechnicalError(undefined);
+    setErrorFix(undefined);
     railRequestAt.current = Date.now();
     try {
       await runner.startRail();
     } catch (reason: unknown) {
-      runner.fail(BOARD_LOST_POWER);
-      setError(BOARD_LOST_POWER);
+      const presented = serialPresentation(reason);
+      if (mode === "physical") log("error", `power check: failed — ${presented.message}`, { error: presented.technical });
+      runner.fail(presented.message);
+      setError(presented.message);
+      setTechnicalError(presented.technical);
+      setErrorFix(reason instanceof BoardCheckError ? "flash" : classifySerialError(reason).kind === "disconnect" ? "reconnect" : undefined);
     } finally {
       setBusy(undefined);
     }
-  }, [runner]);
+  }, [log, mode, runner]);
 
   const startSelfTest = useCallback(async (): Promise<void> => {
     if (!runner || !runnerState?.seenHello || !runnerState.seenVcc) return;
@@ -464,15 +533,16 @@ export default function BenchPage(): ReactElement | null {
     setSelectedCandidate(0);
     try {
       setActiveStep(3);
-      await runner.startSelfTest();
+      await runner.startSelfTest(subsetTests.length > 0 ? subsetTests : undefined);
     } catch (reason: unknown) {
-      const message = isLostPowerError(reason) ? BOARD_LOST_POWER : reason instanceof Error ? reason.message : String(reason);
-      runner.fail(message);
-      setError(message);
+      const presented = serialPresentation(reason);
+      runner.fail(presented.message);
+      setError(presented.message);
+      setTechnicalError(presented.technical);
     } finally {
       setBusy(undefined);
     }
-  }, [runner, runnerState]);
+  }, [runner, runnerState, subsetTests]);
 
   const submitRun = useCallback(async (): Promise<void> => {
     if (!loaded || !missionId || !runner) return;
@@ -543,8 +613,10 @@ export default function BenchPage(): ReactElement | null {
       if (mode === "physical") {
         const selected = connectionRef.current;
         if (!selected) throw new Error("Connect the board before flashing app firmware.");
-        await flashHex({ connection: selected, hex: firmware.hex, onProgress: setFlashProgress });
-        setFlashProgress({ stage: "verified", percent: 100 });
+        log("info", `flash: your project's firmware on ${selected.profile.name}`);
+        const flashed = await flashHex({ connection: selected, hex: firmware.hex, onProgress: setFlashProgress, onBoundary: () => runnerRef.current?.markFlashBoundary(), log });
+        log("info", `flash: done — ${flashed.bytes} bytes at ${flashed.baud} baud`);
+        setFlashProgress({ stage: `Flashed and verified ✓ (${flashed.bytes.toLocaleString()} bytes at ${flashed.baud})`, percent: 100 });
       } else {
         if (!virtualRef.current) throw new Error("Connect the virtual board before running app firmware.");
         runnerRef.current?.dispose();
@@ -556,12 +628,15 @@ export default function BenchPage(): ReactElement | null {
       }
       setActiveStep(6);
     } catch (reason: unknown) {
-      const message = isLostPowerError(reason) ? BOARD_LOST_POWER : reason instanceof Error ? reason.message : String(reason);
-      setError(message);
+      const failure = classifySerialError(reason);
+      if (mode === "physical") log("error", `flash: failed — ${failure.kind}`, { error: failure.technical });
+      setError(failure.kind === "disconnect" ? BOARD_LOST_POWER : failure.message);
+      setTechnicalError(failure.technical);
+      if (failure.kind === "disconnect") setErrorFix("reconnect");
     } finally {
       setBusy(undefined);
     }
-  }, [loaded, missionId, mode]);
+  }, [loaded, log, missionId, mode]);
 
   const runApproval = useCallback(async (request: BenchApprovalRequest): Promise<void> => {
     const gate = approvalGate(request.action, {
@@ -701,6 +776,32 @@ export default function BenchPage(): ReactElement | null {
   const lastRun = loaded.revision.results.bench?.at(-1);
   const timedOutAsk = run?.verdict === "incomplete" ? runnerState?.lines.find((line): line is Extract<DeviceLine, { t: "ask" }> => line.t === "ask" && runnerState?.answers[line.id] === "timeout") : undefined;
   const timedOutPrompt = timedOutAsk ? promptTitle(timedOutAsk, loaded.plan, promptFor(timedOutAsk, loaded.plan).title) : "a self-test prompt";
+  const fix = mode === "physical" ? errorFix : undefined;
+  const retryLabel = fix === "reconnect" ? "Choose the port again" : fix === "flash" ? "Flash again" : activeStep === 1 ? "Retry flash" : activeStep === 2 ? "Retry power check" : activeStep === 3 ? "Restart self-test" : activeStep >= 4 ? "Retry app firmware" : "Retry";
+  const retryCurrentStep = (): void => {
+    setError(undefined);
+    setTechnicalError(undefined);
+    setErrorFix(undefined);
+    if (fix === "reconnect") {
+      runnerRef.current?.dispose();
+      runnerRef.current = undefined;
+      void connectionRef.current?.transport.close().catch(() => undefined);
+      connectionRef.current = undefined;
+      setConnection(undefined);
+      setFlashProgress(undefined);
+      setActiveStep(0);
+      void connectPhysical();
+    } else if (fix === "flash") {
+      setActiveStep(1);
+      void flashSafe();
+    } else if (activeStep === 1) void flashSafe();
+    else if (activeStep === 2) void startRail();
+    else if (activeStep === 3) restartSelfTest();
+    else if (activeStep >= 4) void flashApp();
+  };
+  // After Connect, the board's own banner tells whether a flash is needed at all.
+  const connectHello = mode === "physical" && activeStep === 1 ? runnerState?.seenHello : undefined;
+  const alreadyFlashed = connectHello !== undefined && connectHello.design === loaded.plan.design && connectHello.board === loaded.plan.board;
 
   return (
     <Box sx={{ minHeight: "100%", p: { xs: 2, md: 4 }, bgcolor: "background.default", color: "text.primary" }}>
@@ -716,6 +817,7 @@ export default function BenchPage(): ReactElement | null {
           <Chip label={mode === "virtual" ? "Virtual board" : currentProfile?.name ?? "No board"} color={mode === "virtual" ? "info" : currentProfile ? "success" : "default"} />
         </Stack>
       </Stack>
+      {subsetTests.length > 0 && <Alert severity="info" action={benchQuery.returnTo ? <Button component={Link} to={benchQuery.returnTo} color="inherit" size="small">Back to step</Button> : undefined}>Checking this subsection: {subsetTests.map(testLabel).join(", ")}.</Alert>}
 
       <Stepper activeStep={activeStep} alternativeLabel sx={{ mb: 4 }}>
         {STEPS.map((label) => <Step key={label}><StepLabel>{label}</StepLabel></Step>)}
@@ -775,7 +877,7 @@ export default function BenchPage(): ReactElement | null {
           </CardContent>
         </Card>
 
-        {error && <Alert severity="error" onClose={() => setError(undefined)} action={error === BOARD_LOST_POWER ? <Button color="inherit" size="small" onClick={() => { setError(undefined); void startRail(); }}>Retry rail checkpoint</Button> : undefined}>{error}</Alert>}
+        {error && <Alert severity="error" onClose={() => { setError(undefined); setTechnicalError(undefined); }} action={<Button color="inherit" size="small" onClick={retryCurrentStep}>{retryLabel}</Button>}>{error}{technicalError && <Box component="details" sx={{ mt: 1 }}><Box component="summary" sx={{ cursor: "pointer" }}>Technical details</Box><Box component="code" sx={{ display: "block", mt: 1, fontFamily: MONO_FONT, whiteSpace: "pre-wrap" }}>{technicalError}</Box></Box>}</Alert>}
         {requests.map((request) => {
           const gate = approvalGate(request.action, { connected: runner !== undefined, safeReady: activeStep >= 2, railsReady: Boolean(runner?.state.seenHello && runner.state.seenVcc), passed: run?.verdict === "pass", loadedRevision: loaded.revision.n, requestRevision: request.revision });
           return <Card key={request.id} variant="outlined">
@@ -802,6 +904,16 @@ export default function BenchPage(): ReactElement | null {
                 <Button variant="contained" onClick={() => void flashSafe()} disabled={Boolean(busy) || activeStep !== 1} sx={actionButtonSx}>{mode === "virtual" ? "Skip flash · load virtual HEX" : "Flash safe firmware"}</Button>
                 {flashProgress && <Box sx={{ minWidth: 230 }}><Typography variant="body2" color="text.secondary">{progressText(flashProgress)}</Typography><LinearProgress variant="determinate" value={flashProgress.percent} /></Box>}
               </Stack>
+              {alreadyFlashed && connectHello && (
+                <Alert severity="success" sx={{ mt: 2 }} action={<Button color="inherit" size="small" onClick={skipFlash} disabled={Boolean(busy)}>Skip to power check</Button>}>
+                  This board already runs the safe firmware for this design (design {connectHello.design.slice(0, 12)}, {Object.values(BOARD_PROFILES).find((profile) => profile.id === connectHello.board)?.name ?? connectHello.board}). You can skip the flash.
+                </Alert>
+              )}
+              {connectHello && !alreadyFlashed && (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  This board runs ViBread firmware for another design ({connectHello.design.slice(0, 12)}). Flashing replaces it with this design's safe firmware.
+                </Alert>
+              )}
               {mode === "physical" && <Alert severity="warning" sx={{ mt: 2 }}>Keep the board bare for this step. ViBread verifies the ATmega328P signature <code>1E 95 0F</code> before writing.</Alert>}
             </CardContent>
           </Card>
