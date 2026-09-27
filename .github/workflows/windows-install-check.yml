@@ -1,0 +1,116 @@
+name: Windows install check
+
+# Installs a published Windows release the way a user does and runs the app's self-check (first-run setup downloads
+# the Arduino toolchain, then the seeded missions must compile), under user-like conditions: the default install and
+# data folders, no download cache, and folders with spaces or non-ASCII names.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (empty: the latest desktop release)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: ${{ matrix.case }}
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: default
+          - case: install-dir-with-space
+            installDir: 'C:\Program Files\ViBread Check'
+          - case: data-dir-with-space
+            userData: 'C:\Users\runneradmin\AppData\Roaming\Barry Shen\ViBread'
+          - case: temp-dir-with-space
+            temp: 'C:\Temp Folder\tmp'
+          - case: data-dir-latin
+            userData: 'C:\Users\runneradmin\AppData\Roaming\Bärry Shén\ViBread'
+          - case: data-dir-cjk
+            userData: 'C:\Users\runneradmin\AppData\Roaming\沈巴瑞\ViBread'
+    steps:
+      - name: Download the installer
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          tag="${TAG:-$(gh release view -R "$GITHUB_REPOSITORY" --json tagName -q .tagName)}"
+          echo "release: $tag"
+          gh release download "$tag" -R "$GITHUB_REPOSITORY" -p "*win-x64.exe" -D installer
+          ls -la installer
+
+      - name: Install, then run the self-check
+        shell: pwsh
+        env:
+          CASE: ${{ matrix.case }}
+          INSTALL_DIR: ${{ matrix.installDir }}
+          USER_DATA: ${{ matrix.userData }}
+          TEMP_DIR: ${{ matrix.temp }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $installer = (Get-ChildItem installer\*.exe | Select-Object -First 1).FullName
+          # NSIS: /D= must come last and stay unquoted, even with spaces.
+          $arguments = if ($env:INSTALL_DIR) { "/S /D=$($env:INSTALL_DIR)" } else { "/S" }
+          $clock = [Diagnostics.Stopwatch]::StartNew()
+          $setup = Start-Process -FilePath $installer -ArgumentList $arguments -Wait -PassThru
+          Write-Host "installer exited $($setup.ExitCode) after $([int]$clock.Elapsed.TotalSeconds) s"
+          $candidates = @()
+          if ($env:INSTALL_DIR) { $candidates += Join-Path $env:INSTALL_DIR "ViBread.exe" }
+          $candidates += Join-Path $env:LOCALAPPDATA "Programs\ViBread\ViBread.exe"
+          $candidates += Join-Path $env:ProgramFiles "ViBread\ViBread.exe"
+          $exe = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $exe) { throw "ViBread.exe not found in: $($candidates -join '; ')" }
+          Write-Host "installed: $exe"
+
+          $smoke = Join-Path $env:RUNNER_TEMP "smoke"
+          New-Item -ItemType Directory -Force -Path $smoke | Out-Null
+          $env:VIBREAD_SMOKE = "1"
+          $env:VIBREAD_SMOKE_DIR = $smoke
+          $userData = Join-Path $env:APPDATA "ViBread"
+          if ($env:USER_DATA) {
+            New-Item -ItemType Directory -Force -Path $env:USER_DATA | Out-Null
+            $env:VIBREAD_USER_DATA = $env:USER_DATA
+            $userData = $env:USER_DATA
+          }
+          if ($env:TEMP_DIR) {
+            New-Item -ItemType Directory -Force -Path $env:TEMP_DIR | Out-Null
+            $env:TEMP = $env:TEMP_DIR
+            $env:TMP = $env:TEMP_DIR
+          }
+          Write-Host "data folder: $userData"
+          Write-Host "temp folder: $env:TEMP"
+
+          $clock.Restart()
+          $app = Start-Process -FilePath $exe -PassThru
+          $null = $app.Handle
+          if (-not $app.WaitForExit(35 * 60 * 1000)) { Stop-Process -Id $app.Id -Force; Write-Host "self-check timed out" }
+          Write-Host "app exited $($app.ExitCode) after $([int]$clock.Elapsed.TotalSeconds) s"
+
+          New-Item -ItemType Directory -Force -Path (Join-Path $smoke "logs") | Out-Null
+          $logs = Join-Path $userData "logs"
+          if (Test-Path -LiteralPath $logs) { Copy-Item -Path (Join-Path $logs "*") -Destination (Join-Path $smoke "logs") -Recurse -Force }
+          foreach ($name in @("setup.log", "server.log")) {
+            $file = Join-Path $logs $name
+            if (Test-Path -LiteralPath $file) { Write-Host "--- $name (last 60 lines) ---"; Get-Content -LiteralPath $file -Tail 60 }
+          }
+          $report = Join-Path $smoke "smoke.json"
+          if (-not (Test-Path -LiteralPath $report)) { throw "smoke.json was not written" }
+          Write-Host "--- smoke.json ---"
+          Get-Content -LiteralPath $report
+          $result = Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+          if (-not $result.ok) { throw "self-check failed" }
+
+      - name: Upload the report and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-check-${{ matrix.case }}
+          path: ${{ runner.temp }}/smoke
+          if-no-files-found: warn
