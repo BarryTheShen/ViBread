@@ -562,3 +562,41 @@ describe("placement groups (issue #16)", () => {
     expect(twice.issues.filter((issue) => issue.code === "IR-PLACEMENT")).toHaveLength(1);
   });
 });
+
+// ---------------------------------------------------------------------------------------------------------------
+// Issue #18: the rails step and its picture show exactly the rail wires the layout has, and the power checkpoint
+// claims only what rails.vcc measures (the Arduino's own USB supply).
+
+describe("rails step and power checkpoint (issue #18)", () => {
+  it.each(GOLDEN.map((design) => [design.key, design.circuit] as const))("%s: text and picture list exactly the layout's rail wires", (_key, circuit) => {
+    const layout = layoutBoard(circuit);
+    const steps = buildSteps(circuit, layout);
+    const rails = steps.steps.find((step) => step.kind === "rails")!;
+    const onRail = (end: Layout["jumpers"][number]["from"]) => "hole" in end && /^[TB][+-]/.test(end.hole);
+    const expected = layout.jumpers.filter((jumper) => ("board" in jumper.from && onRail(jumper.to)) || ("board" in jumper.to && onRail(jumper.from)));
+    expect(rails.adds.jumpers).toEqual(expected.map((jumper) => jumper.id));
+    const usesPower = circuit.nets.some((net) => net.kind === "power" && net.pins.some((ref) => ref.part === "board" && ref.pin === "5V") && net.pins.some((ref) => ref.part !== "board"));
+    expect(expected.some((jumper) => "hole" in jumper.to && jumper.to.hole.startsWith("T+"))).toBe(usesPower);
+    for (const jumper of expected) {
+      expect(rails.text).toContain(`from Arduino ${"board" in jumper.from ? jumper.from.board : ""} header pin to hole ${"hole" in jumper.to ? jumper.to.hole : ""}`);
+    }
+    if (usesPower) expect(rails.text).toContain("uses both top rails");
+    else expect(rails.text).toContain("Only the blue − rail (GND) is used in this build");
+    // The picture for this step draws each of those wires, and no other.
+    const svg = renderBreadboardSvg({ circuit, layout, steps, upToStep: rails.n });
+    const drawn = [...svg.matchAll(/<g id="wire-(W\d+)"/g)].map((match) => match[1]);
+    expect(drawn.sort()).toEqual(expected.map((jumper) => jumper.id).sort());
+  });
+
+  it("claims only a board power check at the checkpoint, never a rail check", () => {
+    for (const design of GOLDEN) {
+      const steps = buildSteps(design.circuit, layoutBoard(design.circuit));
+      const checkpoint = steps.steps.find((step) => step.checkpoint?.tests.includes("rails.vcc") && step.kind === "checkpoint")!;
+      for (const text of [checkpoint.text, checkpoint.checkpoint!.text]) {
+        expect(text).toContain("USB VCC");
+        expect(text).not.toMatch(/inspect T\+|checks that the red \+ rail|rails? (has|have) 5 V/);
+        expect(text).toMatch(/checked by the part tests that follow/);
+      }
+    }
+  });
+});
