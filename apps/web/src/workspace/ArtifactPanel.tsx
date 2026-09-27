@@ -6,6 +6,7 @@ import IconButton from "@mui/material/IconButton";
 import InputLabel from "@mui/material/InputLabel";
 import LinearProgress from "@mui/material/LinearProgress";
 import ListItemText from "@mui/material/ListItemText";
+import ListSubheader from "@mui/material/ListSubheader";
 import MenuItem from "@mui/material/MenuItem";
 import Select from "@mui/material/Select";
 import Stack from "@mui/material/Stack";
@@ -15,35 +16,22 @@ import { lazy, Suspense, useEffect } from "react";
 import { useRevision, useRevisions } from "../api/hooks.js";
 import { PANEL_VIEWS, type ArtifactPanelProps, type PanelView } from "../contracts.js";
 import { PartsView } from "../inventory/PartsView.js";
+import { PANEL_STAGES, PANEL_VIEW_HINTS, PANEL_VIEW_LABELS, stageOf } from "./panelViews.js";
 import { PhotoTab } from "./tabs/PhotoTab.js";
-import { ReplayTab } from "./tabs/ReplayTab.js";
 import { SchematicTab } from "./tabs/SchematicTab.js";
-import { TelemetryTab } from "./tabs/TelemetryTab.js";
 import { TestsTab } from "./tabs/TestsTab.js";
 import { TryItTab } from "./tabs/TryItTab.js";
 import { DownloadMenu } from "./DownloadMenu.js";
 import { BuildStepsView } from "./views/BuildStepsView.js";
 import { ChecksView } from "./views/ChecksView.js";
-import { DiagnosisView } from "./views/DiagnosisView.js";
+import { ResultsView } from "./views/ResultsView.js";
 
 const CodeTab = lazy(() => import("./tabs/CodeTab.js").then((m) => ({ default: m.CodeTab })));
-
-export const PANEL_VIEW_LABELS: Record<PanelView, string> = {
-  parts: "Parts",
-  schematic: "Schematic",
-  steps: "Build steps",
-  code: "Code",
-  tests: "Tests",
-  tryit: "Try it",
-  replay: "Replay",
-  checks: "Checks",
-  telemetry: "Telemetry",
-  diagnosis: "Diagnosis",
-  photos: "Photo checks",
-};
+// The bench (Web Serial, flasher, simulator) is the panel's biggest view; load it only when it's opened.
+const BenchView = lazy(() => import("../bench/BenchView.js").then((m) => ({ default: m.BenchView })));
 
 /** Views about building and testing the real board follow the build target; the rest follow the latest design. */
-const FOLLOWS_BUILD_TARGET: ReadonlySet<PanelView> = new Set(["steps", "telemetry", "diagnosis", "photos"]);
+const FOLLOWS_BUILD_TARGET: ReadonlySet<PanelView> = new Set(["steps", "bench", "photos", "results"]);
 
 /** Which design a view shows when the person hasn't picked one. */
 export function defaultRevision(detail: MissionDetail, view: PanelView): number | undefined {
@@ -67,22 +55,36 @@ export function ArtifactPanel({ missionId, detail, view, revision: pickedRevisio
     if (latest !== undefined) void refetchRevisions();
   }, [latest, refetchRevisions]);
 
-  const needsRevision = view !== "parts";
+  // Parts and the bench pick their own design version (the bench always checks the build target).
+  const needsRevision = view !== "parts" && view !== "bench";
 
   return (
     <Box component="aside" aria-label="Mission details" sx={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, bgcolor: "background.paper" }}>
-      <Stack direction="row" sx={{ alignItems: "center", gap: 1, px: 1.5, py: 1, borderBottom: 1, borderColor: "divider", minHeight: 56 }}>
-        <FormControl size="small" sx={{ minWidth: 150 }}>
+      <Stack direction="row" sx={{ alignItems: "center", gap: 1, px: 1.5, py: 1, borderBottom: 1, borderColor: "divider", minHeight: 56, flexWrap: "wrap" }}>
+        <FormControl size="small" sx={{ minWidth: 170 }}>
           <InputLabel id="panel-view-label">Show</InputLabel>
-          <Select labelId="panel-view-label" label="Show" value={view} onChange={(e) => onViewChange(PANEL_VIEWS.find((v) => v === e.target.value) ?? view)}>
-            {PANEL_VIEWS.map((v) => (
-              <MenuItem key={v} value={v}>
-                {PANEL_VIEW_LABELS[v]}
-              </MenuItem>
-            ))}
+          <Select
+            labelId="panel-view-label"
+            label="Show"
+            value={view}
+            onChange={(e) => onViewChange(PANEL_VIEWS.find((v) => v === e.target.value) ?? view)}
+            renderValue={(v) => `${stageOf(v).n} · ${PANEL_VIEW_LABELS[v]}`}
+            MenuProps={{ slotProps: { list: { dense: true, sx: { minWidth: 280, py: 0 } } } }}
+          >
+            {/* Stages in build order, numbered; MUI Select skips the subheaders when choosing with the keyboard. */}
+            {PANEL_STAGES.flatMap((stage) => [
+              <ListSubheader key={`stage-${stage.n}`} sx={{ lineHeight: "32px", fontWeight: 700, bgcolor: "background.paper" }}>
+                {stage.n} · {stage.title}
+              </ListSubheader>,
+              ...stage.views.map((v) => (
+                <MenuItem key={v} value={v} sx={{ pl: 3 }}>
+                  <ListItemText primary={PANEL_VIEW_LABELS[v]} secondary={PANEL_VIEW_HINTS[v]} />
+                </MenuItem>
+              )),
+            ])}
           </Select>
         </FormControl>
-        {latest !== undefined && (
+        {latest !== undefined && view !== "bench" && (
           <FormControl size="small" sx={{ minWidth: 130 }}>
             <InputLabel id="panel-revision-label">Design</InputLabel>
             <Select labelId="panel-revision-label" label="Design" value={n ?? ""} onChange={(e) => onRevisionChange(Number(e.target.value))}>
@@ -99,7 +101,7 @@ export function ArtifactPanel({ missionId, detail, view, revision: pickedRevisio
           </FormControl>
         )}
         <Box sx={{ flex: 1 }} />
-        {selectedRevision && <DownloadMenu revision={selectedRevision} missionTitle={detail.mission.title} />}
+        {selectedRevision && <DownloadMenu missionId={missionId} revision={selectedRevision} missionTitle={detail.mission.title} />}
         <Tooltip title="Close panel">
           <IconButton aria-label="Close panel" onClick={onClose}>
             <CloseIcon />
@@ -110,6 +112,10 @@ export function ArtifactPanel({ missionId, detail, view, revision: pickedRevisio
       <Box sx={{ flex: 1, minHeight: 0, overflow: "auto", p: 2 }}>
         {view === "parts" ? (
           <PartsView missionId={missionId} missionParts={detail.mission.inventory} revision={n} />
+        ) : view === "bench" ? (
+          <Suspense fallback={<LinearProgress />}>
+            <BenchView missionId={missionId} />
+          </Suspense>
         ) : view === "checks" ? (
           <ChecksView
             consoles={selectedRevision?.results.reports ?? []}
@@ -127,10 +133,8 @@ export function ArtifactPanel({ missionId, detail, view, revision: pickedRevisio
             {view === "code" && <CodeTab revision={revision.data} />}
             {view === "tests" && <TestsTab revision={revision.data} recording={detail.recording} />}
             {view === "tryit" && <TryItTab missionId={missionId} revision={revision.data} released={revision.data.n === released} />}
-            {view === "replay" && <ReplayTab revision={revision.data} />}
-            {view === "telemetry" && <TelemetryTab missionId={missionId} revision={revision.data} />}
-            {view === "diagnosis" && <DiagnosisView missionId={missionId} revision={revision.data} />}
             {view === "photos" && <PhotoTab revision={revision.data} />}
+            {view === "results" && <ResultsView missionId={missionId} revision={revision.data} />}
           </Suspense>
         )}
       </Box>

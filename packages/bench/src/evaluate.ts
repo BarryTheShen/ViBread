@@ -101,6 +101,18 @@ function testResult(test: BenchTestResult["test"], subjects: SubjectResult[], su
   return { test, status: aggregate(subjects.map((subject) => subject.status)), subjects, summary };
 }
 
+/**
+ * A test the evaluator has no telemetry rule for, judged by the firmware's own `end` line. `skipped` stays skipped: the
+ * board can't measure it (net.continuity: no resistor-guarded pin pairs), and a skipped test never downgrades a run.
+ */
+function firmwareReportedResult(lines: DeviceLine[], test: "net.continuity" | "digital.stuck"): BenchTestResult | undefined {
+  const end = lines.findLast((line): line is Extract<DeviceLine, { t: "end" }> => line.t === "end" && line.test === test);
+  if (!end) return undefined;
+  const summary = end.status === "skipped"
+    ? `The board can't measure this${end.note ? ` (${end.note})` : ""}; check it by eye against the picture.`
+    : `The board reported ${test}: ${end.status}${end.note ? ` (${end.note})` : ""}.`;
+  return { test, status: end.status, subjects: [], summary };
+}
 
 function ratio(line: Extract<DeviceLine, { t: "read" }>): number | undefined {
   if (line.n <= 0 || line.ones < 0 || line.ones > line.n) return undefined;
@@ -824,9 +836,22 @@ export async function evaluateRun(input: {
         results.push(evaluateBuzzer(context));
         break;
       case "digital.stuck":
+        // pins.readonly adds a failing digital.stuck result when a pin is stuck; otherwise the firmware's own report stands.
+        if (!results.some((result) => result.test === "digital.stuck")) {
+          const reported = firmwareReportedResult(context.lines, "digital.stuck");
+          if (reported) results.push(reported);
+        }
+        break;
       case "net.continuity":
+        results.push(firmwareReportedResult(context.lines, "net.continuity") ?? { test: "net.continuity", status: "unknown", subjects: [], summary: "The continuity check did not run." });
         break;
     }
+  }
+  // A Build Steps checkpoint asks the board for net.continuity even though the server's plan doesn't list it (the board
+  // can only report it skipped, to be checked by eye): keep what the firmware said so the checkpoint can show it.
+  if (!results.some((result) => result.test === "net.continuity")) {
+    const continuity = firmwareReportedResult(context.lines, "net.continuity");
+    if (continuity) results.push(continuity);
   }
 
   const events = await runDiagnosisRules(signatureRecord(context.signatures));

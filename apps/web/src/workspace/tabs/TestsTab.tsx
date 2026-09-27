@@ -2,8 +2,10 @@ import CancelIcon from "@mui/icons-material/Cancel";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import HourglassEmptyIcon from "@mui/icons-material/HourglassEmpty";
 import ReportProblemIcon from "@mui/icons-material/ReportProblem";
+import SlideshowIcon from "@mui/icons-material/Slideshow";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
 import List from "@mui/material/List";
 import ListItem from "@mui/material/ListItem";
@@ -13,7 +15,9 @@ import Stack from "@mui/material/Stack";
 import Typography from "@mui/material/Typography";
 import Tooltip from "@mui/material/Tooltip";
 import type { MissionRecording, RevisionDetail, ScenarioCategory } from "@vibread/core";
+import { useState } from "react";
 import { RecordedChip } from "../../components/RecordedChip.js";
+import { ScenarioReplay, scenarioTraceUrl } from "./ScenarioReplay.js";
 
 const CATEGORY_LABELS: Record<ScenarioCategory, string> = {
   normal: "everyday use",
@@ -25,7 +29,6 @@ const CATEGORY_LABELS: Record<ScenarioCategory, string> = {
   edge: "unusual case",
 };
 
-/** Simulation tests in plain language: what each checks, whether it passed, and what isn't covered yet. */
 /** Recorded missions (MissionDetail.recording) replay a real run: say who wrote the tests and when, never "live". */
 function recordedTestsLine(recording: MissionRecording | undefined): string | undefined {
   if (!recording) return undefined;
@@ -34,12 +37,15 @@ function recordedTestsLine(recording: MissionRecording | undefined): string | un
   return `Recorded: written by ${author} on ${on}`;
 }
 
+/** Simulation tests in plain language: what each checks, whether it passed, its replay, and what isn't covered yet. */
 export function TestsTab({ revision, recording }: { revision: RevisionDetail; recording?: MissionRecording }) {
   const scenarios = revision.suite?.scenarios ?? [];
   const sim = revision.results.sim;
   const resultById = new Map((sim?.scenarios ?? []).map((s) => [s.id, s]));
   const intentById = new Map(revision.circuit.intent.map((c) => [c.id, c.text]));
   const passed = sim?.scenarios.filter((s) => s.ok).length ?? 0;
+  // One replay open at a time, right under its test.
+  const [replaying, setReplaying] = useState<string | undefined>(undefined);
 
   if (scenarios.length === 0) {
     return <Alert severity="info">The independent test author hasn't written tests for this design yet.</Alert>;
@@ -66,8 +72,10 @@ export function TestsTab({ revision, recording }: { revision: RevisionDetail; re
         {scenarios.map((scenario) => {
           const result = resultById.get(scenario.id);
           const failedStep = result?.steps.find((s) => !s.ok);
+          const traceUrl = scenarioTraceUrl(revision, scenario.id);
+          const open = replaying === scenario.id && traceUrl !== undefined;
           return (
-            <ListItem key={scenario.id} disableGutters sx={{ alignItems: "flex-start", borderBottom: 1, borderColor: "divider", py: 1 }}>
+            <ListItem key={scenario.id} disableGutters sx={{ flexWrap: "wrap", alignItems: "flex-start", borderBottom: 1, borderColor: "divider", py: 1 }}>
               <ListItemIcon sx={{ minWidth: 40, mt: 0.5 }}>
                 {!result ? (
                   <HourglassEmptyIcon sx={{ color: "text.secondary" }} titleAccess="Not run" />
@@ -111,6 +119,24 @@ export function TestsTab({ revision, recording }: { revision: RevisionDetail; re
                 }
                 slotProps={{ secondary: { component: "div" } }}
               />
+              {traceUrl && (
+                <Button
+                  size="small"
+                  variant={open ? "contained" : "outlined"}
+                  startIcon={<SlideshowIcon />}
+                  aria-expanded={open}
+                  aria-controls={`replay-${scenario.id}`}
+                  onClick={() => setReplaying(open ? undefined : scenario.id)}
+                  sx={{ ml: 1, mt: 0.5, flexShrink: 0, width: 104 }}
+                >
+                  {open ? "Hide" : "Replay"}
+                </Button>
+              )}
+              {open && (
+                <Box id={`replay-${scenario.id}`} sx={{ flexBasis: "100%", mt: 1.5, pl: 5 }}>
+                  <ScenarioReplay revision={revision} traceUrl={traceUrl} title={scenario.title} />
+                </Box>
+              )}
             </ListItem>
           );
         })}

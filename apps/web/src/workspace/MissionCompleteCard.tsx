@@ -14,6 +14,7 @@ import { useMemo } from "react";
 import { Link as RouterLink } from "react-router";
 import { HttpError } from "../api/client.js";
 import { useConfirmMission, useRevision } from "../api/hooks.js";
+import { benchPanelPath } from "./panelUrl.js";
 
 function focusComposer(): void {
   document.querySelector<HTMLTextAreaElement>("main textarea, textarea")?.focus();
@@ -103,7 +104,7 @@ export function MissionCompleteCard({
           The virtual board passed. Build it for real and run the bench with your Arduino to complete the mission.
         </Typography>
         <Stack direction="row" sx={{ gap: 1, flexWrap: "wrap" }}>
-          <Button component={RouterLink} to={`/m/${missionId}/bench`} variant="contained" startIcon={<UsbIcon />}>
+          <Button component={RouterLink} to={benchPanelPath(missionId, "")} variant="contained" startIcon={<UsbIcon />}>
             Open the bench
           </Button>
           <Button component={RouterLink} to={`/b/${missionId}`} variant="outlined">
@@ -142,7 +143,7 @@ export function MissionCompleteCard({
             severity={confirm.error.code === "bench_run_failed" ? "error" : "warning"}
             sx={{ mt: 1.5 }}
             action={
-              <Button component={RouterLink} to={`/m/${missionId}/bench`} size="small" sx={{ whiteSpace: "nowrap" }}>
+              <Button component={RouterLink} to={benchPanelPath(missionId, "")} size="small" sx={{ whiteSpace: "nowrap" }}>
                 Open the bench
               </Button>
             }

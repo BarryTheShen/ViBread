@@ -22,6 +22,7 @@ import { authClient } from "./api/auth.js";
 import { HttpError } from "./api/client.js";
 import { createMissionTheme } from "./theme.js";
 import AppShell from "./shell/AppShell.js";
+import { BenchRedirect } from "./workspace/BenchRedirect.js";
 
 const NewMissionPage = lazy(() => import("./pages/NewMissionPage.js"));
 const MissionPage = lazy(() => import("./pages/MissionPage.js"));
@@ -30,7 +31,6 @@ const InventoryPage = lazy(() => import("./inventory/InventoryPage.js"));
 const PhoneScanPage = lazy(() => import("./inventory/PhoneScanPage.js"));
 const OAuthLoginPage = lazy(() => import("./pages/OAuthLoginPage.js"));
 const OAuthConsentPage = lazy(() => import("./pages/OAuthConsentPage.js"));
-const BenchPage = lazy(() => import("./bench/BenchPage.js"));
 const BuildModePage = lazy(() => import("./build/BuildModePage.js"));
 
 const queryClient = new QueryClient({
@@ -52,14 +52,14 @@ function Loading() {
 }
 
 /**
- * Bench and Build Mode fetch on their own and show raw errors on a 401; on a multi-user server with nobody signed in,
- * put the sign-in prompt above them (the workspace, Home and Settings render their own).
+ * Build Mode fetches on its own and shows raw errors on a 401; on a multi-user server with nobody signed in, put the
+ * sign-in prompt above it (the workspace with its bench panel, Home and Settings render their own).
  */
 function SignedOutBanner() {
   const location = useLocation();
   const providers = useProviders();
   const session = authClient.useSession();
-  const onDevicePage = /^\/m\/[^/]+\/bench$|^\/b\/[^/]+$/.test(location.pathname);
+  const onDevicePage = /^\/b\/[^/]+$/.test(location.pathname);
   if (!onDevicePage || !providers.data || providers.data.singleOperator || session.isPending || session.data?.user) return null;
   return (
     <Box sx={{ p: 2, pb: 0 }}>
@@ -87,7 +87,7 @@ const router = createBrowserRouter([
         children: [
           { path: "/", element: <NewMissionPage /> },
           { path: "/m/:missionId", element: <MissionPage /> },
-          { path: "/m/:missionId/bench", element: <BenchPage /> },
+          { path: "/m/:missionId/bench", element: <BenchRedirect /> },
           { path: "/inventory", element: <InventoryPage /> },
           { path: "/settings", element: <SettingsPage /> },
         ],

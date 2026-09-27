@@ -4,8 +4,10 @@ import NavigateNextIcon from "@mui/icons-material/NavigateNext";
 import PhoneIphoneIcon from "@mui/icons-material/PhoneIphone";
 import PowerIcon from "@mui/icons-material/Power";
 import PowerOffIcon from "@mui/icons-material/PowerOff";
+import ReplayOutlinedIcon from "@mui/icons-material/ReplayOutlined";
 import ReportProblemOutlinedIcon from "@mui/icons-material/ReportProblemOutlined";
 import TaskAltIcon from "@mui/icons-material/TaskAlt";
+import VisibilityOutlinedIcon from "@mui/icons-material/VisibilityOutlined";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -20,8 +22,10 @@ import Typography from "@mui/material/Typography";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import type { BuildState, InventoryItem, RevisionDetail } from "@vibread/core";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate } from "react-router";
 import { sendJson } from "../../api/client.js";
 import { queryKeys, useBuildState } from "../../api/hooks.js";
+import { checkpointChecksForRevision, checkpointChecksPass, checkpointStatusText, checkpointTests, isFullSelfTestStep, type CheckpointCheck } from "../../build/checkpointChecks.js";
 import { needVsHave } from "../../inventory/PartsView.js";
 import { SvgArtifact } from "../../components/SvgArtifact.js";
 import { PhoneQr } from "../PhoneLink.js";
@@ -77,6 +81,46 @@ function GatherParts({ revision, inventory }: { revision: RevisionDetail; invent
     </Box>
   );
 }
+function CheckpointChecklist({
+  checks,
+  onRun,
+}: {
+  checks: CheckpointCheck[];
+  onRun: () => void;
+}) {
+  const passed = checkpointChecksPass(checks);
+  return (
+    <Paper variant="outlined" sx={{ mt: 1.5, p: 1.5 }}>
+      <Stack direction="row" sx={{ alignItems: "center", gap: 1 }}>
+        <TaskAltIcon color="info" aria-hidden="true" />
+        <Typography variant="subtitle1" sx={{ fontWeight: 700 }}>
+          Checks for this checkpoint
+        </Typography>
+      </Stack>
+      <List dense disablePadding sx={{ mt: 0.5 }}>
+        {checks.map((check) => {
+          const Icon = check.status === "pass" ? CheckIcon : check.status === "fail" ? ReportProblemOutlinedIcon : check.status === "manual" ? VisibilityOutlinedIcon : check.status === "incomplete" ? ReplayOutlinedIcon : TaskAltIcon;
+          const status = checkpointStatusText(check.status);
+          return (
+            <ListItem key={check.id} disableGutters>
+              <ListItemIcon sx={{ minWidth: 34 }}>
+                <Icon color={check.status === "pass" ? "success" : check.status === "fail" ? "error" : "disabled"} aria-hidden="true" />
+              </ListItemIcon>
+              <ListItemText primary={check.expected} secondary={check.diagnosis ? `${status} — ${check.diagnosis}` : status} />
+            </ListItem>
+          );
+        })}
+      </List>
+      <Stack direction="row" sx={{ alignItems: "center", gap: 1, flexWrap: "wrap", mt: 1 }}>
+        <Button variant="outlined" onClick={onRun} sx={{ minHeight: 44 }}>
+          Run these checks
+        </Button>
+        {!passed && <Typography variant="caption" color="text.secondary">Done unlocks when every check passes.</Typography>}
+      </Stack>
+    </Paper>
+  );
+}
+
 
 /**
  * Build steps (plan §4): step picture, holes, parts, USB state, "I did this" on the laptop (stays in sync with the phone,
@@ -94,6 +138,7 @@ export function BuildStepsView({
   inventory: InventoryItem[];
 }) {
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const steps = revision.results.steps?.steps ?? [];
   const [index, setIndex] = useState(0);
   const stepCard = useRef<HTMLDivElement>(null);
@@ -101,6 +146,25 @@ export function BuildStepsView({
   const current = released && build.data?.revision === revision.n ? build.data.current : undefined;
   useEffect(() => setIndex(current !== undefined ? Math.max(0, current - 1) : 0), [revision.n, current]);
   const step = steps.length > 0 ? steps[Math.min(index, steps.length - 1)] : undefined;
+  const checkpointChecks = step?.checkpoint
+      ? checkpointChecksForRevision({
+          circuit: revision.circuit,
+          revisionHash: revision.hash,
+          tests: step.checkpoint.tests,
+          plan: revision.results.selftest,
+          runs: revision.results.bench,
+          fullSelfTest: isFullSelfTestStep(step),
+          step: step.n,
+        })
+    : [];
+  const checksPassed = !step?.checkpoint || checkpointChecksPass(checkpointChecks);
+  const runCheckpointChecks = () => {
+    if (!step?.checkpoint) return;
+    // Exactly the checks shown above (the Final power-up lists the whole plan, not just the step's own tests).
+    const tests = checkpointTests(checkpointChecks).join(",");
+    const returnTo = `${window.location.pathname}${window.location.search}`;
+    navigate(`/m/${encodeURIComponent(missionId)}?panel=bench&tests=${encodeURIComponent(tests)}&step=${step.n}&returnTo=${encodeURIComponent(returnTo)}`);
+  };
   useEffect(() => {
     if (!step) return;
     stepCard.current?.scrollIntoView({ block: "start" });
@@ -214,15 +278,28 @@ export function BuildStepsView({
           )
         )}
         {step.checkpoint && (
-          <Alert severity="info" sx={{ mt: 1 }}>
-            Checkpoint: {step.checkpoint.text}
-          </Alert>
+          <>
+            <Alert severity="info" sx={{ mt: 1 }}>
+              Checkpoint: {step.checkpoint.text}
+            </Alert>
+            <CheckpointChecklist checks={checkpointChecks} onRun={runCheckpointChecks} />
+          </>
         )}
         {canMark && (
-          <Stack direction="row" sx={{ gap: 1, alignItems: "center", mt: 1.5 }}>
-            <Button variant="contained" startIcon={<CheckIcon />} disabled={didThis.isPending} onClick={() => didThis.mutate(step.n)}>
-              I did this
+          <Stack direction="row" sx={{ gap: 1, alignItems: "center", flexWrap: "wrap", mt: 1.5 }}>
+            <Button
+              variant="contained"
+              startIcon={<CheckIcon />}
+              disabled={didThis.isPending || !checksPassed}
+              onClick={() => didThis.mutate(step.n)}
+            >
+              Done
             </Button>
+            {step.checkpoint && (
+              <Button variant="text" disabled={didThis.isPending} onClick={() => didThis.mutate(step.n)}>
+                Skip checks and continue
+              </Button>
+            )}
             {didThis.isError && <Typography sx={{ color: "error.main" }}>Didn't save: {didThis.error.message}</Typography>}
           </Stack>
         )}

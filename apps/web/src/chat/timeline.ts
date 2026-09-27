@@ -290,7 +290,7 @@ function benchRow(event: TimelineEvent): RowModel {
     status: passed ? "passed" : verdict === "fail" ? "found a problem" : "incomplete",
     tone: passed ? "success" : verdict === "fail" ? "error" : "warning",
     details: [event.text],
-    view: passed ? "telemetry" : "diagnosis",
+    view: "results",
     revision: event.revision,
   };
 }
@@ -338,9 +338,9 @@ function singleRow(event: TimelineEvent): RowModel {
     case "photo.checked":
       return photoRow(event);
     case "bench.request.started":
-      return { ...base, icon: "bench", title: "Bench action started", status: whoDid(event), tone: "info", view: "telemetry" };
+      return { ...base, icon: "bench", title: "Bench action started", status: whoDid(event), tone: "info", view: "bench" };
     case "bench.request.denied":
-      return { ...base, icon: "bench", title: "Bench action declined", tone: "warning", view: "telemetry" };
+      return { ...base, icon: "bench", title: "Bench action declined", tone: "warning", view: "bench" };
     case "inventory.added":
       return { ...base, icon: "parts", title: event.text.replace(/\.$/, ""), tone: "neutral", view: "parts" };
     case "mission.recorded":
@@ -350,7 +350,7 @@ function singleRow(event: TimelineEvent): RowModel {
     case "phase.changed": {
       const type = phaseEventType(event);
       const view: PanelView | undefined =
-        type === "DESIGN_READY" ? "checks" : type === "BUILD_DONE" ? "steps" : type === "VERIFY_FAILED" ? "diagnosis" : type === "FIX_PROPOSED" ? "schematic" : undefined;
+        type === "DESIGN_READY" ? "checks" : type === "BUILD_DONE" ? "steps" : type === "VERIFY_FAILED" ? "results" : type === "FIX_PROPOSED" ? "schematic" : undefined;
       const tone: RowTone = type === "VERIFY_FAILED" ? "error" : type === "DESIGN_READY" || type === "BUILD_DONE" ? "success" : "info";
       const title =
         type === "DESIGN_READY" ? `Design r${event.revision} is ready for GO for build` : type === "BUILD_DONE" ? "All build steps done — test on the bench" : event.text;

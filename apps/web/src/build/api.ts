@@ -1,4 +1,4 @@
-import type { BuildState, PhotoCheckResult } from "@vibread/core";
+import type { BuildState, PhotoCheckResult, RevisionDetail } from "@vibread/core";
 
 export class BuildApiError extends Error {
   readonly status: number;
@@ -79,6 +79,32 @@ export function fetchBuildState(missionId: string, signal?: AbortSignal): Promis
     headers: { Accept: "application/json" },
     signal,
   });
+}
+
+export function fetchRevisionDetail(missionId: string, revision: number, signal?: AbortSignal): Promise<RevisionDetail> {
+  return requestJson<RevisionDetail>(missionUrl(missionId, `/revisions/${revision}`), {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal,
+  });
+}
+
+/** How often the phone rereads the revision while a checkpoint on screen waits for the laptop's bench run. */
+export const CHECKPOINT_POLL_MS = 1_500;
+
+/**
+ * The phone's revision query. Checkpoint results (bench runs) land on the revision from the laptop, so while a
+ * checkpoint step is on screen it polls as often as the build state; otherwise the revision doesn't change under a step.
+ */
+export function revisionQueryOptions(missionId: string, revision: number | undefined, onCheckpointStep: boolean) {
+  return {
+    queryKey: ["mission-revision", missionId, revision] as const,
+    queryFn: ({ signal }: { signal: AbortSignal }) => fetchRevisionDetail(missionId, revision!, signal),
+    enabled: revision !== undefined,
+    staleTime: 5 * 60_000,
+    refetchInterval: onCheckpointStep ? CHECKPOINT_POLL_MS : (false as const),
+    retry: false,
+  };
 }
 
 export function postBuildStep(missionId: string, n: number): Promise<BuildState> {

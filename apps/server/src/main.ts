@@ -13,6 +13,7 @@ import { createAppContext, type AppContextHandle } from "./context.js";
 import { getSessionUser } from "./auth.js";
 import { loadConfig, type ServerConfig } from "./config.js";
 import { mountApi, approvalOwnerMiddleware, missionOwnerMiddleware } from "./routes.js";
+import { mountProjectFileRoutes } from "./routes/project-file.js";
 import type { DebugLog } from "./services/debug-log.js";
 export interface RunningServer {
   app: Express;
@@ -149,6 +150,7 @@ export async function startServer(config: ServerConfig = loadConfig()): Promise<
       next(error);
     }
   });
+  mountProjectFileRoutes(app, ctx);
 
   app.use("/api/missions/:id", missionOwnerMiddleware(ctx));
   app.use("/api/approvals/:approvalId", approvalOwnerMiddleware(ctx));

@@ -9,4 +9,9 @@ describe("parseBenchQuery", () => {
     });
     expect(parseBenchQuery("?tests=led.sequence&returnTo=https%3A%2F%2Fevil.example")).toEqual({ tests: ["led.sequence"] });
   });
+
+  it("keeps the build step that opened the bench, and ignores anything that isn't a step number", () => {
+    expect(parseBenchQuery("?tests=rails.vcc&step=3").step).toBe(3);
+    for (const bad of ["0", "-2", "2.5", "x", ""]) expect(parseBenchQuery(`?tests=rails.vcc&step=${bad}`).step).toBeUndefined();
+  });
 });

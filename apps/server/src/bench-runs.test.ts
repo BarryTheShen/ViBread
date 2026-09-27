@@ -35,11 +35,11 @@ describe("POST /api/missions/:id/bench/runs", () => {
     { t: "vcc", mv: 5000 },
     { t: "end", test: "rails.vcc", status: "pass" },
   ];
-  const post = async (tests: string[]): Promise<BenchRunResult> => {
+  const post = async (tests: string[], extra: Record<string, unknown> = {}): Promise<BenchRunResult> => {
     const response = await fetch(`${base}/api/missions/${missionId}/bench/runs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ revision: 1, kind: "selftest", plan: { ...plan, tests }, lines: railLines, answers: {}, runId: "virtual-test" }),
+      body: JSON.stringify({ revision: 1, kind: "selftest", plan: { ...plan, tests }, lines: railLines, answers: {}, runId: "virtual-test", ...extra }),
     });
     expect(response.status).toBe(200);
     return (await response.json()) as BenchRunResult;
@@ -78,10 +78,40 @@ describe("POST /api/missions/:id/bench/runs", () => {
     expect(full.verdict).toBe("incomplete");
   });
 
+  it("records which build step asked for the run, saved with the revision's bench runs (issue 24)", async () => {
+    expect((await post(["rails.vcc"], { step: 3 })).step).toBe(3);
+    expect((await post(["rails.vcc"], { step: "6" })).step).toBeUndefined();
+    expect((await post(["rails.vcc"])).step).toBeUndefined();
+    const saved = await running.context.ctx.store.getRevision(missionId, 1);
+    expect(saved?.results.bench?.map((run) => run.step).slice(-3)).toEqual([3, undefined, undefined]);
+  });
+
   it("ignores tests the server's plan doesn't have", async () => {
     // The moon lamp has no knob: a client asking for pot.sweep can't add it.
     expect(plan.tests).not.toContain("pot.sweep");
     const run = await post(["rails.vcc", "pot.sweep"]);
     expect(run.results.map((result) => result.test)).toEqual(["rails.vcc"]);
+  });
+
+  it("a passing checkpoint on the real board keeps the build going; it doesn't verify the mission", async () => {
+    const { ctx } = running.context;
+    const mission = await ctx.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: OPERATOR });
+    const revision = await ctx.store.createRevision(mission.id, { circuit: golden.circuit, suite: golden.suite, author: OPERATOR });
+    await ctx.store.saveResults(mission.id, revision.n, { selftest: plan });
+    await ctx.store.updateMission(mission.id, { currentRevision: revision.n, releasedRevision: revision.n });
+    await ctx.machine.send(mission.id, { type: "DESIGN_STARTED" });
+    await ctx.machine.send(mission.id, { type: "DESIGN_READY", revision: revision.n });
+    await ctx.machine.send(mission.id, { type: "RELEASED", revision: revision.n });
+    expect(await ctx.machine.phase(mission.id)).toBe("ASSEMBLE");
+    const response = await fetch(`${base}/api/missions/${mission.id}/bench/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ revision: revision.n, kind: "selftest", plan: { ...plan, tests: ["rails.vcc"] }, lines: railLines, answers: {}, runId: "bench-real", step: 6 }),
+    });
+    expect(response.status).toBe(200);
+    expect(((await response.json()) as BenchRunResult).verdict).toBe("pass");
+    expect(await ctx.machine.phase(mission.id)).toBe("ASSEMBLE");
+    const confirm = await fetch(`${base}/api/missions/${mission.id}/confirm`, { method: "POST" });
+    expect(confirm.status).toBe(409);
   });
 });

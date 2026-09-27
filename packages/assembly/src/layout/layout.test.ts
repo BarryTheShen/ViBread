@@ -109,12 +109,12 @@ describe("deterministic breadboard layout", () => {
     expect(layout.jumpers.length).toBeLessThanOrEqual(16);
     const steps = buildSteps(moon, layout);
     expect(steps.steps.every((step) => step.plug === "unplugged" || step.plug === "plugged")).toBe(true);
-    expect(steps.steps.slice(0, 6).map((step) => step.kind)).toEqual(["inventory", "orientation", "unplug", "rails", "checkpoint", "unplug"]);
-    expect(steps.steps[4].plug).toBe("plugged");
-    expect(steps.steps[4].checkpoint?.tests).toEqual(["rails.vcc"]);
-    expect(steps.steps[4].text).not.toContain("rails.vcc");
+    expect(steps.steps.slice(0, 7).map((step) => step.kind)).toEqual(["inventory", "orientation", "checkpoint", "unplug", "rails", "checkpoint", "unplug"]);
+    expect(steps.steps[5].plug).toBe("plugged");
+    expect(steps.steps[5].checkpoint?.tests).toEqual(["rails.vcc"]);
+    expect(steps.steps[5].text).not.toContain("rails.vcc");
     // The rails step wires exactly the Arduino 5 V and GND headers to their rails.
-    const railWires = steps.steps[3].adds.jumpers.map((id) => layout.jumpers.find((jumper) => jumper.id === id)!);
+    const railWires = steps.steps[4].adds.jumpers.map((id) => layout.jumpers.find((jumper) => jumper.id === id)!);
     expect(railWires.map((jumper) => ["board" in jumper.from ? jumper.from.board : "", "hole" in jumper.to ? jumper.to.hole[0] + jumper.to.hole[1] : ""]).sort()).toEqual([["5V", "T+"], ["GND", "T-"]]);
     expect(steps.steps.at(-1)?.kind).toBe("power-up");
     expect(steps.steps.at(-1)?.plug).toBe("plugged");
@@ -133,7 +133,7 @@ describe("deterministic breadboard layout", () => {
     const moon = GOLDEN.find((design) => design.key === "moon-phase-lamp")!.circuit;
     const layout = layoutBoard(moon);
     const steps = buildSteps(moon, layout);
-    const step = steps.steps[6];
+    const step = steps.steps[7];
     const svg = renderBreadboardSvg({ circuit: moon, layout, steps, upToStep: step.n, focus: true });
     const box = svg.match(/viewBox="([^"]+)"/)?.[1].split(/\s+/).map(Number);
     expect(box).toHaveLength(4);
@@ -593,13 +593,30 @@ describe("rails step and power checkpoint (issue #18)", () => {
   it("claims only a board power check at the checkpoint, never a rail check", () => {
     for (const design of GOLDEN) {
       const steps = buildSteps(design.circuit, layoutBoard(design.circuit));
-      const checkpoint = steps.steps.find((step) => step.checkpoint?.tests.includes("rails.vcc") && step.kind === "checkpoint")!;
+      const checkpoint = steps.steps.find((step) => step.checkpoint?.tests.includes("rails.vcc") && step.kind === "checkpoint" && step.title.startsWith("Power checkpoint"))!;
       for (const text of [checkpoint.text, checkpoint.checkpoint!.text]) {
         expect(text).toContain("USB VCC");
         expect(text).not.toMatch(/inspect T\+|checks that the red \+ rail|rails? (has|have) 5 V/);
         expect(text).toMatch(/checked by the part tests that follow/);
       }
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------
+// Issue #24: the bare Arduino is connected, flashed with the safe firmware and power-checked before anything goes on
+// the breadboard.
+
+describe("bare-board check first (issue #24)", () => {
+  it.each(GOLDEN.map((design) => [design.key, design.circuit] as const))("%s: the bare-board check comes before the first part or wire", (_key, circuit) => {
+    const steps = buildSteps(circuit, layoutBoard(circuit)).steps;
+    const bare = steps.findIndex((step) => step.title.startsWith("Bare-board check"));
+    const firstBuild = steps.findIndex((step) => step.adds.parts.length > 0 || step.adds.jumpers.length > 0);
+    expect(bare).toBeGreaterThanOrEqual(0);
+    expect(bare).toBeLessThan(firstBuild);
+    expect(steps[bare]).toMatchObject({ kind: "checkpoint", plug: "plugged", adds: { parts: [], jumpers: [] }, checkpoint: { tests: ["rails.vcc"] } });
+    // It is unplugged again before the first wire goes in.
+    expect(steps.slice(bare + 1, firstBuild).some((step) => step.kind === "unplug")).toBe(true);
   });
 });
 

@@ -21,7 +21,8 @@ export type MissionEvent =
 
 export interface MissionMachine {
   phase(missionId: string): Promise<MissionPhase>;
-  send(missionId: string, event: MissionEvent): Promise<MissionPhase>;
+  /** `silent` persists the state transition without emitting a user-facing timeline/notification event (project replay). */
+  send(missionId: string, event: MissionEvent, options?: { silent?: boolean }): Promise<MissionPhase>;
 }
 
 interface MachineContext {
@@ -108,7 +109,7 @@ export class PersistentMissionMachine implements MissionMachine {
     return value;
   }
 
-  async send(missionId: string, event: MissionEvent): Promise<MissionPhase> {
+  async send(missionId: string, event: MissionEvent, options?: { silent?: boolean }): Promise<MissionPhase> {
     const mission = await this.deps.store.getMission(missionId);
     if (!mission) throw new Error("mission not found");
     const actor = this.actorFor(this.snapshotFor(missionId));
@@ -118,7 +119,7 @@ export class PersistentMissionMachine implements MissionMachine {
     const after = this.phaseFor(actor.getSnapshot().value);
     actor.stop();
     await this.persist(missionId, snapshot, after);
-    if (before !== after) {
+    if (before !== after && !options?.silent) {
       await this.deps.store.appendEvent({
         missionId,
         channel: "system",

@@ -1,6 +1,7 @@
 import CancelIcon from "@mui/icons-material/Cancel";
 import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import DeleteOutlinedIcon from "@mui/icons-material/DeleteOutlined";
+import DownloadIcon from "@mui/icons-material/Download";
 import DoneAllIcon from "@mui/icons-material/DoneAll";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import HistoryIcon from "@mui/icons-material/History";
@@ -39,6 +40,7 @@ import type { ReactElement } from "react";
 import { useState } from "react";
 import { Link as RouterLink, useNavigate } from "react-router";
 import { sendJson } from "../api/client.js";
+import { downloadProject } from "../project/projectFile.js";
 import { queryKeys, useBuildState, useConnections, useRevision, useStopAgent } from "../api/hooks.js";
 import type { MissionHeaderProps, NextStep } from "../contracts.js";
 import { isRecord } from "../lib/guards.js";
@@ -104,7 +106,6 @@ function StatusDots({ consoles, onOpen }: { consoles: ConsoleReport[]; onOpen(co
 }
 
 function NextStepButton({ step, props, onStop, stopping }: { step: NextStep; props: MissionHeaderProps; onStop(): void; stopping: boolean }) {
-  const navigate = useNavigate();
   const { missionId, detail, onOpenPanel } = props;
   const toCard = () => {
     const card = document.getElementById("mission-complete-card");
@@ -129,14 +130,14 @@ function NextStepButton({ step, props, onStop, stopping }: { step: NextStep; pro
       );
     case "bench":
       return (
-        <Button variant="contained" startIcon={<UsbIcon />} onClick={() => navigate(`/m/${missionId}/bench`)} sx={{ whiteSpace: "nowrap" }}>
+        <Button variant="contained" startIcon={<UsbIcon />} onClick={() => onOpenPanel("bench")} sx={{ whiteSpace: "nowrap" }}>
           Test on the bench
         </Button>
       );
     case "bench-real":
       return (
         <Tooltip title="The virtual board passed — that was practice. Run the bench with your real Arduino to finish." describeChild>
-          <Button variant="contained" startIcon={<UsbIcon />} onClick={() => navigate(`/m/${missionId}/bench`)} sx={{ whiteSpace: "nowrap" }}>
+          <Button variant="contained" startIcon={<UsbIcon />} onClick={() => onOpenPanel("bench")} sx={{ whiteSpace: "nowrap" }}>
             Test with your Arduino
           </Button>
         </Tooltip>
@@ -174,7 +175,8 @@ export function MissionHeader(props: MissionHeaderProps) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(m.title);
   const [confirmDelete, setConfirmDelete] = useState(false);
-
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState<string | null>(null);
   const rename = useMutation({
     mutationFn: (next: string) => sendJson("PATCH", `/api/missions/${encodeURIComponent(missionId)}`, { title: next }),
     onSettled: () => {
@@ -194,6 +196,17 @@ export function MissionHeader(props: MissionHeaderProps) {
     const next = title.trim().slice(0, 80);
     if (next && next !== m.title) rename.mutate(next);
     else setTitle(m.title);
+  };
+  const exportFile = async () => {
+    setExporting(true);
+    try {
+      await downloadProject(missionId, m.title);
+      setMenuAnchor(null);
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setExporting(false);
+    }
   };
 
   return (
@@ -259,7 +272,16 @@ export function MissionHeader(props: MissionHeaderProps) {
           <MoreHorizIcon />
         </IconButton>
         <Menu anchorEl={menuAnchor} open={menuAnchor !== null} onClose={() => setMenuAnchor(null)}>
-          <MenuItem component={RouterLink} to={`/m/${missionId}/bench`} onClick={() => setMenuAnchor(null)}>
+          <MenuItem disabled={exporting} onClick={() => void exportFile()}>
+            <ListItemIcon>{exporting ? <CircularProgress size={18} /> : <DownloadIcon fontSize="small" />}</ListItemIcon>
+            <ListItemText primary={exporting ? "Preparing project file…" : "Export project (.vibread)"} secondary="Open it in ViBread on any computer" />
+          </MenuItem>
+          <MenuItem
+            onClick={() => {
+              setMenuAnchor(null);
+              onOpenPanel("bench");
+            }}
+          >
             <ListItemIcon>
               <UsbIcon fontSize="small" />
             </ListItemIcon>
@@ -304,6 +326,11 @@ export function MissionHeader(props: MissionHeaderProps) {
       {rename.isError && (
         <Alert severity="error" sx={{ mx: 2, mb: 1 }} onClose={() => rename.reset()}>
           Couldn't rename the mission: {rename.error.message}
+        </Alert>
+      )}
+      {exportError && (
+        <Alert severity="error" sx={{ mx: 2, mb: 1 }} onClose={() => setExportError(null)}>
+          Couldn't export the project: {exportError}
         </Alert>
       )}
       {detail.recording && (
