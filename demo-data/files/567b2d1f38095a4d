@@ -1,0 +1,1 @@
+{"provider":"off","running":false,"missing":["CAPCOM_PROVIDER=cloud","PHOTON_PROJECT_ID","PHOTON_PROJECT_SECRET","CAPCOM_NUMBER"],"photon":{"secretSaved":false,"source":"none"},"linked":false,"prefs":{"questions":true,"designs":true,"bench":true,"quietHours":{"enabled":false,"start":"23:00","end":"07:00","timeZone":"UTC"}},"canEditPhoton":true}

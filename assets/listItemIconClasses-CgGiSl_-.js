@@ -1,0 +1,1 @@
+import{dt as e,ut as t}from"./Stack-Btad24oW.js";function n(t){return e(`MuiListItemIcon`,t)}var r=t(`MuiListItemIcon`,[`root`,`alignItemsFlexStart`]);export{r as n,n as t};
