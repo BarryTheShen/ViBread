@@ -15,7 +15,7 @@ import type {
   SafetyOverride,
   SelfTestPlan,
 } from "@vibread/core";
-import { DeviceLineSchema, HARDWARE_KINDS, MODULES, isPracticeRun, normalizeObservation, parsePartsText, type DeviceLine, type HardwareKind, type HardwareView } from "@vibread/core";
+import { DeviceLineSchema, HARDWARE_KINDS, MODULE_KEYS, MODULES, ModulePinSchema, isPracticeRun, normalizeObservation, parsePartsText, type DeviceLine, type HardwareKind, type HardwareView } from "@vibread/core";
 import type { CatalogView, InventoryEntry, InventoryUpsertRequest, PartType, ScanAcceptRequest, ScanItem } from "@vibread/core";
 import { applyCalibration, compileBenchFirmware, compileSketch, uploadCommand } from "@vibread/firmware";
 import { calibrationMacros, evaluateRun, planSelfTest } from "@vibread/bench";
@@ -60,6 +60,40 @@ const inventoryPatchSchema = z.object({
   photoUrl: z.string().optional(),
   note: z.string().optional(),
 });
+
+/** POST /missions: the web composer's limits (brief 4000, mission name 80), the same as MCP's vibread_create_mission. */
+const MAX_BRIEF = 4000;
+const MAX_TITLE = 80;
+const createMissionSchema = z.object({
+  brief: z
+    .string({ error: "is required: say what the circuit should do" })
+    .max(MAX_BRIEF, `must be at most ${MAX_BRIEF} characters`)
+    .refine((brief) => brief.trim().length > 0, "is required: say what the circuit should do"),
+  title: z.string({ error: "must be text" }).trim().min(1, "must not be empty").max(MAX_TITLE, `must be at most ${MAX_TITLE} characters`).optional(),
+  inventory: z
+    .array(
+      z.object({
+        module: z.enum(MODULE_KEYS, { error: "is not a known module (GET /api/modules lists them)" }),
+        count: z.number({ error: "must be a whole number, 0 or more" }).int("must be a whole number, 0 or more").nonnegative("must be a whole number, 0 or more"),
+        params: z.record(z.string(), z.unknown(), { error: "must be an object" }).optional(),
+        note: z.string({ error: "must be text" }).max(200, "must be at most 200 characters").optional(),
+        // The rest of InventoryItem: a user part type's own name and the pins a generic part must use.
+        label: z.string({ error: "must be text" }).max(200, "must be at most 200 characters").optional(),
+        pinout: z.array(ModulePinSchema, { error: "must be a list of pins" }).optional(),
+      }, { error: "must be a part ({ module, count })" }),
+      { error: "must be a list of parts" },
+    )
+    .max(50, "must list at most 50 parts")
+    .optional(),
+  inventoryEntryIds: z.array(z.string({ error: "must be an inventory entry id" }), { error: "must be a list of inventory entry ids" }).optional(),
+}, { error: "the body must be a JSON object { brief, title?, inventory?, inventoryEntryIds? }" });
+
+/** A zod failure as one readable line: "inventory.0.module is not a known module …". */
+function issueMessage(error: z.ZodError): string {
+  const issue = error.issues[0];
+  if (!issue) return "invalid request";
+  return issue.path.length > 0 ? `${issue.path.join(".")} ${issue.message}` : issue.message;
+}
 
 interface WebUser {
   id: string;
@@ -317,15 +351,14 @@ export function mountApi(app: Express, ctx: AppContext): void {
   });
   router.post("/missions", async (req, res) => {
     const user = actorUser(res, ctx);
-    const body = req.body as { brief?: unknown; inventory?: unknown; inventoryEntryIds?: unknown; title?: unknown };
-    if (typeof body.brief !== "string" || body.brief.trim().length === 0 || (body.inventory !== undefined && !Array.isArray(body.inventory)) || (body.inventoryEntryIds !== undefined && (!Array.isArray(body.inventoryEntryIds) || body.inventoryEntryIds.some((id) => typeof id !== "string")))) {
-      throw httpError(400, "INVALID_REQUEST", "brief and optional inventoryEntryIds or inventory are required");
-    }
+    const parsed = createMissionSchema.safeParse(req.body ?? {});
+    if (!parsed.success) throw httpError(400, "INVALID_REQUEST", issueMessage(parsed.error));
+    const body = parsed.data;
     const mission = await ctx.missions.create({
       brief: body.brief,
-      ...(Array.isArray(body.inventory) ? { inventory: body.inventory as Mission["inventory"] } : {}),
-      ...(Array.isArray(body.inventoryEntryIds) ? { inventoryEntryIds: body.inventoryEntryIds as string[] } : {}),
-      title: typeof body.title === "string" ? body.title : undefined,
+      ...(body.inventory ? { inventory: body.inventory satisfies Mission["inventory"] } : {}),
+      ...(body.inventoryEntryIds ? { inventoryEntryIds: body.inventoryEntryIds } : {}),
+      title: body.title,
       owner: { kind: "human", id: user.id, name: user.name, channel: "web" },
     });
     res.status(201).json(toSummary(mission));

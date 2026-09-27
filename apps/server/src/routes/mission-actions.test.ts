@@ -5,6 +5,7 @@ import type { MissionStore, RevisionResults } from "@vibread/core";
 import type { UIMessage } from "ai";
 import { GOLDEN } from "@vibread/fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { AppContext } from "../context.js";
 import { createAgentRuntime, STOP_DRAIN_MS, type AgentModels } from "../agents/index.js";
 import { mockModels, scriptedDesign, scriptedJson, testDeps } from "../agents/testing.js";
@@ -12,6 +13,8 @@ import type { MessageStore } from "../store/messages.js";
 import { missionOwnerMiddleware, mountApi } from "../routes.js";
 
 const fixture = GOLDEN.find((golden) => golden.key === "moon-phase-lamp")!;
+const ErrorBody = z.object({ error: z.object({ message: z.string() }) });
+const Created = z.object({ id: z.string() });
 
 type TestServer = {
   base: string;
@@ -50,6 +53,7 @@ async function server(): Promise<TestServer> {
     ...deps,
     config: { ...deps.config, singleOperator: false },
     runtime,
+    missions: createAgentRuntime({ ...deps, models: mockModels(scriptedDesign([]), scriptedJson([])) }).missions,
     log: { warn: () => undefined },
   } as unknown as AppContext;
   const app = express();
@@ -169,6 +173,39 @@ describe("mission action routes", () => {
       expect(((await list.json()) as { id: string; title: string }[]).map((mission) => mission.id)).toEqual([mine.id]);
       const signedOut = await fetch(`${running.base}/api/phone/missions`, { headers: { "x-user": "-" } });
       expect(signedOut.status).toBe(401);
+    } finally {
+      await running.close();
+    }
+  });
+
+  it("creates a mission only from a valid body: brief 1–4000 characters, title ≤ 80, known inventory modules", async () => {
+    const running = await server();
+    try {
+      const post = (body: unknown) => fetch(`${running.base}/api/missions`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      const rejected = async (body: unknown) => {
+        const response = await post(body);
+        expect(response.status).toBe(400);
+        return ErrorBody.parse(await response.json()).error.message;
+      };
+      expect(await rejected({})).toBe("brief is required: say what the circuit should do");
+      expect(await rejected({ brief: "   " })).toBe("brief is required: say what the circuit should do");
+      expect(await rejected({ brief: "x".repeat(4001) })).toBe("brief must be at most 4000 characters");
+      expect(await rejected({ brief: "Blink", title: "t".repeat(81) })).toBe("title must be at most 80 characters");
+      expect(await rejected({ brief: "Blink", inventory: [{ module: "flux-capacitor", count: 1 }] })).toBe("inventory.0.module is not a known module (GET /api/modules lists them)");
+      expect(await rejected({ brief: "Blink", inventory: [{ module: "led", count: -1 }] })).toBe("inventory.0.count must be a whole number, 0 or more");
+      expect(await rejected({ brief: "Blink", inventoryEntryIds: [7] })).toBe("inventoryEntryIds.0 must be an inventory entry id");
+      expect(await rejected(["Blink"])).toMatch(/^the body must be a JSON object/);
+      expect((await running.store.listMissions("owner")).length).toBe(0);
+
+      const created = await post({ brief: "x".repeat(4000), title: "  Blinker  ", inventory: [{ module: "led", count: 2, params: { color: "red" }, junk: true }] });
+      expect(created.status).toBe(201);
+      const stored = (await running.store.getMission(Created.parse(await created.json()).id))!;
+      expect(stored.title).toBe("Blinker");
+      expect(stored.brief).toHaveLength(4000);
+      expect(stored.inventory).toEqual([{ module: "led", count: 2, params: { color: "red" } }]);
+
+      // The web composer sends the brief alone.
+      expect((await post({ brief: "A night light" })).status).toBe(201);
     } finally {
       await running.close();
     }

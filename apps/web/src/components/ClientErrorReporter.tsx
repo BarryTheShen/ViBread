@@ -86,7 +86,14 @@ export function installBrowserErrorReporter(): void {
   browserReporterInstalled = true;
   window.addEventListener(
     "error",
-    (event) => {
+    (event: Event) => {
+      // A failed <script>/<img>/<link> fires a plain Event (no message or error) that only capture listeners see.
+      if (!(event instanceof ErrorEvent)) {
+        const element = event.target instanceof Element ? event.target : null;
+        const source = element?.getAttribute("src") ?? element?.getAttribute("href");
+        reportClientError({ message: `Failed to load ${element ? `<${element.tagName.toLowerCase()}>` : "a resource"}${source ? ` ${source}` : ""}` });
+        return;
+      }
       const details = detailsFromUnknown(event.error ?? event.message);
       reportClientError({ ...details, message: details.message || event.message });
     },
