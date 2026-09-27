@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ARDUINOJSON, AVR_CORE, CLI_VERSION, installToolchain, toolchainPaths } from "../../../scripts/setup-toolchain.mjs";
 import { childEnv, killTree, openLog, spawnRuntime, type DesktopPaths } from "./runtime.js";
@@ -33,6 +33,11 @@ function readMarker(paths: DesktopPaths): Marker {
   }
 }
 
+function writeMarker(paths: DesktopPaths, marker: Marker): void {
+  mkdirSync(paths.userData, { recursive: true });
+  writeFileSync(markerFile(paths), `${JSON.stringify(marker, null, 2)}\n`);
+}
+
 /** Steps still to run: never recorded, recorded for another version, or (toolchain) its arduino-cli has gone missing. */
 export function pendingSteps(paths: DesktopPaths): SetupStep[] {
   const marker = readMarker(paths);
@@ -42,6 +47,8 @@ export function pendingSteps(paths: DesktopPaths): SetupStep[] {
 
 /**
  * Runs every pending first-run step in order, recording each in setup.json when it succeeds. Returns ms per step.
+ * A step's old record is dropped before it starts, so a rerun interrupted halfway (quit, crash, failure) is redone on
+ * the next launch instead of trusting the half-replaced files; both steps are safe to rerun.
  * `signal` (the app quitting) stops the downloads and kills the arduino-cli / seeding children.
  */
 export async function runSetup(paths: DesktopPaths, steps: SetupStep[], onProgress: (progress: SetupProgress) => void, signal?: AbortSignal): Promise<Partial<Record<SetupStep, number>>> {
@@ -51,6 +58,9 @@ export async function runSetup(paths: DesktopPaths, steps: SetupStep[], onProgre
     for (const step of steps) {
       const started = Date.now();
       log.write(`\n=== ${new Date().toISOString()} ${step}\n`);
+      const before = readMarker(paths);
+      delete before.steps[step];
+      writeMarker(paths, before);
       if (step === "toolchain") {
         await installToolchain({
           dir: paths.toolchain,
@@ -64,7 +74,7 @@ export async function runSetup(paths: DesktopPaths, steps: SetupStep[], onProgre
       timings[step] = Date.now() - started;
       const marker = readMarker(paths);
       marker.steps[step] = { version: STEP_VERSIONS[step], at: new Date().toISOString(), ms: timings[step] };
-      writeFileSync(markerFile(paths), `${JSON.stringify(marker, null, 2)}\n`);
+      writeMarker(paths, marker);
       log.write(`=== ${step} done in ${timings[step]} ms\n`);
     }
     return timings;

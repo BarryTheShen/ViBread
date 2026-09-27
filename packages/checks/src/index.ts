@@ -886,7 +886,10 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
           ? `Add a 10 kΩ resistor from ${pin} to GND, or move ${button.button.id}'s other leg from 5 V to GND and use pinMode(${pinArg}, INPUT_PULLUP).`
           : noInternal
             ? `Move ${button.button.id} from ${pin} to ${freeBoardPin(circuit, FREE_DIGITAL_PINS) ?? "a D pin"} and use INPUT_PULLUP, or add a 10 kΩ resistor from ${pin} to 5 V.`
-            : `Set ${pin} to INPUT_PULLUP (pinMode(${pinArg}, INPUT_PULLUP)) with ${button.button.id}'s other leg on GND, or add a 10 kΩ pull-down resistor from ${pin} to GND.`,
+            : button.switchedRail === "GND"
+              // hasExternalPull only counts a resistor to the rail opposite the switched one: 5 V here.
+              ? `Set ${pin} to INPUT_PULLUP (pinMode(${pinArg}, INPUT_PULLUP)), or add a 10 kΩ pull-up resistor from ${pin} to 5 V.`
+              : `Set ${pin} to INPUT_PULLUP (pinMode(${pinArg}, INPUT_PULLUP)) with ${button.button.id}'s other leg on GND, or add a 10 kΩ pull-down resistor from ${pin} to GND with the other leg on 5 V.`,
         refs: {
           parts: [button.button.id],
           nets: [button.inputNet, button.switchedNet].filter((net): net is string => Boolean(net)),
@@ -967,17 +970,23 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
     const pins = (wiperNet ? nets.get(wiperNet)?.boardPins ?? [] : []).filter((name) => {
       const pin = boardPin(board, name);
       if (!pin || (pin.kind !== "digital" && pin.kind !== "analog")) return false;
-      return pin.adc === undefined || roleByPin.get(name)?.mode !== "ANALOG_IN";
+      const mode = roleByPin.get(name)?.mode;
+      // A pin driving the wiper uses the pot as a rheostat (e.g. an LED dimmer), which needs no analog read.
+      if (mode === "OUTPUT" || mode === "PWM_OUT") return false;
+      return pin.adc === undefined || mode !== "ANALOG_IN";
     });
     if (pins.length) potsOnDigital.push({ pot: pot.id, pins });
   }
   const freeAnalog = freeBoardPin(circuit, FREE_ANALOG_PINS);
   for (const { pot, pins } of potsOnDigital) {
-    const target = pins.find((name) => boardPin(board, name)?.adc !== undefined) ?? freeAnalog ?? "A0";
+    const onAnalog = pins.find((name) => boardPin(board, name)?.adc !== undefined);
+    const target = onAnalog ?? freeAnalog ?? "A0";
     addFinding("POT-ANALOG-PIN", {
       severity: "error",
       detail: `${pot}'s middle leg (wiper) is on ${pins.join(", ")}, read as a plain on/off input, so turning the knob gives only HIGH or LOW.`,
-      fix: `Move ${pot}'s middle leg to ${target}, give ${target} an ANALOG_IN role, and read it with analogRead(${target}).`,
+      fix: onAnalog
+        ? `Give ${onAnalog} an ANALOG_IN role and read ${pot} with analogRead(${onAnalog}).`
+        : `Move ${pot}'s middle leg to ${target}, give ${target} an ANALOG_IN role, and read it with analogRead(${target}).`,
       refs: { parts: [pot], pins: pins.map((pin) => `board.${pin}`) },
     });
   }
@@ -993,12 +1002,31 @@ function electricalFacts(circuit: Circuit): ElectricalFacts {
   if (i2cBad.length) addFinding("I2C-PINS", { severity: "error", detail: `I²C roles are on ${i2cBad.join(", ")} instead of A4/A5.`, refs: { pins: i2cBad.map((pin) => `board.${pin}`) } });
   if (spiBad.length) addFinding("SPI-PINS", { severity: "error", detail: `SPI roles are on ${spiBad.join(", ")} instead of D10–D13.`, refs: { pins: spiBad.map((pin) => `board.${pin}`) } });
   if (serialPins.length) {
-    const movable = circuit.roles.filter((role) => serialPins.includes(role.pin));
-    const target = freeBoardPin(circuit, FREE_DIGITAL_PINS) ?? "a free pin from D2 to D13";
+    const onSerial = circuit.roles.filter((role) => serialPins.includes(role.pin));
+    const taken = new Set<string>();
+    const nextFree = () => {
+      const pin = freeBoardPin(circuit, FREE_DIGITAL_PINS.filter((candidate) => !taken.has(candidate)));
+      if (pin) taken.add(pin);
+      return pin ?? "a free pin from D2 to D13";
+    };
+    // A UART module (on both D0 and D1, or described as serial) cannot just move one pin: it needs SoftwareSerial.
+    const uartParts = new Set(onSerial
+      .filter((role) => /\b(uart|serial|rx|tx|rxd|txd)\b/i.test(role.purpose) || onSerial.some((other) => other.part === role.part && other.pin !== role.pin))
+      .map((role) => role.part));
+    const moves: string[] = [];
+    const rewired = new Set<string>();
+    for (const role of onSerial) {
+      if (!uartParts.has(role.part)) moves.push(`move ${role.part} from ${role.pin} to ${nextFree()}`);
+      else if (!rewired.has(role.part)) {
+        rewired.add(role.part);
+        moves.push(`use SoftwareSerial on two free pins (${nextFree()} and ${nextFree()}) for ${role.part} instead of D0/D1`);
+      }
+    }
+    const fix = moves.join("; ");
     addFinding("SERIAL-USB", {
       severity: "warning",
       detail: `The sketch assigns ${serialPins.join(" and ")} to circuit roles while USB serial uses D0/D1.`,
-      fix: `Move ${movable.map((role) => `${role.part} from ${role.pin}`).join(" and ")} to ${target}; D0/D1 carry uploads and USB serial.`,
+      fix: `${fix.charAt(0).toUpperCase()}${fix.slice(1)}; D0/D1 carry uploads and USB serial.`,
       refs: { pins: serialPins.map((pin) => `board.${pin}`) },
     });
   }
