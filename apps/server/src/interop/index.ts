@@ -30,7 +30,7 @@ declare global {
 const MCP_VERSION = "1.0.0";
 const MCP_PATH = "/mcp";
 const A2A_PATH = "/a2a";
-/** Same limits as the web composer (4000) and mission name field (80). */
+/** Chat messages and answers: the web chat box's limit (4000); mission name: the name field's (80). A brief has no limit. */
 const MAX_TEXT = 4000;
 const MAX_TITLE = 80;
 /** Matches the server-wide express.json limit in main.ts. */
@@ -305,7 +305,7 @@ function registerMissionTools(server: McpServer, ctx: AppContext, request: Reque
         description:
           "Create a mission from a plain-language brief of what the circuit should do. Returns the mission (use its id as missionId). Then call propose_design with a complete circuit; there is no separate clarify step for you.",
         inputSchema: {
-          brief: z.string().min(1).max(MAX_TEXT).describe("What the circuit should do, in plain words."),
+          brief: z.string().min(1).describe("What the circuit should do, in plain words (any length)."),
           title: z.string().min(1).max(MAX_TITLE).optional().describe("Mission name; derived from the brief when omitted."),
           inventory: z
             .array(
@@ -664,9 +664,11 @@ function createA2aExecutor(ctx: AppContext): AgentExecutor {
       const incoming = a2aUserMessage(requestContext);
       const text = textOf(incoming).trim();
       if (text.length === 0) throw new Error("Send the request as a text part, e.g. \"Build a moon-phase lamp\".");
-      if (text.length > MAX_TEXT) throw new Error(`The message is ${text.length} characters; ViBread accepts up to ${MAX_TEXT}. Send a shorter message.`);
       const actor = a2aActor(requestContext);
-      const missionId = missionIdFromTask(requestContext.task) ?? (await ctx.missions.create({ brief: text, owner: actor })).id;
+      const existing = missionIdFromTask(requestContext.task);
+      // A new task's text becomes the mission brief, which has no length limit; later messages are chat turns.
+      if (existing && text.length > MAX_TEXT) throw new Error(`The message is ${text.length} characters; ViBread accepts up to ${MAX_TEXT}. Send a shorter message.`);
+      const missionId = existing ?? (await ctx.missions.create({ brief: text, owner: actor })).id;
       const task: Task = {
         id: requestContext.task?.id ?? requestContext.taskId,
         contextId: requestContext.task?.contextId ?? requestContext.contextId,

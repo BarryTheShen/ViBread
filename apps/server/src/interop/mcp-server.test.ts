@@ -159,11 +159,14 @@ describe("MCP on the real server", () => {
     expect(huge).toMatchObject({ status: 413, json: { jsonrpc: "2.0", error: { code: -32600 } } });
   });
 
-  it("caps free text at the web composer's limit", async () => {
+  it("takes a brief of any length, but caps chat messages at the web chat box's limit", async () => {
     const client = await connect(token);
-    const result = await client.callTool({ name: "vibread_create_mission", arguments: { brief: "a".repeat(4001) } });
-    expect(result.isError).toBe(true);
-    expect(text(result)).toContain("brief");
+    const created = await client.callTool({ name: "vibread_create_mission", arguments: { brief: "a".repeat(100_000) } });
+    expect(created.isError).toBeFalsy();
+    const missionId = (JSON.parse(text(created)) as { id: string }).id;
+    const tooLong = await client.callTool({ name: "vibread_say", arguments: { missionId, text: "a".repeat(4001) } });
+    expect(tooLong.isError).toBe(true);
+    expect(text(tooLong)).toContain("text");
     await client.close();
   });
 });
