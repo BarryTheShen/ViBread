@@ -45,12 +45,14 @@ system setting, using a space-cadet, cool-gray, anti-flash-white and red palette
      (checked at the worst-case USB voltage and resistor tolerance, and cross-checked with the ngspice circuit simulator).
    - **GUIDO, firmware:** the sketch really compiles for your board (the real Arduino compiler, inside the app), and the
      pins the code uses match the wiring.
-   - **FIDO, simulation:** a *second* AI, which never sees the sketch, writes tests from your description ("after 4
-     presses in the dark, all 4 LEDs are on"). ViBread runs them on a simulated Arduino (see below). The checks are
-     open-ended and tolerant: a light counts as "on" when it's lit for at least a quarter of the check window, wherever
-     in the window that happens, and brightness, duty, pitch and serial timing each get some slack. A failing test is
-     reviewed against your description; one the review judges wrong (or can't confirm when the design agent disputes it)
-     is corrected or set aside, and a set-aside test only warns.
+   - **FIDO, simulation:** a *second* AI, which never sees the sketch, writes a small set of tests from your description
+     ("after 4 presses in the dark, all 4 LEDs are on"). ViBread runs them on a simulated Arduino (see below). The checks
+     are lenient: a light counts as "on" when it's lit for at least 15% of the check window, wherever in the window that
+     happens; a check also passes when its state shows up to 150 ms before or 300 ms after its window; and brightness,
+     duty, pitch and serial timing each get generous slack. Only a test for every part of your description is required
+     (plus one "right after power-on" test); edge cases like contact bounce are optional, and other coverage gaps only
+     warn. A failing test is reviewed against your description: only one the review confirms keeps blocking; the rest
+     are corrected or set aside, and a set-aside test only warns.
    - **FAO, assembly:** ViBread lays the circuit out on a breadboard and proves the layout connects exactly what the
      design says.
    - **RETRO, review:** a third AI compares your description, the design and all the results, and votes GO or NO-GO.

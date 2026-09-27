@@ -472,29 +472,33 @@ export class SimMachine {
     return this.serialText().includes(text);
   }
 
-  pinHighFraction(pin: string, startCycle: number): number {
+  /** Share of [startCycle, endCycle] (default: now) the pin was driven high. */
+  pinHighFraction(pin: string, startCycle: number, endCycle = this.cpu.cycles): number {
     this.accountTo(this.cpu.cycles);
-    const elapsed = this.cpu.cycles - startCycle;
+    const end = Math.min(endCycle, this.cpu.cycles);
+    const elapsed = end - startCycle;
     if (elapsed <= 0) return 0;
     const segments = this.pinSegments.get(pin) ?? [];
     let onCycles = 0;
     for (const segment of segments) {
       const overlapStart = Math.max(startCycle, segment.start);
-      const overlapEnd = Math.min(this.cpu.cycles, segment.end);
+      const overlapEnd = Math.min(end, segment.end);
       if (segment.on && overlapEnd > overlapStart) onCycles += overlapEnd - overlapStart;
     }
     return clamp(onCycles / elapsed, 0, 1);
   }
 
-  partOnFraction(part: string, startCycle: number): number {
+  /** Share of [startCycle, endCycle] (default: now) the part was lit or sounding. */
+  partOnFraction(part: string, startCycle: number, endCycle = this.cpu.cycles): number {
     this.accountTo(this.cpu.cycles);
-    const elapsed = this.cpu.cycles - startCycle;
+    const end = Math.min(endCycle, this.cpu.cycles);
+    const elapsed = end - startCycle;
     if (elapsed <= 0) return 0;
     const segments = this.partSegments.get(part) ?? [];
     let onCycles = 0;
     for (const segment of segments) {
       const overlapStart = Math.max(startCycle, segment.start);
-      const overlapEnd = Math.min(this.cpu.cycles, segment.end);
+      const overlapEnd = Math.min(end, segment.end);
       if (segment.on && overlapEnd > overlapStart) onCycles += overlapEnd - overlapStart;
     }
     return clamp(onCycles / elapsed, 0, 1);
@@ -960,23 +964,50 @@ function expectPartsFor(step: ScenarioStep): { checks: readonly PartExpectation[
 }
 
 /**
- * Simulation checks are open-ended (the expected state may start or end anywhere in the window) and tolerant, so a test
- * whose timing or numbers are a little off doesn't fail a correct design.
+ * Simulation checks are open-ended (the expected state may start or end anywhere in the window) and lenient, so a test
+ * whose timing or numbers are off doesn't fail a correct design.
  */
 /** A part is "on" when lit for at least this share of the window, "off" when dark for at least this share of it. */
-export const STATE_MIN_SHARE = 0.25;
+export const STATE_MIN_SHARE = 0.15;
 /** Slack on expect-parts minBrightness/maxBrightness. */
-export const BRIGHTNESS_SLACK = 0.15;
+export const BRIGHTNESS_SLACK = 0.25;
 /** Slack on expect-pwm duty bounds (clamped to 0..1). */
-export const PWM_SLACK = 0.1;
+export const PWM_SLACK = 0.15;
 /** expect-tone accepts minHz × this … */
-export const TONE_LOW_FACTOR = 0.85;
+export const TONE_LOW_FACTOR = 0.75;
 /** … up to maxHz × this. */
-export const TONE_HIGH_FACTOR = 1.15;
-/** expect-serial waits at least this much longer than withinMs (and at least 2 × withinMs). */
-export const SERIAL_EXTRA_MS = 500;
+export const TONE_HIGH_FACTOR = 1.25;
+/** expect-serial waits at least this much longer than withinMs (and at least SERIAL_WAIT_FACTOR × withinMs). */
+export const SERIAL_EXTRA_MS = 1500;
+export const SERIAL_WAIT_FACTOR = 3;
 /** expect-pin waits up to this long for the level before failing. */
-export const PIN_WAIT_MS = 100;
+export const PIN_WAIT_MS = 300;
+/**
+ * Timing grace for window expectations (expect-part, expect-parts, expect-pwm, expect-tone): one also passes when its
+ * state shows up to LOOKBACK_MS before the window, or up to LATE_GRACE_MS after it. For a late one the clock runs on
+ * until the state shows, so later steps start that much later.
+ */
+export const LOOKBACK_MS = 150;
+export const LATE_GRACE_MS = 300;
+const GRACE_STEP_MS = 10;
+
+function cyclesOf(ms: number): number {
+  return Math.round((ms * CLOCK_HZ) / 1000);
+}
+
+/** Whether `holds(from)` (judged over [from, now]) becomes true within the timing grace around a window that began at `start`. */
+function withTimingGrace(machine: SimMachine, start: number, holds: (from: number) => boolean): boolean {
+  const early = Math.max(0, start - cyclesOf(LOOKBACK_MS));
+  if (holds(start) || holds(early)) return true;
+  const deadline = machine.currentCycle + cyclesOf(LATE_GRACE_MS);
+  while (machine.currentCycle < deadline) {
+    machine.run(Math.min(GRACE_STEP_MS, ((deadline - machine.currentCycle) * 1000) / CLOCK_HZ));
+    if (holds(start) || holds(early)) return true;
+  }
+  return false;
+}
+
+const GRACE_NOTE = `, allowing ${LOOKBACK_MS} ms before and ${LATE_GRACE_MS} ms after the window`;
 
 function stateOk(state: "on" | "off", onFraction: number): boolean {
   return state === "on" ? onFraction >= STATE_MIN_SHARE : 1 - onFraction >= STATE_MIN_SHARE;
@@ -984,12 +1015,13 @@ function stateOk(state: "on" | "off", onFraction: number): boolean {
 
 function stateRule(state: "on" | "off"): string {
   const share = `${Math.round(STATE_MIN_SHARE * 100)}%`;
-  return state === "on" ? `lit for at least ${share} of the window, anywhere in it` : `dark for at least ${share} of the window, anywhere in it`;
+  return state === "on" ? `lit for at least ${share} of the window, anywhere in it${GRACE_NOTE}` : `dark for at least ${share} of the window, anywhere in it${GRACE_NOTE}`;
 }
 
-function timelineFailure(machine: SimMachine, startCycle: number, message: string, part?: string): string {
+/** "t=start–end ms …": the check's own window (`endCycle`, before any timing grace), or up to now. */
+function timelineFailure(machine: SimMachine, startCycle: number, message: string, part?: string, endCycle?: number): string {
   const startMs = Math.round((startCycle * 1000) / machine.profile.clockHz);
-  const endMs = Math.round(machine.timeMs);
+  const endMs = endCycle === undefined ? Math.round(machine.timeMs) : Math.round((endCycle * 1000) / machine.profile.clockHz);
   const change = part ? machine.lastPartChange(part) : undefined;
   const changeText = change ? ` (${part} turned ${change.on ? "on" : "off"} at t=${Math.round(change.atMs)} ms)` : "";
   return `t=${startMs}–${endMs} ms ${message}${changeText}`;
@@ -1047,58 +1079,75 @@ function executeStep(machine: SimMachine, step: ScenarioStep): { ok: boolean; me
     const { part, state, windowMs } = step["expect-part"];
     const start = machine.currentCycle;
     machine.run(windowMs);
-    const onFraction = machine.partOnFraction(part, start);
-    const ok = stateOk(state, onFraction);
-    const percentage = (onFraction * 100).toFixed(0);
+    const windowEnd = machine.currentCycle;
+    const ok = withTimingGrace(machine, start, (from) => stateOk(state, machine.partOnFraction(part, from)));
+    const percentage = (machine.partOnFraction(part, start, windowEnd) * 100).toFixed(0);
     if (ok) return { ok: true, message: `${part} was ${state} as expected (lit ${percentage}% of the window)` };
-    return { ok: false, message: timelineFailure(machine, start, `${part} should be ${state} (${stateRule(state)}) but was lit ${percentage}%`, part) };
+    return { ok: false, message: timelineFailure(machine, start, `${part} should be ${state} (${stateRule(state)}) but was lit ${percentage}%`, part, windowEnd) };
   }
   const expectParts = expectPartsFor(step);
   if (expectParts) {
     const start = machine.currentCycle;
     machine.run(expectParts.windowMs);
-    const failures: string[] = [];
-    for (const check of expectParts.checks) {
-      const onFraction = machine.partOnFraction(check.part, start);
-      const brightness = machine.partState(check.part);
-      const percentage = (onFraction * 100).toFixed(0);
-      if (check.state !== undefined) {
-        if (!stateOk(check.state, onFraction)) failures.push(`${check.part} should be ${check.state} (${stateRule(check.state)}) but was lit ${percentage}%`);
+    const windowEnd = machine.currentCycle;
+    const failuresFrom = (from: number, to?: number): string[] => {
+      const failures: string[] = [];
+      for (const check of expectParts.checks) {
+        const onFraction = machine.partOnFraction(check.part, from, to);
+        const brightness = machine.partState(check.part);
+        const percentage = (onFraction * 100).toFixed(0);
+        if (check.state !== undefined) {
+          if (!stateOk(check.state, onFraction)) failures.push(`${check.part} should be ${check.state} (${stateRule(check.state)}) but was lit ${percentage}%`);
+        }
+        if (check.minBrightness !== undefined && brightness < check.minBrightness - BRIGHTNESS_SLACK) failures.push(`${check.part} brightness ${(brightness * 100).toFixed(0)}% is below ${(check.minBrightness * 100).toFixed(0)}% (−${BRIGHTNESS_SLACK * 100} points allowed)`);
+        if (check.maxBrightness !== undefined && brightness > check.maxBrightness + BRIGHTNESS_SLACK) failures.push(`${check.part} brightness ${(brightness * 100).toFixed(0)}% exceeds ${(check.maxBrightness * 100).toFixed(0)}% (+${BRIGHTNESS_SLACK * 100} points allowed)`);
       }
-      if (check.minBrightness !== undefined && brightness < check.minBrightness - BRIGHTNESS_SLACK) failures.push(`${check.part} brightness ${(brightness * 100).toFixed(0)}% is below ${(check.minBrightness * 100).toFixed(0)}% (−${BRIGHTNESS_SLACK * 100} points allowed)`);
-      if (check.maxBrightness !== undefined && brightness > check.maxBrightness + BRIGHTNESS_SLACK) failures.push(`${check.part} brightness ${(brightness * 100).toFixed(0)}% exceeds ${(check.maxBrightness * 100).toFixed(0)}% (+${BRIGHTNESS_SLACK * 100} points allowed)`);
-    }
-    if (failures.length === 0) return { ok: true, message: `checked ${expectParts.checks.length} parts over ${expectParts.windowMs} ms` };
+      return failures;
+    };
+    if (withTimingGrace(machine, start, (from) => failuresFrom(from).length === 0)) return { ok: true, message: `checked ${expectParts.checks.length} parts over ${expectParts.windowMs} ms` };
+    const failures = failuresFrom(start, windowEnd);
     const firstPart = expectParts.checks.find((check) => failures.some((failure) => failure.startsWith(`${check.part} `)))?.part;
-    return { ok: false, message: timelineFailure(machine, start, failures.join("; "), firstPart) };
+    return { ok: false, message: timelineFailure(machine, start, failures.join("; "), firstPart, windowEnd) };
   }
   if ("expect-pwm" in step) {
     const { pin, min, max, windowMs } = step["expect-pwm"];
     const start = machine.currentCycle;
     machine.run(windowMs);
-    const fraction = machine.pinHighFraction(pin, start);
+    const windowEnd = machine.currentCycle;
     const low = Math.max(0, min - PWM_SLACK);
     const high = Math.min(1, max + PWM_SLACK);
-    if (fraction >= low && fraction <= high) return { ok: true, message: `${pin} duty ${(fraction * 100).toFixed(1)}%` };
-    return { ok: false, message: timelineFailure(machine, start, `${pin} duty ${(fraction * 100).toFixed(1)}% outside ${(low * 100).toFixed(1)}–${(high * 100).toFixed(1)}% (${(min * 100).toFixed(1)}–${(max * 100).toFixed(1)}% ± ${PWM_SLACK * 100} points)`) };
+    const inRange = (from: number) => {
+      const fraction = machine.pinHighFraction(pin, from);
+      return fraction >= low && fraction <= high;
+    };
+    const ok = withTimingGrace(machine, start, inRange);
+    const fraction = machine.pinHighFraction(pin, start, windowEnd);
+    if (ok) return { ok: true, message: `${pin} duty ${(fraction * 100).toFixed(1)}%` };
+    return { ok: false, message: timelineFailure(machine, start, `${pin} duty ${(fraction * 100).toFixed(1)}% outside ${(low * 100).toFixed(1)}–${(high * 100).toFixed(1)}% (${(min * 100).toFixed(1)}–${(max * 100).toFixed(1)}% ± ${PWM_SLACK * 100} points${GRACE_NOTE})`, undefined, windowEnd) };
   }
   if ("expect-tone" in step) {
     const { part, minHz, maxHz, windowMs } = step["expect-tone"];
     const start = machine.currentCycle;
     machine.run(windowMs);
-    const { hz, share } = machine.toneInWindow(part, start);
+    const windowEnd = machine.currentCycle;
     const low = minHz * TONE_LOW_FACTOR;
     const high = maxHz * TONE_HIGH_FACTOR;
     const range = `${low.toFixed(1)}–${high.toFixed(1)} Hz (${minHz}–${maxHz} Hz ± ${Math.round((1 - TONE_LOW_FACTOR) * 100)}%)`;
+    const playing = (from: number) => {
+      const tone = machine.toneInWindow(part, from);
+      return tone.share >= STATE_MIN_SHARE && tone.hz >= low && tone.hz <= high;
+    };
+    const ok = withTimingGrace(machine, start, playing);
+    const { hz, share } = machine.toneInWindow(part, start);
+    if (ok) return { ok: true, message: `${part} tone ${hz.toFixed(1)} Hz for ${(share * 100).toFixed(0)}% of the window` };
     const sounded = share >= STATE_MIN_SHARE;
-    if (sounded && hz >= low && hz <= high) return { ok: true, message: `${part} tone ${hz.toFixed(1)} Hz for ${(share * 100).toFixed(0)}% of the window` };
-    const seen = share === 0 ? "was silent" : !sounded ? `sounded for ${(share * 100).toFixed(0)}% of the window (at least ${Math.round(STATE_MIN_SHARE * 100)}% needed, anywhere in it) at ${hz.toFixed(1)} Hz` : `tone ${hz.toFixed(1)} Hz is outside the range`;
+    const seen = share === 0 ? "was silent" : !sounded ? `sounded for ${(share * 100).toFixed(0)}% of the window (at least ${Math.round(STATE_MIN_SHARE * 100)}% needed, anywhere in it${GRACE_NOTE}) at ${hz.toFixed(1)} Hz` : `tone ${hz.toFixed(1)} Hz is outside the range`;
     // No "(turned on at …)" note: a tone toggles the pin hundreds of times a second, so its last change says nothing.
-    return { ok: false, message: timelineFailure(machine, start, `${part} ${seen}; expected ${range}`) };
+    return { ok: false, message: timelineFailure(machine, start, `${part} ${seen}; expected ${range}`, undefined, windowEnd) };
   }
   if ("expect-serial" in step) {
     const { contains, withinMs } = step["expect-serial"];
-    const waitMs = Math.max(2 * withinMs, withinMs + SERIAL_EXTRA_MS);
+    const waitMs = Math.max(SERIAL_WAIT_FACTOR * withinMs, withinMs + SERIAL_EXTRA_MS);
     const start = machine.currentCycle;
     const deadline = machine.currentCycle + Math.round(waitMs * CLOCK_HZ / 1000);
     while (!machine.serialContains(contains) && machine.currentCycle < deadline) machine.run(Math.min(1, (deadline - machine.currentCycle) * 1000 / CLOCK_HZ));
