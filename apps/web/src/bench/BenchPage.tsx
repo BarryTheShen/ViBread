@@ -631,6 +631,7 @@ export default function BenchPage(): ReactElement | null {
       setRunnerState(nextRunner.state);
       setRun(undefined);
       setError(undefined);
+      setFlashProgress(undefined);
       setActiveStep(1);
     } catch (reason: unknown) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -831,29 +832,33 @@ export default function BenchPage(): ReactElement | null {
                 </Box>
                 <Chip label={`${runnerState?.lines.length ?? 0} telemetry lines`} color="info" variant="outlined" />
               </Stack>
-              {pendingAsks.length > 0 && (
-                <Stack spacing={2} sx={{ mt: 2 }}>
-                  {pendingAsks.map((ask) => {
-                    const prompt = promptFor(ask, loaded.plan);
-                    const hint = mode === "virtual" ? virtualPromptHint(ask) : undefined;
-                    return <Paper key={ask.id} sx={{ p: 2.5, border: "2px solid", borderColor: "secondary.main", bgcolor: "background.paper" }}>
-                      <Typography variant="h6" sx={{ fontWeight: 700 }}>{promptTitle(ask, loaded.plan, prompt.title)}</Typography>
-                      <Typography color="text.secondary" sx={{ mb: 2 }}>{ask.kind === "which-led" ? "Watch the labeled lights on the virtual board and choose which one blinked." : hint ? `${hint} Tap Done to continue.` : prompt.body}</Typography>
-                      <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
-                        {prompt.choices.map((choice) => <Button key={choice.value} variant="contained" onClick={() => void answerAsk(ask.id, choice.value)} disabled={Boolean(busy)} sx={actionButtonSx}>{choice.label}</Button>)}
-                      </Stack>
-                    </Paper>;
-                  })}
-                </Stack>
-              )}
-              {mode === "virtual" && (
-                <Paper variant="outlined" sx={{ mt: 2, p: 1.5 }}>
-                  <Typography variant="subtitle2">Virtual board — watch the lights here</Typography>
-                  <Box sx={{ mt: 1, p: 1, bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3 } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
-                </Paper>
-              )}
-              {remoteAnswer && <Alert severity="info" sx={{ mt: 2 }}>Answered from iMessage by {remoteAnswer.by}: {remoteAnswer.value}</Alert>}
-              {runnerState?.done && <Alert severity="info" sx={{ mt: 2 }}>All device tests finished. Preparing the Houston diagnosis…</Alert>}
+              <Stack direction={{ xs: "column", lg: "row" }} spacing={2} sx={{ mt: 2, alignItems: "flex-start" }}>
+                <Box sx={{ flex: 1, minWidth: 0 }}>
+                  {pendingAsks.length > 0 && (
+                    <Stack spacing={2}>
+                      {pendingAsks.map((ask) => {
+                        const prompt = promptFor(ask, loaded.plan);
+                        const hint = mode === "virtual" ? virtualPromptHint(ask) : undefined;
+                        return <Paper key={ask.id} sx={{ p: 2.5, border: "2px solid", borderColor: "secondary.main", bgcolor: "background.paper" }}>
+                          <Typography variant="h6" sx={{ fontWeight: 700 }}>{promptTitle(ask, loaded.plan, prompt.title)}</Typography>
+                          <Typography color="text.secondary" sx={{ mb: 2 }}>{ask.kind === "which-led" ? "Watch the labeled lights on the virtual board and choose which one blinked." : hint ? `${hint} Tap Done to continue.` : prompt.body}</Typography>
+                          <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }} useFlexGap>
+                            {prompt.choices.map((choice) => <Button key={choice.value} variant="contained" onClick={() => void answerAsk(ask.id, choice.value)} disabled={Boolean(busy)} sx={actionButtonSx}>{choice.label}</Button>)}
+                          </Stack>
+                        </Paper>;
+                      })}
+                    </Stack>
+                  )}
+                  {remoteAnswer && <Alert severity="info" sx={{ mt: 2 }}>Answered from iMessage by {remoteAnswer.by}: {remoteAnswer.value}</Alert>}
+                  {runnerState?.done && <Alert severity="info" sx={{ mt: 2 }}>All device tests finished. Preparing the Houston diagnosis…</Alert>}
+                </Box>
+                {mode === "virtual" && (
+                  <Paper variant="outlined" sx={{ flex: 1, minWidth: 0, width: "100%", p: 1.5 }}>
+                    <Typography variant="subtitle2">Virtual board — watch the lights here</Typography>
+                    <Box sx={{ mt: 1, p: 1, bgcolor: "canvas.main", borderRadius: 1, border: 1, borderColor: "divider", "& svg": { display: "block", width: "100%", height: "auto", "& .vb-hl": { stroke: "#ff6b6b", strokeWidth: 3 } } }} dangerouslySetInnerHTML={{ __html: decoratedSvg }} />
+                  </Paper>
+                )}
+              </Stack>
               <Divider sx={{ my: 2 }} />
               <SerialMonitor value={displayLines.join("\n")} title="Live line log" ariaLabel="Telemetry line log" emptyText="Waiting for NDJSON…" height="auto" maxHeight={220} />
             </CardContent>
