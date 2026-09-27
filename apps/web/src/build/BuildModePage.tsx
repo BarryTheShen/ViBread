@@ -990,6 +990,11 @@ export interface BuildModePageProps {
 export default function BuildModePage({ missionId: missionIdProp }: BuildModePageProps = {}) {
   const { missionId: routeMissionId } = useParams<{ missionId: string }>();
   const missionId = missionIdProp ?? routeMissionId ?? "";
+  // Keyed by mission: going from /b/A to /b/B starts fresh instead of carrying A's current step and finished state over.
+  return <BuildModeScreen key={missionId} missionId={missionId} />;
+}
+
+function BuildModeScreen({ missionId }: { missionId: string }) {
   const navigate = useNavigate();
   const reducedMotion = useMediaQuery("(prefers-reduced-motion: reduce)", { noSsr: true });
   const [now, setNow] = useState(() => Date.now());
