@@ -170,7 +170,8 @@ export interface ProjectFileDependencies {
 
 export interface ProjectFileService {
   export(missionId: string): Promise<{ bytes: Uint8Array; fileName: string }>;
-  import(input: { bytes: Uint8Array; ownerId: string; fileName?: string }): Promise<{ missionId: string }>;
+  /** `sourceLabel` replaces the "Imported from <file>" timeline row, e.g. for a duplicate made on this server. */
+  import(input: { bytes: Uint8Array; ownerId: string; fileName?: string; title?: string; sourceLabel?: string }): Promise<{ missionId: string }>;
 }
 
 /** Timeline rows that describe work the person can act on or understand. Credentials, approvals and debug noise stay out. */
@@ -179,6 +180,7 @@ const MEANINGFUL_EVENTS = new Set([
   "project.imported",
   "revision.created",
   "revision.released",
+  "release.override",
   "release.review-recorded",
   "release.review-waived",
   "revision.rechecked",
@@ -530,7 +532,7 @@ export function createProjectFileService(deps: ProjectFileDependencies): Project
       const document = parsed.document;
       const currentRevision = document.mission.currentRevision ?? document.revisions.at(-1)?.n;
       const imported = await deps.store.createMission({
-        title: document.mission.title,
+        title: input.title ?? document.mission.title,
         brief: document.mission.brief,
         ownerId: input.ownerId,
         inventory: document.mission.inventory as Mission["inventory"],
@@ -565,7 +567,7 @@ export function createProjectFileService(deps: ProjectFileDependencies): Project
             channel: "system",
             actor: { kind: "system", id: "imported-hardware", name: "Your hardware", channel: "system" },
             kind: MISSION_HARDWARE_EVENT,
-            text: "Hardware restored from imported project",
+            text: input.sourceLabel ? "Hardware carried over from the original mission" : "Hardware restored from imported project",
             data: document.hardware,
           });
         }
@@ -645,7 +647,7 @@ export function createProjectFileService(deps: ProjectFileDependencies): Project
           channel: "system",
           actor: { kind: "system", id: "import", channel: "system" },
           kind: "project.imported",
-          text: `Imported from ${sourceName} — exported ${document.exportedAt} from ViBread ${document.app.version}`,
+          text: input.sourceLabel ?? `Imported from ${sourceName} — exported ${document.exportedAt} from ViBread ${document.app.version}`,
           revision: currentRevision,
           data: { exportedAt: document.exportedAt, appVersion: document.app.version },
         });

@@ -32,6 +32,9 @@ export type { AgentDeps, InventoryReader, MessageStore, MissionEvent, MissionMac
 export type { AgentModels } from "./models.js";
 export type { ReleaseInput } from "./release.js";
 
+/** Longest `stop()` waits for a running turn to wind down before a destructive mission operation proceeds anyway. */
+export const STOP_DRAIN_MS = 5_000;
+
 export interface AgentRuntime {
   missions: MissionService;
   tools: ToolRegistry;
@@ -39,6 +42,8 @@ export interface AgentRuntime {
   pipeline: BackgroundPipeline;
   /** The running code's derivation version (agents/derivation.ts), computed on first use; undefined if the probe failed. */
   derivation(): Promise<string | undefined>;
+  /** Stop and drain a running design-agent turn before destructive mission operations. */
+  stop(missionId: string): Promise<boolean>;
   /** /api/missions/:id/chat (GET history, POST turn), /chat/stream (resume), /chat/stop. Mount after express.json(). */
   mountChat(app: Express): void;
   /** Claude's open ask_user question and the answer path CAPCOM uses (first answer wins across web and iMessage). */
@@ -166,6 +171,13 @@ export function createAgentRuntime(deps: AgentDeps & { models?: AgentModels; pip
     tools,
     pipeline,
     derivation,
+    async stop(missionId) {
+      const active = runs.active(missionId);
+      const stopped = runs.stop(missionId);
+      // Bounded: a turn that ignores the abort must not block delete forever.
+      if (active) await Promise.race([active.finished.catch(() => undefined), new Promise<void>((resolve) => setTimeout(resolve, STOP_DRAIN_MS).unref())]);
+      return stopped;
+    },
     mountChat: (app) => mountChat(app, { store: deps.store, messages: deps.messages, runs, log: deps.log }),
     asks: { open: (missionId) => runs.openAsk(missionId), answer: (missionId, askId, text, actor) => missions.answerAsk(missionId, askId, text, actor) },
     async checkPhoto(input) {
