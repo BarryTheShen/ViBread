@@ -73,11 +73,11 @@ export class SqlInventoryService implements InventoryService {
 
   async update(ownerId: string, id: string, patch: Partial<InventoryEntry>): Promise<InventoryEntry> {
     const current = this.deps.sqlite.prepare('SELECT * FROM "inventory_items" WHERE "id" = ? AND "ownerId" = ?').get(id, ownerId) as ItemRow | undefined;
-    if (!current) throw new Error("inventory item not found");
+    if (!current) throw Object.assign(new Error("inventory item not found"), { status: 404, code: "INVENTORY_ITEM_NOT_FOUND" });
     const typeId = patch.typeId ?? current.typeId;
     const values = patch.values ?? (JSON.parse(current.values) as Record<string, FieldValue>);
     const type = (await this.types(ownerId)).find((candidate) => candidate.id === typeId);
-    if (!type) throw new Error("unknown part type");
+    if (!type) throw Object.assign(new Error(`Unknown part type ${typeId}`), { status: 400, code: "UNKNOWN_PART_TYPE" });
     const identity = inventoryIdentity(type, values);
     const collision = this.deps.sqlite.prepare('SELECT * FROM "inventory_items" WHERE "ownerId" = ? AND "identity" = ? AND "id" != ?').get(ownerId, identity, id) as ItemRow | undefined;
     if (collision) {

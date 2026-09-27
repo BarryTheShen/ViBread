@@ -270,14 +270,16 @@ export class SqlMissionStore implements MissionStore {
 
   async listEvents(missionId: string, afterId?: string): Promise<TimelineEvent[]> {
     let rows: EventRow[];
+    // Events written in the same millisecond (a copied or imported timeline, a burst of check reports) keep the order they
+    // were written in: rowid, never the random event id, breaks ties.
     if (!afterId) {
-      rows = this.deps.sqlite.prepare('SELECT * FROM "events" WHERE "missionId" = ? ORDER BY "at", "id"').all(missionId) as EventRow[];
+      rows = this.deps.sqlite.prepare('SELECT * FROM "events" WHERE "missionId" = ? ORDER BY "at", rowid').all(missionId) as EventRow[];
     } else {
-      const cursor = this.deps.sqlite.prepare('SELECT "at", "id" FROM "events" WHERE "id" = ? AND "missionId" = ?').get(afterId, missionId) as { at: number; id: string } | undefined;
+      const cursor = this.deps.sqlite.prepare('SELECT "at", rowid AS "seq" FROM "events" WHERE "id" = ? AND "missionId" = ?').get(afterId, missionId) as { at: number; seq: number } | undefined;
       if (!cursor) return [];
       rows = this.deps.sqlite
-        .prepare('SELECT * FROM "events" WHERE "missionId" = ? AND ("at" > ? OR ("at" = ? AND "id" > ?)) ORDER BY "at", "id"')
-        .all(missionId, cursor.at, cursor.at, cursor.id) as EventRow[];
+        .prepare('SELECT * FROM "events" WHERE "missionId" = ? AND ("at" > ? OR ("at" = ? AND rowid > ?)) ORDER BY "at", rowid')
+        .all(missionId, cursor.at, cursor.at, cursor.seq) as EventRow[];
     }
     return rows.map((row) => ({
       id: row.id,
@@ -296,6 +298,10 @@ export class SqlMissionStore implements MissionStore {
     const remove = this.deps.sqlite.transaction(() => {
       this.deps.sqlite.prepare('DELETE FROM "events" WHERE "missionId" = ?').run(id);
       this.deps.sqlite.prepare('DELETE FROM "approvals" WHERE "missionId" = ?').run(id);
+      this.deps.sqlite.prepare('DELETE FROM "approval_grants" WHERE "missionId" = ?').run(id);
+      // CAPCOM: notices held for quiet hours about it are dropped, and conversations attached to it detach.
+      this.deps.sqlite.prepare('DELETE FROM "capcom_queue" WHERE "missionId" = ?').run(id);
+      this.deps.sqlite.prepare('UPDATE "capcom_spaces" SET "missionId" = NULL WHERE "missionId" = ?').run(id);
       this.deps.sqlite.prepare('DELETE FROM "runs" WHERE "missionId" = ?').run(id);
       this.deps.sqlite.prepare('DELETE FROM "messages" WHERE "missionId" = ?').run(id);
       this.deps.sqlite.prepare('DELETE FROM "revisions" WHERE "missionId" = ?').run(id);

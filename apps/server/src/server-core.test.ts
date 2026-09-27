@@ -1,6 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { rmSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
+import express from "express";
+import multer from "multer";
+import { once } from "node:events";
+import type { AddressInfo } from "node:net";
 import type { Request, Response } from "express";
 import type { Logger } from "pino";
 import { GOLDEN } from "@vibread/fixtures";
@@ -145,6 +149,37 @@ describe("server core persistence", () => {
     handler(fsError, {} as Request, response, () => undefined);
     expect(statusCode).toBe(500);
     expect(payload).toEqual({ error: { code: "INTERNAL_ERROR", message: "internal server error" } });
+  });
+
+  it("answers a malformed or oversized request body with a 4xx, not a 500", async () => {
+    const logged: unknown[] = [];
+    const app = express();
+    app.use(express.json({ limit: "1kb" }));
+    const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 16 } });
+    app.post("/json", (_req, res) => void res.json({ ok: true }));
+    app.post("/photo", upload.single("photo"), (_req, res) => void res.json({ ok: true }));
+    app.use(createApiErrorHandler({ error: (value: unknown) => logged.push(value) } as unknown as Logger));
+    const server = app.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    const address = server.address() as AddressInfo; // listening on a TCP port
+    const base = `http://127.0.0.1:${address.port}`;
+    try {
+      const post = async (path: string, body: string | FormData, headers: Record<string, string> = {}) => {
+        const response = await fetch(`${base}${path}`, { method: "POST", headers, body });
+        return { status: response.status, body: (await response.json()) as unknown };
+      };
+      expect(await post("/json", "{not json", { "content-type": "application/json" })).toMatchObject({ status: 400, body: { error: { code: "entity.parse.failed" } } });
+      expect(await post("/json", JSON.stringify({ pad: "x".repeat(4_096) }), { "content-type": "application/json" })).toMatchObject({ status: 413, body: { error: { code: "entity.too.large" } } });
+      const form = new FormData();
+      form.append("photo", new Blob([new Uint8Array(64)], { type: "image/jpeg" }), "big.jpg");
+      expect(await post("/photo", form)).toMatchObject({ status: 413, body: { error: { code: "LIMIT_FILE_SIZE" } } });
+      const wrongField = new FormData();
+      wrongField.append("picture", new Blob([new Uint8Array(4)], { type: "image/jpeg" }), "a.jpg");
+      expect(await post("/photo", wrongField)).toMatchObject({ status: 400, body: { error: { code: "LIMIT_UNEXPECTED_FILE" } } });
+      expect(logged).toEqual([]);
+    } finally {
+      server.close();
+    }
   });
 
 
@@ -317,6 +352,49 @@ describe("server core persistence", () => {
       expect(ready.status).toBe("ready");
       expect(ready.items[0]?.cropUrl).toContain("/crops/0");
     } finally {
+      opened.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps part types and inventory per owner: a known id never writes another account's rows, and misses are 404", async () => {
+    const { dir, opened } = makeDatabase();
+    try {
+      const catalog = createCatalogService({ db: opened.db, sqlite: opened.sqlite });
+      const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
+      const inventory = createInventoryService({ db: opened.db, sqlite: opened.sqlite, catalog, store });
+      const base = { category: "other", aliases: [], photoHint: "", description: "", fields: [], support: "list-only", mapping: { kind: "note" }, builtIn: false };
+      const mine = await catalog.upsert("alice", { ...base, name: "Alice's widget" } as unknown as PartType);
+      const theirs = await catalog.upsert("bob", { ...base, id: mine.id, name: "Bob's overwrite" } as unknown as PartType);
+      expect(theirs.id).not.toBe(mine.id);
+      expect((await catalog.get("alice", mine.id))?.name).toBe("Alice's widget");
+      expect((await catalog.get("bob", theirs.id))?.name).toBe("Bob's overwrite");
+
+      await expect(catalog.update("bob", mine.id, { name: "nope" })).rejects.toMatchObject({ status: 404 });
+      await expect(catalog.remove("bob", "resistor")).rejects.toMatchObject({ status: 400 });
+      const [entry] = await inventory.upsert("alice", { items: [{ typeId: "resistor", values: { ohms: 220 }, quantity: 2, mode: "add", source: "typed" }] });
+      await expect(inventory.update("bob", entry!.id, { quantity: 9 })).rejects.toMatchObject({ status: 404 });
+      await expect(inventory.update("alice", entry!.id, { typeId: "no-such-type" })).rejects.toMatchObject({ status: 400 });
+      expect((await inventory.entries("alice"))[0]?.quantity).toBe(2);
+    } finally {
+      opened.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("lists events written in the same millisecond in the order they were written, and pages after one of them", async () => {
+    const { dir, opened } = makeDatabase();
+    vi.useFakeTimers({ now: new Date("2026-09-27T08:18:27.389Z"), toFake: ["Date"] });
+    try {
+      const store = createMissionStore({ db: opened.db, sqlite: opened.sqlite, dataDir: dir });
+      const mission = await store.createMission({ title: "Burst", brief: "Burst", ownerId: "operator", inventory: [] });
+      const texts = Array.from({ length: 12 }, (_, index) => `event ${index}`);
+      for (const text of texts) await store.appendEvent({ missionId: mission.id, channel: "system", actor: { kind: "system", id: "test", channel: "system" }, kind: "note", text });
+      const listed = (await store.listEvents(mission.id)).filter((event) => event.kind === "note");
+      expect(listed.map((event) => event.text)).toEqual(texts);
+      expect((await store.listEvents(mission.id, listed[4]!.id)).map((event) => event.text)).toEqual(texts.slice(5));
+    } finally {
+      vi.useRealTimers();
       opened.close();
       rmSync(dir, { recursive: true, force: true });
     }

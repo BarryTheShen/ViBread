@@ -93,6 +93,29 @@ describe("POST /api/missions/:id/bench/runs", () => {
     expect(run.results.map((result) => result.test)).toEqual(["rails.vcc"]);
   });
 
+  it("refuses a malformed run with 400 and records nothing", async () => {
+    const before = (await running.context.ctx.store.getRevision(missionId, 1))?.results.bench?.length ?? 0;
+    const bodies = [
+      { revision: 1, kind: "selftest" },
+      { revision: 1, kind: "selftest", lines: "nope", answers: {} },
+      { revision: 1, kind: "bogus", lines: railLines, answers: {} },
+      { revision: 1, kind: "selftest", lines: railLines, answers: { ask1: 3 } },
+      { revision: 1, kind: "selftest", lines: railLines, answers: [] },
+      { revision: "x", kind: "selftest", lines: railLines, answers: {} },
+    ];
+    const statuses: number[] = [];
+    for (const body of bodies) {
+      const response = await fetch(`${base}/api/missions/${missionId}/bench/runs`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+      statuses.push(response.status);
+    }
+    expect(statuses).toEqual(bodies.map(() => 400));
+    expect((await running.context.ctx.store.getRevision(missionId, 1))?.results.bench?.length ?? 0).toBe(before);
+  });
+
+  it("drops device lines that don't decode, like the client does, and judges the rest", async () => {
+    expect((await post(["rails.vcc"], { lines: [null, "boot noise", { t: "unknown" }, ...railLines] })).verdict).toBe("pass");
+  });
+
   it("a passing checkpoint on the real board keeps the build going; it doesn't verify the mission", async () => {
     const { ctx } = running.context;
     const mission = await ctx.missions.create({ brief: golden.brief, inventory: golden.inventory, owner: OPERATOR });
