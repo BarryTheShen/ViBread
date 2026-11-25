@@ -34,10 +34,10 @@ describe("descendantsOf", () => {
 
 describe("asciiWorkRoot", () => {
   const env = { ProgramData: "C:\\ProgramData" };
-  const plainTemp = "C:\\Users\\barry\\AppData\\Local\\Temp";
+  const plainTemp = "C:\\Users\\alex\\AppData\\Local\\Temp";
 
   it("keeps an ASCII Windows profile's folders where they are, spaces included", () => {
-    expect(asciiWorkRoot("C:\\Users\\Barry Shen\\AppData\\Roaming\\ViBread", "C:\\Users\\BARRYS~1\\AppData\\Local\\Temp", env, "win32")).toBeUndefined();
+    expect(asciiWorkRoot("C:\\Users\\Alex Kim\\AppData\\Roaming\\ViBread", "C:\\Users\\ALEXKI~1\\AppData\\Local\\Temp", env, "win32")).toBeUndefined();
   });
 
   it("moves a non-ASCII Windows profile's compiler work under ProgramData, one stable folder per profile", () => {

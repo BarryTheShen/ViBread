@@ -25,7 +25,7 @@ describe("BenchAskBridge", () => {
       calls.push({ url, init });
       if (init?.method === "POST" && url.endsWith("/bench/asks")) return response({ ok: true }, 201);
       if (init?.method === "POST" && url.endsWith("/close")) return response({ ok: true }, 201);
-      return response({ status: "answered", answer: "2", answeredBy: { name: "Barry", channel: "imessage" } });
+      return response({ status: "answered", answer: "2", answeredBy: { name: "Alex", channel: "imessage" } });
     };
     const bridge = new BenchAskBridge("mission-1", fetcher);
 
@@ -33,7 +33,7 @@ describe("BenchAskBridge", () => {
     const remote = await bridge.poll(ask.id);
     await bridge.close("btn0-press", "done");
 
-    expect(remote).toMatchObject({ status: "answered", answer: "2", answeredBy: { name: "Barry", channel: "imessage" } });
+    expect(remote).toMatchObject({ status: "answered", answer: "2", answeredBy: { name: "Alex", channel: "imessage" } });
     expect(JSON.parse(String(calls[0]?.init?.body))).toMatchObject({ askId: "led2", test: "led.sequence", kind: "which-led", part: "LED2", choices: ["1", "2", "none"] });
     expect(calls.at(-1)?.url).toContain("/bench/asks/btn0-press/close");
   });

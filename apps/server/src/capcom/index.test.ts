@@ -106,9 +106,9 @@ describe("CAPCOM helpers", () => {
   });
 
   it("builds phone-reachable CAPCOM links from phoneUrl", () => {
-    expect(capcomLinkUrl("http://192.168.1.24:8787/")).toBe("http://192.168.1.24:8787/");
+    expect(capcomLinkUrl("http://10.0.0.24:8787/")).toBe("http://10.0.0.24:8787/");
     expect(capcomLinkUrl("https://vibread.example", "pair-token/")).toBe("https://vibread.example/?pair=pair-token%2F");
-    expect(capcomMissionLink("http://192.168.1.24:8787/", "mission/1", "pair-token")).toBe("http://192.168.1.24:8787/b/mission%2F1?pair=pair-token");
+    expect(capcomMissionLink("http://10.0.0.24:8787/", "mission/1", "pair-token")).toBe("http://10.0.0.24:8787/b/mission%2F1?pair=pair-token");
   });
 
   it("polls only physical approvals", () => {
